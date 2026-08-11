@@ -1,0 +1,5 @@
+# Python runtime: 3.14.3
+fastapi==0.115.14
+uvicorn[standard]==0.51.0
+pydantic==2.12.5
+pydantic-settings==2.14.2

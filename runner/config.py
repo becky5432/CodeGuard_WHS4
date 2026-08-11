@@ -1,20 +1,31 @@
-import os
+# 작성자: yjm
+
+from pathlib import Path
+from tempfile import gettempdir
+from typing import Literal
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings:
-    RUNNER_HOST = os.getenv("RUNNER_HOST", "0.0.0.0")
-    RUNNER_PORT = int(os.getenv("RUNNER_PORT", "8001"))
+class Settings(BaseSettings):
+    runner_host: str = "0.0.0.0"
+    runner_port: int = Field(default=8001, ge=1, le=65535)
 
-    LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    log_level: Literal[
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL",
+    ] = "INFO"
 
-    WORKSPACE_ROOT = os.getenv(
-        "WORKSPACE_ROOT",
-        "/tmp/codeguard-runner",
-    )
+    workspace_root: Path = Path(gettempdir()) / "codeguard-runner"  # 임시 코드 보관 장소
+    cpp_image: str = "codeguard-cpp:dev"
+    compile_timeout_seconds: int = Field(default=10, gt=0, le=60)  # 컴파일 제한 시간
 
-    DOCKER_IMAGE = os.getenv(
-        "DOCKER_IMAGE",
-        "codeguard-runner:latest",
+    model_config = SettingsConfigDict(  # Pydantic 설정
+        case_sensitive=False,
     )
 
 
