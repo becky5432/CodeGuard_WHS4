@@ -11,6 +11,8 @@ class Execution(Base):
     job_id = Column(String, primary_key=True)
     language = Column(String, nullable=False)
     status = Column(String, nullable=False)
+    code = Column(Text, nullable=False)
+    stdin = Column(Text, default="", nullable=False)
     policy_profile = Column(String, default="basic")
     stdout = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
