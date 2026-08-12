@@ -1,0 +1,46 @@
+html {
+  min-width: 320px;
+  min-height: 100%;
+  background-color: #f4f6fa;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  color: #172033;
+  background-color: #f4f6fa;
+  font-family:
+    Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", "Segoe UI", Arial,
+    sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+button,
+select,
+textarea {
+  font-family: inherit;
+}
+
+button:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid rgba(65, 105, 225, 0.25);
+  outline-offset: 2px;
+}
