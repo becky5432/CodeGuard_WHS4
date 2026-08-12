@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 const DEFAULT_CODE = `#include <iostream>
 using namespace std;
@@ -9,10 +10,10 @@ int main() {
 }`;
 
 function MainPage() {
+  const navigate = useNavigate();
   const [language, setLanguage] = useState("cpp");
   const [code, setCode] = useState(DEFAULT_CODE);
   const [standardInput, setStandardInput] = useState("");
-  const [policyProfile, setPolicyProfile] = useState("default");
   const [message, setMessage] = useState(
     "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
   );
@@ -43,16 +44,20 @@ function MainPage() {
         </div>
 
         <nav className="navigation" aria-label="주요 메뉴">
-          <button className="navigation-item active" type="button">
+          <button
+            className="navigation-item active"
+            type="button"
+            onClick={() => navigate("/")}
+          >
             코드 입력 및 실행
           </button>
 
-          <button className="navigation-item" type="button">
+          <button
+            className="navigation-item"
+            type="button"
+            onClick={() => navigate("/history")}
+          >
             실행 기록
-          </button>
-
-          <button className="navigation-item" type="button">
-            정책 안내
           </button>
 
           <button className="navigation-item" type="button">
@@ -103,19 +108,6 @@ function MainPage() {
                 >
                   <option value="c">C</option>
                   <option value="cpp">C++</option>
-                </select>
-              </div>
-
-              <div className="editor-setting">
-                <label htmlFor="policy-profile">정책 프리셋</label>
-
-                <select
-                  id="policy-profile"
-                  value={policyProfile}
-                  onChange={(event) => setPolicyProfile(event.target.value)}
-                >
-                  <option value="default">기본 정책</option>
-                  <option value="strict">강화 정책</option>
                 </select>
               </div>
 
