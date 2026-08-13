@@ -1,11 +1,6 @@
 function ResultPage() {
   return (
     <main className="page-content">
-      <header className="page-title">
-        <h1>실행 결과</h1>
-        <p>제출한 코드의 컴파일 및 실행 결과를 확인합니다.</p>
-      </header>
-
       <section className="result-summary">
         <h2>실행 상태</h2>
         <p>아직 표시할 실행 결과가 없습니다.</p>
