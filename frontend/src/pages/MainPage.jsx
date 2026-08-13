@@ -1,4 +1,5 @@
 import { useState } from "react";
+import StateMessage from "../components/StateMessage";
 
 const DEFAULT_CODE = `#include <iostream>
 using namespace std;
@@ -107,10 +108,11 @@ function MainPage() {
             <span className="waiting-badge">실행 전</span>
           </div>
 
-          <div className="result-placeholder">
-            <strong>결과 대기 중</strong>
-            <p>{message}</p>
-          </div>
+          <StateMessage
+            type="info"
+            title="결과 대기 중"
+            description={message}
+          />
 
           <div className="result-tabs">
             <button className="result-tab active" type="button">

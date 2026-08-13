@@ -1,6 +1,8 @@
+import StateMessage from "../components/StateMessage";
+
 function HistoryPage() {
   return (
-    <main className="page-content">
+    <div className="page-content">
       <section className="history-section">
         <div className="history-header">
           <h2>실행 내역</h2>
@@ -13,12 +15,13 @@ function HistoryPage() {
           </select>
         </div>
 
-        <div className="empty-state">
-          <strong>실행 기록이 없습니다.</strong>
-          <p>코드를 실행하면 이곳에 실행 기록이 표시됩니다.</p>
-        </div>
+        <StateMessage
+          type="empty"
+          title="실행 기록이 없습니다."
+          description="코드를 실행하면 이곳에 실행 기록이 표시됩니다."
+        />
       </section>
-    </main>
+    </div>
   );
 }
 

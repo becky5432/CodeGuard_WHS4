@@ -355,25 +355,6 @@ button {
   font-weight: 700;
 }
 
-.result-placeholder {
-  padding: 18px;
-  border: 1px solid #d5eadf;
-  border-radius: 8px;
-  background-color: var(--green-100);
-}
-
-.result-placeholder strong {
-  color: var(--green-700);
-  font-size: 14px;
-}
-
-.result-placeholder p {
-  margin: 8px 0 0;
-  color: #426554;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
 .result-tabs {
   display: flex;
   gap: 18px;
@@ -486,5 +467,106 @@ button {
 
   .policy-summary {
     grid-template-columns: 1fr;
+  }
+}
+
+.state-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  width: 100%;
+  padding: 24px;
+  border: 1px solid #d8deea;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.state-message-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  font-weight: 700;
+}
+
+.state-message-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.state-message-content strong {
+  color: #17233d;
+  font-size: 1rem;
+}
+
+.state-message-content p {
+  margin: 0;
+  color: #64708a;
+  line-height: 1.6;
+}
+
+/* 로딩 상태 */
+.state-message-loading {
+  border-color: #b9c8f5;
+  background: #f3f6ff;
+}
+
+.state-message-loading .state-message-icon {
+  color: #3657c8;
+  background: #dfe7ff;
+  animation: state-message-pulse 1.2s ease-in-out infinite;
+}
+
+/* 오류 상태 */
+.state-message-error {
+  border-color: #f0b8b8;
+  background: #fff5f5;
+}
+
+.state-message-error .state-message-icon {
+  color: #b42323;
+  background: #ffe0e0;
+}
+
+/* 데이터 없음 상태 */
+.state-message-empty {
+  border-color: #d8deea;
+  background: #f8fafc;
+}
+
+.state-message-empty .state-message-icon {
+  color: #63708a;
+  background: #e8ecf3;
+}
+
+/* 일반 안내 상태 */
+.state-message-info {
+  border-color: #b9d8ef;
+  background: #f2f9fd;
+}
+
+.state-message-info .state-message-icon {
+  color: #276a96;
+  background: #dceffb;
+}
+
+@keyframes state-message-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .state-message-loading .state-message-icon {
+    animation: none;
   }
 }

@@ -1,9 +1,16 @@
+import StateMessage from "../components/StateMessage";
+
 function ResultPage() {
   return (
-    <main className="page-content">
+    <div className="page-content">
       <section className="result-summary">
         <h2>실행 상태</h2>
-        <p>아직 표시할 실행 결과가 없습니다.</p>
+
+        <StateMessage
+          type="empty"
+          title="실행 결과가 없습니다."
+          description="코드를 실행하면 이곳에 컴파일 및 실행 결과가 표시됩니다."
+        />
       </section>
 
       <section className="result-details">
@@ -43,7 +50,7 @@ function ResultPage() {
 
         <pre>아직 출력 결과가 없습니다.</pre>
       </section>
-    </main>
+    </div>
   );
 }
 
