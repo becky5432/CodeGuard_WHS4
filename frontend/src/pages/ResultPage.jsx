@@ -11,7 +11,7 @@ function ResultPage() {
         <p>아직 표시할 실행 결과가 없습니다.</p>
       </section>
 
-      <section className="result-details-details">
+      <section className="result-details">
         <h2>실행 정보</h2>
 
         <dl>
