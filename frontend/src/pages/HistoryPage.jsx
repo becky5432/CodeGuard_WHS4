@@ -1,11 +1,6 @@
 function HistoryPage() {
   return (
     <main className="page-content">
-      <header className="page-title">
-        <h1>실행 기록</h1>
-        <p>이전에 요청한 코드 실행 내역을 확인합니다.</p>
-      </header>
-
       <section className="history-section">
         <div className="history-header">
           <h2>실행 내역</h2>
