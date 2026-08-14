@@ -22,10 +22,10 @@ class Execution(Base):
 
     # --- 적용 정책 (실행 시점 스냅샷) ---
     policy_profile = Column(String, default="basic")       # basic / strict / relaxed
-    # timeout_ms = Column(Integer)
-    # memory_limit_mb = Column(Integer)
-    # process_limit = Column(Integer)
-    # cpu_limit = Column(Float)
+    timeout_ms = Column(Integer)
+    memory_limit_mb = Column(Integer)
+    process_limit = Column(Integer)
+    cpu_limit = Column(Float)
 
     # --- Runner 결과 수신 후 갱신 ---
     run_id = Column(String)                                # Runner 발급 실행 ID
@@ -33,7 +33,8 @@ class Execution(Base):
     exit_code = Column(Integer)
     stdout = Column(Text, default="")
     stderr = Column(Text, default="")
+    compile_log = Column(Text, default="")   
     finished_at = Column(DateTime)
 
-    # TODO: compile_log,
+    # TODO: 
     # wall_time_ms / cpu_time_ms / memory_peak_bytes / process_peak
