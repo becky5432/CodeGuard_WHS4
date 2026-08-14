@@ -46,7 +46,10 @@ class ExecutionCreateResponse(BaseModel): # 실행 요청 직후 응답
 class ExecutionResultResponse(BaseModel): # 상태/결과 조회
     job_id: str
     status: ExecutionStatus
+    exit_code: int | None = None
     stdout: str | None = None
     stderr: str | None = None
-    exit_code: int | None = None
     reason_code: str | None = None
+    stage: str | None = None
+    error_message: str | None = None
+    # 필요한 필드 생기면 추가하기
