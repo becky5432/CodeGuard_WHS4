@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from runner.config import settings
 from runner.main import app
 from runner.pipeline.compiler import CompileResult
-
+from runner.models.job import RunnerLanguage
 
 class ExecuteApiTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -38,9 +38,9 @@ class ExecuteApiTests(unittest.TestCase):
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
-    @patch("runner.pipeline.executor.compile_cpp")
-    def test_execute_compiles_cpp_and_removes_workspace(self, compile_cpp_mock) -> None:
-        compile_cpp_mock.return_value = CompileResult(
+    @patch("runner.pipeline.executor.compile_source")
+    def test_execute_compiles_cpp_and_removes_workspace(self, compile_source_mock) -> None:
+        compile_source_mock.return_value = CompileResult(
             success=True,
             stdout="",
             stderr="",
@@ -54,12 +54,15 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertEqual(response.json()["status"], "SUCCESS")
         self.assertIsNone(response.json()["reason_code"])
         workspace = settings.workspace_root / body["job_id"]
-        compile_cpp_mock.assert_called_once_with(workspace)
+        compile_source_mock.assert_called_once_with(
+	    workspace=workspace,
+	    language=RunnerLanguage.CPP,
+	)
         self.assertFalse(workspace.exists())
 
-    @patch("runner.pipeline.executor.compile_cpp")
-    def test_execute_returns_compile_error(self, compile_cpp_mock) -> None:
-        compile_cpp_mock.return_value = CompileResult(
+    @patch("runner.pipeline.executor.compile_source")
+    def test_execute_returns_compile_error(self, compile_source_mock) -> None:
+        compile_source_mock.return_value = CompileResult(
             success=False,
             stdout="",
             stderr="error: expected ';'",
@@ -73,9 +76,9 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertEqual(response.json()["reason_code"], "COMPILE_ERROR")
         self.assertEqual(response.json()["exit_code"], 1)
 
-    @patch("runner.pipeline.executor.compile_cpp")
-    def test_execute_returns_compile_timeout(self, compile_cpp_mock) -> None:
-        compile_cpp_mock.return_value = CompileResult(
+    @patch("runner.pipeline.executor.compile_source")
+    def test_execute_returns_compile_timeout(self, compile_source_mock) -> None:
+        compile_source_mock.return_value = CompileResult(
             success=False,
             stdout="",
             stderr="Compilation timed out.",
