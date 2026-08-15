@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     cpp_image: str = "codeguard-cpp:dev"
     compile_timeout_seconds: int = Field(default=10, gt=0, le=60)  # 컴파일 제한 시간
     compile_log_limit_bytes: int = Field(default=65_536, gt=0)
+    execution_output_limit_bytes: int = Field(default=65_536, gt=0)
+    execution_tmpfs_limit_mb: int = Field(default=64, gt=0, le=1024)
+    runtime_user: str = "65534:65534"
 
     model_config = SettingsConfigDict(  # Pydantic 설정
         case_sensitive=False,

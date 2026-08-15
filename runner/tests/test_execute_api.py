@@ -1,11 +1,12 @@
 import unittest
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
-from uuid import uuid4
+from unittest.mock import ANY, MagicMock, patch
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 
 from runner.exceptions import CleanupError, ContainerExecutionError
+from runner.container.container_runner import ExecutionResult
 from runner.main import app
 from runner.models.job import RunnerLanguage
 from runner.pipeline.compiler import CompileResult
@@ -49,11 +50,15 @@ class ExecuteApiTests(unittest.TestCase):
         self.compile_source_patcher = patch(
             "runner.pipeline.executor.compile_source",
         )
+        self.execute_program_patcher = patch(
+            "runner.pipeline.executor.execute_program",
+        )
 
         self.get_client_mock = self.get_client_patcher.start()
         self.create_workspace_mock = self.create_workspace_patcher.start()
         self.remove_workspace_mock = self.remove_workspace_patcher.start()
         self.compile_source_mock = self.compile_source_patcher.start()
+        self.execute_program_mock = self.execute_program_patcher.start()
 
     def tearDown(self) -> None:
         patch.stopall()
@@ -76,10 +81,15 @@ class ExecuteApiTests(unittest.TestCase):
     def test_execute_compiles_cpp_with_job_volume(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
             success=True,
-            stdout="",
+            stdout="compiler note",
             stderr="",
             exit_code=0,
             artifact_ready=True,
+        )
+        self.execute_program_mock.return_value = ExecutionResult(
+            exit_code=0,
+            stdout="Hello\n",
+            stderr="",
         )
         body = self.make_request_body()
 
@@ -92,9 +102,11 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertIsNone(payload["reason_code"])
         self.assertIsNone(payload["stage"])
         self.assertIsNotNone(payload["finished_at"])
+        self.assertEqual(payload["stdout"], "Hello\n")
+        self.assertEqual(payload["compile_log"], "compiler note")
         self.create_workspace_mock.assert_called_once_with(
             self.docker_client,
-            uuid4_type(body["job_id"]),
+            UUID(body["job_id"]),
         )
         self.compile_source_mock.assert_called_once_with(
             client=self.docker_client,
@@ -106,6 +118,14 @@ class ExecuteApiTests(unittest.TestCase):
             self.docker_client,
             self.workspace,
         )
+        self.execute_program_mock.assert_called_once_with(
+            client=self.docker_client,
+            workspace=self.workspace,
+            stdin=body["stdin"],
+            policy=ANY,
+            job_id=UUID(body["job_id"]),
+            run_id=ANY,
+        )
 
     def test_execute_compiles_c_with_job_volume(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
@@ -114,6 +134,11 @@ class ExecuteApiTests(unittest.TestCase):
             stderr="",
             exit_code=0,
             artifact_ready=True,
+        )
+        self.execute_program_mock.return_value = ExecutionResult(
+            exit_code=0,
+            stdout="",
+            stderr="",
         )
         body = self.make_request_body()
         body["language"] = "C"
@@ -146,6 +171,7 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertEqual(payload["reason_code"], "COMPILE_ERROR")
         self.assertEqual(payload["stage"], "COMPILE")
         self.assertEqual(payload["compile_log"], "error: expected ';'")
+        self.execute_program_mock.assert_not_called()
 
     def test_execute_returns_compile_timeout(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
@@ -164,6 +190,7 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertEqual(payload["status"], "BLOCKED")
         self.assertEqual(payload["reason_code"], "COMPILE_TIMEOUT")
         self.assertEqual(payload["stage"], "COMPILE")
+        self.execute_program_mock.assert_not_called()
 
     def test_execute_returns_compile_internal_error(self) -> None:
         self.compile_source_mock.side_effect = ContainerExecutionError(
@@ -179,6 +206,7 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ERROR")
         self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
         self.assertEqual(payload["stage"], "COMPILE")
+        self.execute_program_mock.assert_not_called()
 
     def test_execute_returns_cleanup_error(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
@@ -187,6 +215,11 @@ class ExecuteApiTests(unittest.TestCase):
             stderr="",
             exit_code=0,
             artifact_ready=True,
+        )
+        self.execute_program_mock.return_value = ExecutionResult(
+            exit_code=0,
+            stdout="",
+            stderr="",
         )
         self.remove_workspace_mock.side_effect = CleanupError(
             "Job Volume 삭제에 실패했습니다.",
@@ -201,6 +234,56 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
         self.assertEqual(payload["stage"], "CLEANUP")
 
+    def test_execute_returns_runtime_error(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
+            success=True,
+            stdout="",
+            stderr="",
+            exit_code=0,
+            artifact_ready=True,
+        )
+        self.execute_program_mock.return_value = ExecutionResult(
+            exit_code=1,
+            stdout="before error\n",
+            stderr="runtime failure\n",
+        )
+
+        payload = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        ).json()
+
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertEqual(payload["reason_code"], "RUNTIME_ERROR")
+        self.assertEqual(payload["stage"], "EXECUTE")
+        self.assertEqual(payload["stdout"], "before error\n")
+        self.assertEqual(payload["stderr"], "runtime failure\n")
+        self.assertEqual(payload["exit_code"], 1)
+
+    def test_execute_returns_time_limit(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
+            success=True,
+            stdout="",
+            stderr="",
+            exit_code=0,
+            artifact_ready=True,
+        )
+        self.execute_program_mock.return_value = ExecutionResult(
+            exit_code=137,
+            stdout="",
+            stderr="",
+            timed_out=True,
+        )
+
+        payload = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        ).json()
+
+        self.assertEqual(payload["status"], "BLOCKED")
+        self.assertEqual(payload["reason_code"], "TIME_LIMIT")
+        self.assertEqual(payload["stage"], "EXECUTE")
+
     def test_execute_rejects_invalid_policy_without_starting_job(self) -> None:
         body = self.make_request_body()
         body["policy"]["memory_limit_mb"] = 0
@@ -209,13 +292,5 @@ class ExecuteApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
         self.get_client_mock.assert_not_called()
-
-
-def uuid4_type(value: str):
-    from uuid import UUID
-
-    return UUID(value)
-
-
 if __name__ == "__main__":
     unittest.main()

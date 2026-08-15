@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from runner.exceptions import RunnerError, WorkspaceError
+from runner.container.container_runner import execute_program
 from runner.models.job import RunnerRequest
 from runner.models.result import (
     RunnerReasonCode,
@@ -11,6 +12,7 @@ from runner.models.result import (
     RunnerStatus,
 )
 from runner.pipeline.compiler import compile_source, get_docker_client
+from runner.pipeline.classifier import classify_execution
 from runner.pipeline.workspace import create_workspace, remove_workspace
 
 
@@ -21,8 +23,8 @@ def _compile_log(stdout: str, stderr: str) -> str:
     return "\n".join(value for value in (stdout, stderr) if value)
 
 
-def execute_compile_job(job: RunnerRequest) -> RunnerResponse:
-    """Job Volume 생성부터 C/C++ 컴파일과 최종 정리까지 수행한다."""
+def execute_job(job: RunnerRequest) -> RunnerResponse:
+    """Job Volume에서 컴파일·실행하고 최종 결과와 정리를 관리한다."""
 
     run_id = uuid4()
     client = None
@@ -80,11 +82,26 @@ def execute_compile_job(job: RunnerRequest) -> RunnerResponse:
                 compile_log=compile_log,
             )
         else:
+            current_stage = RunnerStage.EXECUTE
+            execution_result = execute_program(
+                client=client,
+                workspace=workspace,
+                stdin=job.stdin,
+                policy=job.policy,
+                job_id=job.job_id,
+                run_id=run_id,
+            )
+            classification = classify_execution(execution_result)
             response = RunnerResponse(
                 job_id=job.job_id,
                 run_id=run_id,
-                status=RunnerStatus.SUCCESS,
-                exit_code=compile_result.exit_code,
+                status=classification.status,
+                reason_code=classification.reason_code,
+                stage=classification.stage,
+                error_message=classification.error_message,
+                exit_code=execution_result.exit_code,
+                stdout=execution_result.stdout,
+                stderr=execution_result.stderr,
                 compile_log=compile_log,
             )
 
@@ -154,3 +171,9 @@ def execute_compile_job(job: RunnerRequest) -> RunnerResponse:
 
     response.finished_at = datetime.now(timezone.utc)
     return response
+
+
+def execute_compile_job(job: RunnerRequest) -> RunnerResponse:
+    """기존 API 호출과의 호환을 위한 별칭."""
+
+    return execute_job(job)
