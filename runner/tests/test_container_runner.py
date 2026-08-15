@@ -3,8 +3,6 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import docker
-from requests.exceptions import ReadTimeout
-
 from runner.metrics.cgroup_reader import CgroupSnapshot
 from runner.models.job import PolicyLimits
 from runner.container.container_runner import execute_program
@@ -17,12 +15,17 @@ class ContainerRunnerTests(unittest.TestCase):
         self.container = MagicMock()
         self.container.id = "container-id"
         self.client.containers.create.return_value = self.container
-        self.container.attach.return_value = iter([(b"Hello\n", None)])
+        self.container.logs.side_effect = [
+            iter([b"Hello\n"]),
+            iter([]),
+        ]
         self.container.wait.return_value = {"StatusCode": 0}
         self.container.attrs = {
             "State": {
                 "Pid": 123,
                 "OOMKilled": False,
+                "Running": False,
+                "ExitCode": 0,
             }
         }
         self.workspace = VolumeWorkspace(
@@ -83,13 +86,40 @@ class ContainerRunnerTests(unittest.TestCase):
         self.container.remove.assert_called_once_with(force=True)
 
     @patch("runner.container.container_runner.resolve_cgroup_path")
-    def test_execute_program_kills_container_on_timeout(
+    def test_execute_program_reads_stdin_from_read_only_workspace(
         self,
         resolve_path_mock,
     ) -> None:
         resolve_path_mock.return_value = None
-        self.container.attach.return_value = iter([])
-        self.container.wait.side_effect = ReadTimeout("timeout")
+
+        execute_program(
+            client=self.client,
+            workspace=self.workspace,
+            stdin="21\n",
+            policy=self.policy,
+            job_id=self.workspace.job_id,
+            run_id=uuid4(),
+        )
+
+        create_kwargs = self.client.containers.create.call_args.kwargs
+        self.assertEqual(
+            create_kwargs["command"],
+            ["sh", "-c", "exec /workspace/main < /workspace/stdin"],
+        )
+        self.container.put_archive.assert_not_called()
+
+    @patch(
+        "runner.container.container_runner._wait_for_exit",
+        side_effect=[None, 137],
+    )
+    @patch("runner.container.container_runner.resolve_cgroup_path")
+    def test_execute_program_kills_container_on_timeout(
+        self,
+        resolve_path_mock,
+        wait_for_exit_mock,
+    ) -> None:
+        resolve_path_mock.return_value = None
+        self.container.logs.side_effect = [iter([]), iter([])]
 
         result = execute_program(
             client=self.client,
@@ -102,6 +132,7 @@ class ContainerRunnerTests(unittest.TestCase):
 
         self.assertTrue(result.timed_out)
         self.container.kill.assert_called()
+        self.assertEqual(wait_for_exit_mock.call_count, 2)
 
     @patch("runner.container.container_runner.settings")
     @patch("runner.container.container_runner.resolve_cgroup_path")
@@ -115,7 +146,10 @@ class ContainerRunnerTests(unittest.TestCase):
         settings_mock.execution_tmpfs_limit_mb = 64
         settings_mock.runtime_user = "65534:65534"
         settings_mock.cpp_image = "codeguard-cpp:dev"
-        self.container.attach.return_value = iter([(b"1234", None), (b"56", None)])
+        self.container.logs.side_effect = [
+            iter([b"1234", b"56"]),
+            iter([]),
+        ]
 
         result = execute_program(
             client=self.client,

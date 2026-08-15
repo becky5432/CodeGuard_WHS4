@@ -1,12 +1,10 @@
-import io
 import logging
-import tarfile
 import threading
 from dataclasses import dataclass
+from time import monotonic, sleep
 from uuid import UUID
 
 import docker
-from requests.exceptions import ReadTimeout
 
 from runner.config import settings
 from runner.metrics.cgroup_reader import (
@@ -45,22 +43,25 @@ def _empty_snapshot() -> CgroupSnapshot:
     )
 
 
-def _build_stdin_archive(stdin: str) -> bytes:
-    data = stdin.encode("utf-8")
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w") as archive:
-        info = tarfile.TarInfo(name="stdin")
-        info.size = len(data)
-        info.mode = 0o444
-        archive.addfile(info, io.BytesIO(data))
-    return buffer.getvalue()
-
-
 def _safe_kill(container) -> None:
     try:
         container.kill()
     except docker.errors.DockerException:
         pass
+
+
+def _wait_for_exit(container, timeout_seconds: float) -> int | None:
+    """Poll container state without relying on transport-level HTTP timeouts."""
+
+    deadline = monotonic() + timeout_seconds
+    while True:
+        container.reload()
+        state = container.attrs.get("State", {})
+        if not bool(state.get("Running", False)):
+            return int(state.get("ExitCode", 0))
+        if monotonic() >= deadline:
+            return None
+        sleep(min(0.02, max(deadline - monotonic(), 0)))
 
 
 def execute_program(
@@ -74,8 +75,8 @@ def execute_program(
     """컴파일된 프로그램을 강화된 별도 컨테이너에서 실행한다."""
 
     container = None
-    output_stream = None
-    output_thread = None
+    output_streams = []
+    output_threads = []
     stdout_buffer = bytearray()
     stderr_buffer = bytearray()
     output_limit_exceeded = False
@@ -90,7 +91,11 @@ def execute_program(
     try:
         command = ["/workspace/main"]
         if stdin:
-            command = ["sh", "-c", "exec /workspace/main < /tmp/stdin"]
+            command = [
+                "sh",
+                "-c",
+                "exec /workspace/main < /workspace/stdin",
+            ]
 
         container = client.containers.create(
             image=settings.cpp_image,
@@ -125,12 +130,6 @@ def execute_program(
             },
         )
 
-        if stdin:
-            container.put_archive(
-                path="/tmp",
-                data=_build_stdin_archive(stdin),
-            )
-
         container.start()
         container.reload()
         pid = int(container.attrs.get("State", {}).get("Pid") or 0)
@@ -139,69 +138,69 @@ def execute_program(
         if cgroup_path is not None:
             before_snapshot = read_snapshot(cgroup_path)
 
-        output_stream = container.attach(
+        stdout_stream = container.logs(
             stream=True,
+            follow=True,
             stdout=True,
-            stderr=True,
-            logs=True,
-            demux=True,
+            stderr=False,
         )
+        stderr_stream = container.logs(
+            stream=True,
+            follow=True,
+            stdout=False,
+            stderr=True,
+        )
+        output_streams.extend((stdout_stream, stderr_stream))
 
-        def collect_output() -> None:
+        def collect_output(stream, target: bytearray) -> None:
             nonlocal output_limit_exceeded
             try:
-                for chunk in output_stream:
-                    if isinstance(chunk, tuple):
-                        stdout_chunk, stderr_chunk = chunk
-                    else:
-                        stdout_chunk, stderr_chunk = chunk, None
-
-                    for target, data in (
-                        (stdout_buffer, stdout_chunk),
-                        (stderr_buffer, stderr_chunk),
-                    ):
-                        if not data:
-                            continue
-                        with output_lock:
-                            used = len(stdout_buffer) + len(stderr_buffer)
-                            remaining = max(
-                                settings.execution_output_limit_bytes - used,
-                                0,
-                            )
-                            target.extend(data[:remaining])
-                            if len(data) > remaining:
-                                output_limit_exceeded = True
-                        if output_limit_exceeded:
-                            _safe_kill(container)
-                            return
-            except docker.errors.DockerException:
-                logger.exception(
+                for data in stream:
+                    if not data:
+                        continue
+                    with output_lock:
+                        used = len(stdout_buffer) + len(stderr_buffer)
+                        remaining = max(
+                            settings.execution_output_limit_bytes - used,
+                            0,
+                        )
+                        target.extend(data[:remaining])
+                        if len(data) > remaining:
+                            output_limit_exceeded = True
+                    if output_limit_exceeded:
+                        _safe_kill(container)
+                        return
+            except Exception as exc:
+                logger.warning(
                     "event=execution_output_collection_failed job_id=%s",
                     job_id,
+                    exc_info=exc,
                 )
 
-        output_thread = threading.Thread(
-            target=collect_output,
-            name=f"runner-output-{run_id}",
-            daemon=True,
+        for stream_name, stream, target in (
+            ("stdout", stdout_stream, stdout_buffer),
+            ("stderr", stderr_stream, stderr_buffer),
+        ):
+            thread = threading.Thread(
+                target=collect_output,
+                args=(stream, target),
+                name=f"runner-{stream_name}-{run_id}",
+                daemon=True,
+            )
+            output_threads.append(thread)
+            thread.start()
+
+        exit_code = _wait_for_exit(
+            container,
+            timeout_seconds=policy.timeout_ms / 1000,
         )
-        output_thread.start()
-
-        try:
-            wait_result = container.wait(timeout=policy.timeout_ms / 1000)
-            exit_code = int(wait_result["StatusCode"])
-        except ReadTimeout:
+        if exit_code is None:
             timed_out = True
-            exit_code = None
             _safe_kill(container)
-            try:
-                wait_result = container.wait(timeout=2)
-                exit_code = int(wait_result["StatusCode"])
-            except (ReadTimeout, docker.errors.DockerException):
-                exit_code = None
+            exit_code = _wait_for_exit(container, timeout_seconds=2)
 
-        if output_thread is not None:
-            output_thread.join(timeout=2)
+        for thread in output_threads:
+            thread.join(timeout=2)
 
         container.reload()
         state = container.attrs.get("State", {})
@@ -250,9 +249,10 @@ def execute_program(
             metrics=after_snapshot,
         )
     finally:
-        close = getattr(output_stream, "close", None)
-        if callable(close):
-            close()
+        for stream in output_streams:
+            close = getattr(stream, "close", None)
+            if callable(close):
+                close()
         if container is not None:
             try:
                 container.remove(force=True)

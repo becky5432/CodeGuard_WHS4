@@ -113,6 +113,7 @@ class ExecuteApiTests(unittest.TestCase):
             workspace=self.workspace,
             language=RunnerLanguage.CPP,
             code=body["code"],
+            stdin="",
         )
         self.remove_workspace_mock.assert_called_once_with(
             self.docker_client,
@@ -152,6 +153,7 @@ class ExecuteApiTests(unittest.TestCase):
             workspace=self.workspace,
             language=RunnerLanguage.C,
             code=body["code"],
+            stdin="",
         )
 
     def test_execute_returns_compile_error(self) -> None:

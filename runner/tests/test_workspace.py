@@ -69,6 +69,21 @@ class WorkspaceTests(unittest.TestCase):
         with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as archive:
             self.assertEqual(archive.getnames(), ["main.c"])
 
+    def test_build_source_archive_can_include_stdin(self) -> None:
+        archive_bytes = build_source_archive(
+            "CPP",
+            "int main() { return 0; }",
+            stdin="21\n",
+        )
+
+        with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as archive:
+            self.assertEqual(archive.getnames(), ["main.cpp", "stdin"])
+            stdin_member = archive.getmember("stdin")
+            self.assertEqual(stdin_member.mode, 0o444)
+            extracted = archive.extractfile(stdin_member)
+            self.assertIsNotNone(extracted)
+            self.assertEqual(extracted.read().decode("utf-8"), "21\n")
+
     def test_build_source_archive_rejects_unsupported_language(self) -> None:
         with self.assertRaises(WorkspaceError):
             build_source_archive("PYTHON", "print('hello')")

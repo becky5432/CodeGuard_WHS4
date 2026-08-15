@@ -1,8 +1,7 @@
 from dataclasses import dataclass
-from time import monotonic_ns
+from time import monotonic, monotonic_ns, sleep
 
 import docker
-from requests.exceptions import ReadTimeout
 
 from runner.config import settings
 from runner.exceptions import (
@@ -73,11 +72,26 @@ def _artifact_exists(container) -> bool:
     return True
 
 
+def _wait_for_exit(container, timeout_seconds: float) -> int | None:
+    """Poll compile-container state without transport timeout ambiguity."""
+
+    deadline = monotonic() + timeout_seconds
+    while True:
+        container.reload()
+        state = container.attrs.get("State", {})
+        if not bool(state.get("Running", False)):
+            return int(state.get("ExitCode", 0))
+        if monotonic() >= deadline:
+            return None
+        sleep(min(0.02, max(deadline - monotonic(), 0)))
+
+
 def compile_source(
     client,
     workspace: VolumeWorkspace,
     language,
     code: str,
+    stdin: str = "",
 ) -> CompileResult:
     """소스를 Job Volume에 업로드하고 C17 또는 C++17로 컴파일한다."""
 
@@ -121,7 +135,7 @@ def compile_source(
             },
         )
 
-        source_archive = build_source_archive(language, code)
+        source_archive = build_source_archive(language, code, stdin=stdin)
         try:
             uploaded = container.put_archive(
                 path="/workspace",
@@ -144,11 +158,11 @@ def compile_source(
 
         container.start()
 
-        try:
-            wait_result = container.wait(
-                timeout=settings.compile_timeout_seconds,
-            )
-        except ReadTimeout:
+        exit_code = _wait_for_exit(
+            container,
+            settings.compile_timeout_seconds,
+        )
+        if exit_code is None:
             container.kill()
             return CompileResult(
                 success=False,
@@ -159,7 +173,6 @@ def compile_source(
                 compile_time_ms=(monotonic_ns() - started_ns) // 1_000_000,
             )
 
-        exit_code = int(wait_result["StatusCode"])
         stdout_bytes = container.logs(stdout=True, stderr=False)
         stderr_bytes = container.logs(stdout=False, stderr=True)
         stdout, stdout_truncated = _decode_bounded(

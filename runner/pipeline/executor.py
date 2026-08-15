@@ -42,6 +42,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             workspace=workspace,
             language=job.language,
             code=job.code,
+            stdin=job.stdin,
         )
         compile_log = _compile_log(
             compile_result.stdout,

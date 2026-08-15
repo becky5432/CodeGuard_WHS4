@@ -53,7 +53,7 @@ def create_workspace(client, job_id: UUID) -> VolumeWorkspace:
     )
 
 
-def build_source_archive(language: str, code: str) -> bytes:
+def build_source_archive(language: str, code: str, stdin: str = "") -> bytes:
     """소스 코드 한 개를 호스트 파일 없이 메모리 TAR로 만든다."""
 
     language_value = getattr(language, "value", language)
@@ -73,6 +73,13 @@ def build_source_archive(language: str, code: str) -> bytes:
         file_info.size = len(source_bytes)
         file_info.mode = 0o600
         archive.addfile(file_info, io.BytesIO(source_bytes))
+
+        if stdin:
+            stdin_bytes = stdin.encode("utf-8")
+            stdin_info = tarfile.TarInfo(name="stdin")
+            stdin_info.size = len(stdin_bytes)
+            stdin_info.mode = 0o444
+            archive.addfile(stdin_info, io.BytesIO(stdin_bytes))
 
     return archive_buffer.getvalue()
 
