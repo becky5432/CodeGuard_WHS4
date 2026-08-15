@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 from fastapi.testclient import TestClient
 
 from runner.exceptions import CleanupError, ContainerExecutionError
-from runner.container.container_runner import ExecutionResult
+from runner.pipeline.execution import ExecutionResult
 from runner.config import Settings
 from runner.main import app
 from runner.models.job import RunnerLanguage, RunnerRequest
@@ -33,6 +33,8 @@ class ExecuteApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
         self.docker_client = MagicMock()
+        self.compile_container = MagicMock()
+        self.execution_container = MagicMock()
         self.workspace = VolumeWorkspace(
             job_id=uuid4(),
             volume_name="codeguard-job-test",
@@ -52,6 +54,14 @@ class ExecuteApiTests(unittest.TestCase):
         self.compile_source_patcher = patch(
             "runner.pipeline.executor.compile_source",
         )
+        self.create_compile_container_patcher = patch(
+            "runner.pipeline.executor.create_compile_container",
+            return_value=self.compile_container,
+        )
+        self.create_execution_container_patcher = patch(
+            "runner.pipeline.executor.create_execution_container",
+            return_value=self.execution_container,
+        )
         self.execute_program_patcher = patch(
             "runner.pipeline.executor.execute_program",
         )
@@ -60,6 +70,12 @@ class ExecuteApiTests(unittest.TestCase):
         self.create_workspace_mock = self.create_workspace_patcher.start()
         self.remove_workspace_mock = self.remove_workspace_patcher.start()
         self.compile_source_mock = self.compile_source_patcher.start()
+        self.create_compile_container_mock = (
+            self.create_compile_container_patcher.start()
+        )
+        self.create_execution_container_mock = (
+            self.create_execution_container_patcher.start()
+        )
         self.execute_program_mock = self.execute_program_patcher.start()
 
     def tearDown(self) -> None:
@@ -122,23 +138,35 @@ class ExecuteApiTests(unittest.TestCase):
             UUID(body["job_id"]),
         )
         self.compile_source_mock.assert_called_once_with(
-            client=self.docker_client,
+            container=self.compile_container,
             workspace=self.workspace,
             language=RunnerLanguage.CPP,
             code=body["code"],
             stdin="",
         )
-        self.remove_workspace_mock.assert_called_once_with(
-            self.docker_client,
-            self.workspace,
+        self.create_compile_container_mock.assert_called_once_with(
+            client=self.docker_client,
+            workspace=self.workspace,
+            language=RunnerLanguage.CPP,
         )
-        self.execute_program_mock.assert_called_once_with(
+        self.create_execution_container_mock.assert_called_once_with(
             client=self.docker_client,
             workspace=self.workspace,
             stdin=body["stdin"],
             job_id=UUID(body["job_id"]),
             run_id=ANY,
         )
+        self.remove_workspace_mock.assert_called_once_with(
+            self.docker_client,
+            self.workspace,
+        )
+        self.execute_program_mock.assert_called_once_with(
+            container=self.execution_container,
+            job_id=UUID(body["job_id"]),
+            run_id=ANY,
+        )
+        self.execution_container.remove.assert_called_once_with(force=True)
+        self.compile_container.remove.assert_called_once_with(force=True)
 
     def test_execute_compiles_c_with_job_volume(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
@@ -161,7 +189,7 @@ class ExecuteApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.compile_source_mock.assert_called_once_with(
-            client=self.docker_client,
+            container=self.compile_container,
             workspace=self.workspace,
             language=RunnerLanguage.C,
             code=body["code"],
@@ -185,7 +213,10 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertEqual(payload["reason_code"], "COMPILE_ERROR")
         self.assertEqual(payload["stage"], "COMPILE")
         self.assertEqual(payload["compile_log"], "error: expected ';'")
+        self.create_execution_container_mock.assert_not_called()
         self.execute_program_mock.assert_not_called()
+        self.compile_container.remove.assert_called_once_with(force=True)
+        self.execution_container.remove.assert_not_called()
 
     def test_execute_returns_compile_internal_error(self) -> None:
         self.compile_source_mock.side_effect = ContainerExecutionError(
@@ -201,7 +232,37 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ERROR")
         self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
         self.assertEqual(payload["stage"], "COMPILE")
+        self.create_execution_container_mock.assert_not_called()
         self.execute_program_mock.assert_not_called()
+
+    def test_execution_create_failure_still_cleans_compile_and_volume(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
+            success=True,
+            stdout="compiler note",
+            stderr="",
+            exit_code=0,
+            artifact_ready=True,
+        )
+        self.create_execution_container_mock.side_effect = (
+            ContainerExecutionError("실행 컨테이너 생성에 실패했습니다.")
+        )
+
+        payload = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        ).json()
+
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
+        self.assertEqual(payload["stage"], "EXECUTE")
+        self.assertEqual(payload["compile_log"], "compiler note")
+        self.execute_program_mock.assert_not_called()
+        self.execution_container.remove.assert_not_called()
+        self.compile_container.remove.assert_called_once_with(force=True)
+        self.remove_workspace_mock.assert_called_once_with(
+            self.docker_client,
+            self.workspace,
+        )
 
     def test_execute_returns_cleanup_error(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
@@ -228,6 +289,46 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ERROR")
         self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
         self.assertEqual(payload["stage"], "CLEANUP")
+
+    def test_cleanup_continues_in_reverse_creation_order_after_failure(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
+            success=True,
+            stdout="",
+            stderr="",
+            exit_code=0,
+            artifact_ready=True,
+        )
+        self.execute_program_mock.return_value = ExecutionResult(
+            exit_code=0,
+            stdout="",
+            stderr="",
+        )
+        cleanup_order = []
+
+        def fail_execution_cleanup(*args, **kwargs):
+            cleanup_order.append("execution")
+            raise RuntimeError("unexpected execution cleanup failure")
+
+        self.execution_container.remove.side_effect = fail_execution_cleanup
+        self.compile_container.remove.side_effect = lambda *args, **kwargs: (
+            cleanup_order.append("compile")
+        )
+        self.remove_workspace_mock.side_effect = lambda *args, **kwargs: (
+            cleanup_order.append("volume")
+        )
+
+        payload = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        ).json()
+
+        self.assertEqual(payload["stage"], "CLEANUP")
+        self.compile_container.remove.assert_called_once_with(force=True)
+        self.remove_workspace_mock.assert_called_once_with(
+            self.docker_client,
+            self.workspace,
+        )
+        self.assertEqual(cleanup_order, ["execution", "compile", "volume"])
 
     def test_execute_returns_runtime_error(self) -> None:
         self.compile_source_mock.return_value = CompileResult(

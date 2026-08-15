@@ -13,7 +13,7 @@ from runner.pipeline.workspace import VolumeWorkspace, build_source_archive
 
 @dataclass
 class CompileResult:
-    """Compile Container에서 수집한 Runner 내부 결과."""
+    """Compile Container에서 수집한 컴파일 결과."""
 
     success: bool
     stdout: str
@@ -37,7 +37,7 @@ COMPILER_CONFIG = {
 
 
 def get_docker_client():
-    """Docker Engine에 연결된 클라이언트를 반환한다."""
+    """Docker Engine 연결을 확인한 클라이언트를 반환한다."""
 
     try:
         client = docker.from_env()
@@ -48,6 +48,17 @@ def get_docker_client():
             "Docker Engine에 연결할 수 없습니다.",
             details={"reason": str(exc)},
         ) from exc
+
+
+def _get_compiler_config(language) -> dict:
+    language_value = getattr(language, "value", language)
+    config = COMPILER_CONFIG.get(language_value)
+    if config is None:
+        raise WorkspaceError(
+            "지원하지 않는 언어입니다.",
+            details={"language": str(language_value)},
+        )
+    return config
 
 
 def _artifact_exists(container) -> bool:
@@ -62,34 +73,22 @@ def _artifact_exists(container) -> bool:
     return True
 
 
-def compile_source(
+def create_compile_container(
     client,
     workspace: VolumeWorkspace,
     language,
-    code: str,
-    stdin: str = "",
-) -> CompileResult:
-    """소스를 Job Volume에 업로드하고 C17 또는 C++17로 컴파일한다."""
+):
+    """Job Volume을 연결한 컴파일 컨테이너를 생성하고 반환한다."""
 
-    language_value = getattr(language, "value", language)
-    config = COMPILER_CONFIG.get(language_value)
-
-    if config is None:
-        raise WorkspaceError(
-            "지원하지 않는 언어입니다.",
-            details={"language": str(language_value)},
-        )
-
+    config = _get_compiler_config(language)
     source_filename = config["source_filename"]
-    compiler = config["compiler"]
-    standard = config["standard"]
-    container = None
+
     try:
-        container = client.containers.create(
+        return client.containers.create(
             image=settings.cpp_image,
             command=[
-                compiler,
-                standard,
+                config["compiler"],
+                config["standard"],
                 f"/workspace/{source_filename}",
                 "-o",
                 "/workspace/main",
@@ -107,7 +106,30 @@ def compile_source(
                 "codeguard.stage": "compile",
             },
         )
+    except docker.errors.ImageNotFound as exc:
+        raise ContainerExecutionError(
+            "컴파일용 Docker 이미지를 찾을 수 없습니다.",
+            details={"image": settings.cpp_image},
+        ) from exc
+    except docker.errors.DockerException as exc:
+        raise ContainerExecutionError(
+            "컴파일 컨테이너 생성에 실패했습니다.",
+            details={"reason": str(exc)},
+        ) from exc
 
+
+def compile_source(
+    container,
+    workspace: VolumeWorkspace,
+    language,
+    code: str,
+    stdin: str = "",
+) -> CompileResult:
+    """소스를 전달해 컴파일하고 컨테이너 객체는 정리를 위해 유지한다."""
+
+    _get_compiler_config(language)
+
+    try:
         source_archive = build_source_archive(language, code, stdin=stdin)
         try:
             uploaded = container.put_archive(
@@ -146,34 +168,10 @@ def compile_source(
             exit_code=exit_code,
             artifact_ready=artifact_ready,
         )
-
-    except docker.errors.ImageNotFound as exc:
-        raise ContainerExecutionError(
-            "컴파일용 Docker 이미지를 찾을 수 없습니다.",
-            details={"image": settings.cpp_image},
-        ) from exc
-    except (WorkspaceError, ContainerExecutionError):
+    except WorkspaceError:
         raise
     except docker.errors.DockerException as exc:
         raise ContainerExecutionError(
             "컴파일 컨테이너 실행에 실패했습니다.",
             details={"reason": str(exc)},
         ) from exc
-    finally:
-        if container is not None:
-            try:
-                container.remove(force=True)
-            except docker.errors.DockerException:
-                pass
-
-
-def compile_cpp(workspace, code: str = "") -> CompileResult:
-    """이전 외부 호출을 위한 C++ 호환 함수."""
-
-    client = get_docker_client()
-    return compile_source(
-        client=client,
-        workspace=workspace,
-        language="CPP",
-        code=code,
-    )

@@ -4,11 +4,15 @@ from uuid import uuid4
 
 import docker
 
-from runner.container.container_runner import execute_program
+from runner.exceptions import ContainerExecutionError
+from runner.pipeline.execution import (
+    create_execution_container,
+    execute_program,
+)
 from runner.pipeline.workspace import VolumeWorkspace
 
 
-class ContainerRunnerTests(unittest.TestCase):
+class ExecutionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = MagicMock()
         self.container = MagicMock()
@@ -19,21 +23,18 @@ class ContainerRunnerTests(unittest.TestCase):
             job_id=uuid4(),
             volume_name="codeguard-job-test",
         )
+        self.run_id = uuid4()
 
-    def test_execute_program_uses_only_basic_container_options(self) -> None:
-        run_id = uuid4()
-
-        result = execute_program(
+    def test_create_execution_container_returns_registered_container(self) -> None:
+        result = create_execution_container(
             client=self.client,
             workspace=self.workspace,
             stdin="",
             job_id=self.workspace.job_id,
-            run_id=run_id,
+            run_id=self.run_id,
         )
 
-        self.assertEqual(result.exit_code, 0)
-        self.assertEqual(result.stdout, "Hello\n")
-        self.assertEqual(result.stderr, "")
+        self.assertIs(result, self.container)
         self.client.containers.create.assert_called_once_with(
             image="codeguard-cpp:dev",
             command=["/workspace/main"],
@@ -47,21 +48,18 @@ class ContainerRunnerTests(unittest.TestCase):
             labels={
                 "codeguard.managed": "true",
                 "codeguard.job_id": str(self.workspace.job_id),
-                "codeguard.run_id": str(run_id),
+                "codeguard.run_id": str(self.run_id),
                 "codeguard.stage": "execute",
             },
         )
-        self.container.start.assert_called_once_with()
-        self.container.wait.assert_called_once_with()
-        self.container.remove.assert_called_once_with(force=True)
 
-    def test_execute_program_reads_stdin_from_volume(self) -> None:
-        execute_program(
+    def test_create_execution_container_uses_stdin_file(self) -> None:
+        create_execution_container(
             client=self.client,
             workspace=self.workspace,
             stdin="21\n",
             job_id=self.workspace.job_id,
-            run_id=uuid4(),
+            run_id=self.run_id,
         )
 
         command = self.client.containers.create.call_args.kwargs["command"]
@@ -70,37 +68,46 @@ class ContainerRunnerTests(unittest.TestCase):
             ["sh", "-c", "exec /workspace/main < /workspace/stdin"],
         )
 
-    def test_execute_program_returns_runtime_exit_and_full_output(self) -> None:
-        self.container.wait.return_value = {"StatusCode": 3}
-        self.container.logs.side_effect = [b"before error", b"runtime failure"]
-
+    def test_execute_program_collects_result_without_removing_container(self) -> None:
         result = execute_program(
-            client=self.client,
-            workspace=self.workspace,
-            stdin="",
+            container=self.container,
             job_id=self.workspace.job_id,
-            run_id=uuid4(),
+            run_id=self.run_id,
         )
 
-        self.assertEqual(result.exit_code, 3)
-        self.assertEqual(result.stdout, "before error")
-        self.assertEqual(result.stderr, "runtime failure")
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout, "Hello\n")
+        self.assertEqual(result.stderr, "")
+        self.container.start.assert_called_once_with()
+        self.container.wait.assert_called_once_with()
+        self.container.remove.assert_not_called()
 
-    def test_execute_program_returns_system_error_for_docker_failure(self) -> None:
+    def test_create_execution_container_wraps_docker_failure(self) -> None:
         self.client.containers.create.side_effect = docker.errors.APIError(
             "create failed",
         )
 
+        with self.assertRaises(ContainerExecutionError):
+            create_execution_container(
+                client=self.client,
+                workspace=self.workspace,
+                stdin="",
+                job_id=self.workspace.job_id,
+                run_id=self.run_id,
+            )
+
+    def test_execute_program_returns_system_error_without_removing_container(self) -> None:
+        self.container.start.side_effect = docker.errors.APIError("start failed")
+
         result = execute_program(
-            client=self.client,
-            workspace=self.workspace,
-            stdin="",
+            container=self.container,
             job_id=self.workspace.job_id,
-            run_id=uuid4(),
+            run_id=self.run_id,
         )
 
         self.assertIsNotNone(result.system_error)
         self.assertIsNone(result.exit_code)
+        self.container.remove.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from uuid import UUID
 import docker
 
 from runner.config import settings
+from runner.exceptions import ContainerExecutionError
 from runner.pipeline.workspace import VolumeWorkspace
 
 
@@ -19,28 +20,25 @@ class ExecutionResult:
     system_error: str | None = None
 
 
-def execute_program(
+def create_execution_container(
     client,
     workspace: VolumeWorkspace,
     stdin: str,
     job_id: UUID,
     run_id: UUID,
-) -> ExecutionResult:
-    """Volume에 있는 실행파일을 별도 컨테이너에서 실행한다."""
+):
+    """Job Volume을 연결한 실행 컨테이너를 생성하고 반환한다."""
 
-    container = None
-    result: ExecutionResult | None = None
+    command = ["/workspace/main"]
+    if stdin:
+        command = [
+            "sh",
+            "-c",
+            "exec /workspace/main < /workspace/stdin",
+        ]
 
     try:
-        command = ["/workspace/main"]
-        if stdin:
-            command = [
-                "sh",
-                "-c",
-                "exec /workspace/main < /workspace/stdin",
-            ]
-
-        container = client.containers.create(
+        return client.containers.create(
             image=settings.cpp_image,
             command=command,
             volumes={
@@ -57,6 +55,17 @@ def execute_program(
                 "codeguard.stage": "execute",
             },
         )
+    except docker.errors.DockerException as exc:
+        raise ContainerExecutionError(
+            "실행 컨테이너 생성에 실패했습니다.",
+            details={"reason": str(exc)},
+        ) from exc
+
+
+def execute_program(container, job_id: UUID, run_id: UUID) -> ExecutionResult:
+    """실행 컨테이너를 시작하고 종료 정보와 출력을 수집한다."""
+
+    try:
         container.start()
         wait_result = container.wait()
         exit_code = int(wait_result["StatusCode"])
@@ -68,7 +77,7 @@ def execute_program(
             "utf-8",
             errors="replace",
         )
-        result = ExecutionResult(
+        return ExecutionResult(
             exit_code=exit_code,
             stdout=stdout,
             stderr=stderr,
@@ -80,30 +89,9 @@ def execute_program(
             run_id,
             exc,
         )
-        result = ExecutionResult(
+        return ExecutionResult(
             exit_code=None,
             stdout="",
             stderr="",
-            system_error="Execution Container 처리에 실패했습니다.",
+            system_error="실행 컨테이너 처리에 실패했습니다.",
         )
-    finally:
-        if container is not None:
-            try:
-                container.remove(force=True)
-            except docker.errors.DockerException as exc:
-                logger.error(
-                    "event=execution_container_cleanup_failed "
-                    "job_id=%s run_id=%s error=%s",
-                    job_id,
-                    run_id,
-                    exc,
-                )
-                if result is None:
-                    result = ExecutionResult(
-                        exit_code=None,
-                        stdout="",
-                        stderr="",
-                    )
-                result.system_error = "Execution Container 정리에 실패했습니다."
-
-    return result

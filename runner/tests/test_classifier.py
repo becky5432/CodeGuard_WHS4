@@ -1,6 +1,6 @@
 import unittest
 
-from runner.container.container_runner import ExecutionResult
+from runner.pipeline.execution import ExecutionResult
 from runner.models.result import RunnerReasonCode, RunnerStatus
 from runner.pipeline.classifier import classify_execution
 
