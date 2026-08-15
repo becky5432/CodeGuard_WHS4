@@ -1,4 +1,4 @@
-import tempfile	
+import tempfile 
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +11,7 @@ from runner.config import settings
 from runner.main import app
 from runner.models.job import RunnerLanguage
 from runner.pipeline.compiler import CompileResult
+from runner.exceptions import ContainerExecutionError
 
 
 class ExecuteApiTests(unittest.TestCase):
@@ -185,6 +186,31 @@ class ExecuteApiTests(unittest.TestCase):
             response.json()["reason_code"],
             "COMPILE_TIMEOUT",
         )
+
+    @patch("runner.pipeline.executor.compile_source")
+    def test_execute_returns_internal_error(
+        self,
+        compile_source_mock,
+    ) -> None:
+        compile_source_mock.side_effect = ContainerExecutionError(
+            "컴파일 컨테이너 실행에 실패했습니다.",
+            details={"reason": "test docker error"},
+        )
+
+        body = self.make_request_body()
+
+        response = self.client.post("/execute", json=body)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "ERROR")
+        self.assertEqual(
+            response.json()["reason_code"],
+            "INTERNAL_ERROR",
+        )
+        self.assertIsNone(response.json()["exit_code"])
+
+        workspace = settings.workspace_root / body["job_id"]
+        self.assertFalse(workspace.exists())
 
     def test_execute_rejects_invalid_policy_without_starting_job(
         self,
