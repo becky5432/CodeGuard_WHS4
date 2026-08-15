@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import StateMessage from "../components/StateMessage";
 
 const DEFAULT_CODE = `#include <iostream>
@@ -13,21 +13,43 @@ function MainPage() {
   const [language, setLanguage] = useState("cpp");
   const [code, setCode] = useState(DEFAULT_CODE);
   const [standardInput, setStandardInput] = useState("");
+  const [executionState, setExecutionState] = useState("idle");
   const [message, setMessage] = useState(
     "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
   );
 
-  const handleSubmit = (event) => {
+  const executionLockRef = useRef(false);
+
+  const isExecuting = executionState === "loading";
+
+  const handleSubmit = async (event) => {
     event.preventDefault();
 
+    if (executionLockRef.current) {
+      return;
+    }
+
     if (!code.trim()) {
+      setExecutionState("error");
       setMessage("실행할 코드를 입력해주세요.");
       return;
     }
 
-    setMessage(
-      "현재는 화면 구현 단계입니다. 실행 API는 추후 연결할 예정입니다.",
-    );
+    executionLockRef.current = true;
+    setExecutionState("loading");
+    setMessage("코드 실행을 요청하고 있습니다.");
+
+    try {
+      //API 미연결
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      setExecutionState("idle");
+      setMessage(
+        "현재는 화면 구현 단계입니다. 실행 API는 추후 연결할 예정입니다.",
+      );
+    } finally {
+      executionLockRef.current = false;
+    }
   };
 
   return (
@@ -85,9 +107,11 @@ function MainPage() {
             <button
               className="secondary-button"
               type="button"
+              disabled={isExecuting}
               onClick={() => {
                 setCode("");
                 setStandardInput("");
+                setExecutionState("idle");
                 setMessage(
                   "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
                 );
@@ -96,8 +120,13 @@ function MainPage() {
               초기화
             </button>
 
-            <button className="run-button" type="submit">
-              실행
+            <button
+              className="run-button"
+              type="submit"
+              disabled={isExecuting}
+              aria-busy={isExecuting}
+            >
+              {isExecuting ? "실행 중..." : "실행"}
             </button>
           </div>
         </section>
@@ -105,12 +134,26 @@ function MainPage() {
         <section className="result-card">
           <div className="card-header">
             <h3>실행 결과</h3>
-            <span className="waiting-badge">실행 전</span>
+            <span className="waiting-badge">
+              {isExecuting ? "실행 중" : "실행 전"}
+            </span>
           </div>
 
           <StateMessage
-            type="info"
-            title="결과 대기 중"
+            type={
+              executionState === "error"
+                ? "error"
+                : executionState === "loading"
+                  ? "loading"
+                  : "info"
+            }
+            title={
+              executionState === "error"
+                ? "입력 오류"
+                : executionState === "loading"
+                  ? "실행 요청 중"
+                  : "결과 대기 중"
+            }
             description={message}
           />
 
