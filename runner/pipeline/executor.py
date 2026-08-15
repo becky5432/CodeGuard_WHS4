@@ -1,13 +1,13 @@
 from uuid import uuid4
 
-from runner.models.job import RunnerLanguage, RunnerRequest
+from runner.models.job import RunnerRequest
 from runner.models.result import RunnerReasonCode, RunnerResponse, RunnerStatus
-from runner.pipeline.compiler import compile_cpp
+from runner.pipeline.compiler import compile_source
 from runner.pipeline.workspace import create_workspace, remove_workspace, write_source
 
 
 def execute_compile_job(job: RunnerRequest) -> RunnerResponse:
-    """Workspace 생성부터 Docker C++ 컴파일과 정리까지 수행한다."""
+    """Workspace 생성부터 Docker C/C++ 컴파일과 정리까지 수행한다."""
     run_id = uuid4()
     workspace = create_workspace(job.job_id)
 
@@ -18,16 +18,10 @@ def execute_compile_job(job: RunnerRequest) -> RunnerResponse:
             code=job.code,
         )
 
-        if job.language != RunnerLanguage.CPP:
-            return RunnerResponse(
-                job_id=job.job_id,
-                run_id=run_id,
-                status=RunnerStatus.ERROR,
-                reason_code=RunnerReasonCode.COMPILE_ERROR,
-                stderr="현재 컴파일 단계에서는 CPP만 지원합니다.",
-            )
-
-        compile_result = compile_cpp(workspace)
+        compile_result = compile_source(
+	    workspace=workspace,
+    	    language=job.language,
+	)
 
         if compile_result.timed_out:
             status = RunnerStatus.BLOCKED
