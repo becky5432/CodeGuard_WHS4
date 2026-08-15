@@ -7,8 +7,10 @@ from fastapi.testclient import TestClient
 
 from runner.exceptions import CleanupError, ContainerExecutionError
 from runner.container.container_runner import ExecutionResult
+from runner.config import Settings
 from runner.main import app
-from runner.models.job import RunnerLanguage
+from runner.models.job import RunnerLanguage, RunnerRequest
+from runner.models.result import RunnerReasonCode, RunnerStatus
 from runner.pipeline.compiler import CompileResult
 from runner.pipeline.workspace import VolumeWorkspace
 
@@ -69,14 +71,25 @@ class ExecuteApiTests(unittest.TestCase):
             "language": "CPP",
             "code": "int main() { return 0; }",
             "stdin": "",
-            "policy": {
-                "timeout_ms": 2000,
-                "memory_limit_mb": 128,
-                "process_limit": 10,
-                "cpu_limit": 1.0,
-            },
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+
+    def test_request_and_result_models_exclude_limit_contract(self) -> None:
+        self.assertNotIn("policy", RunnerRequest.model_fields)
+        self.assertNotIn("BLOCKED", RunnerStatus.__members__)
+        self.assertEqual(
+            set(RunnerReasonCode.__members__),
+            {"COMPILE_ERROR", "RUNTIME_ERROR", "INTERNAL_ERROR"},
+        )
+        self.assertTrue(
+            {
+                "compile_timeout_seconds",
+                "compile_log_limit_bytes",
+                "execution_output_limit_bytes",
+                "execution_tmpfs_limit_mb",
+                "runtime_user",
+            }.isdisjoint(Settings.model_fields),
+        )
 
     def test_execute_compiles_cpp_with_job_volume(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
@@ -123,7 +136,6 @@ class ExecuteApiTests(unittest.TestCase):
             client=self.docker_client,
             workspace=self.workspace,
             stdin=body["stdin"],
-            policy=ANY,
             job_id=UUID(body["job_id"]),
             run_id=ANY,
         )
@@ -173,25 +185,6 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertEqual(payload["reason_code"], "COMPILE_ERROR")
         self.assertEqual(payload["stage"], "COMPILE")
         self.assertEqual(payload["compile_log"], "error: expected ';'")
-        self.execute_program_mock.assert_not_called()
-
-    def test_execute_returns_compile_timeout(self) -> None:
-        self.compile_source_mock.return_value = CompileResult(
-            success=False,
-            stdout="",
-            stderr="Compilation timed out.",
-            exit_code=None,
-            timed_out=True,
-        )
-
-        payload = self.client.post(
-            "/execute",
-            json=self.make_request_body(),
-        ).json()
-
-        self.assertEqual(payload["status"], "BLOCKED")
-        self.assertEqual(payload["reason_code"], "COMPILE_TIMEOUT")
-        self.assertEqual(payload["stage"], "COMPILE")
         self.execute_program_mock.assert_not_called()
 
     def test_execute_returns_compile_internal_error(self) -> None:
@@ -262,37 +255,5 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertEqual(payload["stderr"], "runtime failure\n")
         self.assertEqual(payload["exit_code"], 1)
 
-    def test_execute_returns_time_limit(self) -> None:
-        self.compile_source_mock.return_value = CompileResult(
-            success=True,
-            stdout="",
-            stderr="",
-            exit_code=0,
-            artifact_ready=True,
-        )
-        self.execute_program_mock.return_value = ExecutionResult(
-            exit_code=137,
-            stdout="",
-            stderr="",
-            timed_out=True,
-        )
-
-        payload = self.client.post(
-            "/execute",
-            json=self.make_request_body(),
-        ).json()
-
-        self.assertEqual(payload["status"], "BLOCKED")
-        self.assertEqual(payload["reason_code"], "TIME_LIMIT")
-        self.assertEqual(payload["stage"], "EXECUTE")
-
-    def test_execute_rejects_invalid_policy_without_starting_job(self) -> None:
-        body = self.make_request_body()
-        body["policy"]["memory_limit_mb"] = 0
-
-        response = self.client.post("/execute", json=body)
-
-        self.assertEqual(response.status_code, 422)
-        self.get_client_mock.assert_not_called()
 if __name__ == "__main__":
     unittest.main()

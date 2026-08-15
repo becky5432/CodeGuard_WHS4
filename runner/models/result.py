@@ -7,7 +7,6 @@ from pydantic import BaseModel
 
 class RunnerStatus(str, Enum):
     SUCCESS = "SUCCESS"
-    BLOCKED = "BLOCKED"
     ERROR = "ERROR"
 
 
@@ -19,13 +18,7 @@ class RunnerStage(str, Enum):
 
 
 class RunnerReasonCode(str, Enum):
-    TIME_LIMIT = "TIME_LIMIT"
-    MEMORY_LIMIT = "MEMORY_LIMIT"
-    PROCESS_LIMIT = "PROCESS_LIMIT"
-    OUTPUT_LIMIT = "OUTPUT_LIMIT"
-    NETWORK_BLOCKED = "NETWORK_BLOCKED"
     COMPILE_ERROR = "COMPILE_ERROR"
-    COMPILE_TIMEOUT = "COMPILE_TIMEOUT"
     RUNTIME_ERROR = "RUNTIME_ERROR"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 

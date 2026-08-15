@@ -1,14 +1,14 @@
 import io
 import tarfile
 import unittest
-from unittest.mock import MagicMock, patch
+from dataclasses import fields
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import docker
 
-from runner.config import settings
 from runner.exceptions import ContainerExecutionError, WorkspaceError
-from runner.pipeline.compiler import compile_source
+from runner.pipeline.compiler import CompileResult, compile_source
 from runner.pipeline.workspace import VolumeWorkspace
 
 
@@ -72,6 +72,22 @@ class CompilerTests(unittest.TestCase):
         )
         self.container.remove.assert_called_once_with(force=True)
 
+    def test_compile_result_and_container_have_no_limit_contract(self) -> None:
+        compile_source(
+            client=self.client,
+            workspace=self.workspace,
+            language="CPP",
+            code="int main() { return 0; }",
+        )
+
+        self.assertEqual(
+            {field.name for field in fields(CompileResult)},
+            {"success", "stdout", "stderr", "exit_code", "artifact_ready"},
+        )
+        create_kwargs = self.client.containers.create.call_args.kwargs
+        self.assertNotIn("network_disabled", create_kwargs)
+        self.container.wait.assert_called_once_with()
+
     def test_compile_source_uploads_stdin_with_source(self) -> None:
         compile_source(
             client=self.client,
@@ -98,7 +114,7 @@ class CompilerTests(unittest.TestCase):
         self.assertEqual(command[2], "/workspace/main.c")
 
     def test_compile_source_returns_compile_error(self) -> None:
-        self.container.attrs["State"]["ExitCode"] = 1
+        self.container.wait.return_value = {"StatusCode": 1}
         self.container.logs.side_effect = [b"", b"syntax error"]
 
         result = compile_source(
@@ -113,32 +129,6 @@ class CompilerTests(unittest.TestCase):
         self.assertEqual(result.stderr, "syntax error")
         self.assertFalse(result.artifact_ready)
         self.container.get_archive.assert_not_called()
-
-    @patch(
-        "runner.pipeline.compiler._wait_for_exit",
-        return_value=None,
-    )
-    def test_compile_source_kills_container_on_timeout(
-        self,
-        wait_for_exit_mock,
-    ) -> None:
-
-        result = compile_source(
-            client=self.client,
-            workspace=self.workspace,
-            language="CPP",
-            code="int main() { return 0; }",
-        )
-
-        self.assertTrue(result.timed_out)
-        self.assertFalse(result.success)
-        self.assertIsNone(result.exit_code)
-        self.container.kill.assert_called_once_with()
-        self.container.remove.assert_called_once_with(force=True)
-        wait_for_exit_mock.assert_called_once_with(
-            self.container,
-            settings.compile_timeout_seconds,
-        )
 
     def test_compile_source_rejects_failed_archive_upload(self) -> None:
         self.container.put_archive.return_value = False

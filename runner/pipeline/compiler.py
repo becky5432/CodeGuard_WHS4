@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from time import monotonic, monotonic_ns, sleep
 
 import docker
 
@@ -20,9 +19,6 @@ class CompileResult:
     stdout: str
     stderr: str
     exit_code: int | None
-    timed_out: bool = False
-    compile_time_ms: int = 0
-    log_truncated: bool = False
     artifact_ready: bool = False
 
 
@@ -54,12 +50,6 @@ def get_docker_client():
         ) from exc
 
 
-def _decode_bounded(data: bytes, limit: int) -> tuple[str, bool]:
-    truncated = len(data) > limit
-    bounded = data[:limit]
-    return bounded.decode("utf-8", errors="replace"), truncated
-
-
 def _artifact_exists(container) -> bool:
     try:
         stream, _ = container.get_archive("/workspace/main")
@@ -70,20 +60,6 @@ def _artifact_exists(container) -> bool:
     if callable(close):
         close()
     return True
-
-
-def _wait_for_exit(container, timeout_seconds: float) -> int | None:
-    """Poll compile-container state without transport timeout ambiguity."""
-
-    deadline = monotonic() + timeout_seconds
-    while True:
-        container.reload()
-        state = container.attrs.get("State", {})
-        if not bool(state.get("Running", False)):
-            return int(state.get("ExitCode", 0))
-        if monotonic() >= deadline:
-            return None
-        sleep(min(0.02, max(deadline - monotonic(), 0)))
 
 
 def compile_source(
@@ -108,8 +84,6 @@ def compile_source(
     compiler = config["compiler"]
     standard = config["standard"]
     container = None
-    started_ns = monotonic_ns()
-
     try:
         container = client.containers.create(
             image=settings.cpp_image,
@@ -126,7 +100,6 @@ def compile_source(
                     "mode": "rw",
                 }
             },
-            network_disabled=True,
             detach=True,
             labels={
                 "codeguard.managed": "true",
@@ -157,32 +130,12 @@ def compile_source(
             )
 
         container.start()
-
-        exit_code = _wait_for_exit(
-            container,
-            settings.compile_timeout_seconds,
-        )
-        if exit_code is None:
-            container.kill()
-            return CompileResult(
-                success=False,
-                stdout="",
-                stderr="Compilation timed out.",
-                exit_code=None,
-                timed_out=True,
-                compile_time_ms=(monotonic_ns() - started_ns) // 1_000_000,
-            )
-
+        wait_result = container.wait()
+        exit_code = int(wait_result["StatusCode"])
         stdout_bytes = container.logs(stdout=True, stderr=False)
         stderr_bytes = container.logs(stdout=False, stderr=True)
-        stdout, stdout_truncated = _decode_bounded(
-            stdout_bytes,
-            settings.compile_log_limit_bytes,
-        )
-        stderr, stderr_truncated = _decode_bounded(
-            stderr_bytes,
-            settings.compile_log_limit_bytes,
-        )
+        stdout = stdout_bytes.decode("utf-8", errors="replace")
+        stderr = stderr_bytes.decode("utf-8", errors="replace")
 
         artifact_ready = exit_code == 0 and _artifact_exists(container)
 
@@ -191,8 +144,6 @@ def compile_source(
             stdout=stdout,
             stderr=stderr,
             exit_code=exit_code,
-            compile_time_ms=(monotonic_ns() - started_ns) // 1_000_000,
-            log_truncated=(stdout_truncated or stderr_truncated),
             artifact_ready=artifact_ready,
         )
 

@@ -49,18 +49,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             compile_result.stderr,
         )
 
-        if compile_result.timed_out:
-            response = RunnerResponse(
-                job_id=job.job_id,
-                run_id=run_id,
-                status=RunnerStatus.BLOCKED,
-                reason_code=RunnerReasonCode.COMPILE_TIMEOUT,
-                stage=RunnerStage.COMPILE,
-                error_message="컴파일 제한 시간을 초과했습니다.",
-                exit_code=None,
-                compile_log=compile_log,
-            )
-        elif compile_result.exit_code == 0 and not compile_result.artifact_ready:
+        if compile_result.exit_code == 0 and not compile_result.artifact_ready:
             response = RunnerResponse(
                 job_id=job.job_id,
                 run_id=run_id,
@@ -88,7 +77,6 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 client=client,
                 workspace=workspace,
                 stdin=job.stdin,
-                policy=job.policy,
                 job_id=job.job_id,
                 run_id=run_id,
             )
