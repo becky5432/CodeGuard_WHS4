@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 from runner.models.job import RunnerRequest
 from runner.models.result import RunnerResponse
-from runner.pipeline.executor import execute_compile_job
+from runner.pipeline.executor import execute_job
 
 
 router = APIRouter()
@@ -28,7 +28,7 @@ def execute(request: RunnerRequest) -> RunnerResponse:
         request.language.value,
     )
 
-    result = execute_compile_job(request)
+    result = execute_job(request)
 
     logger.info(
         "event=execute_completed job_id=%s run_id=%s status=%s",
