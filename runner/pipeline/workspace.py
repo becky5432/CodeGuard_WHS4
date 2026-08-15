@@ -1,6 +1,9 @@
-import shutil
-from pathlib import Path
+import io
+import tarfile
+from dataclasses import dataclass
 from uuid import UUID
+
+import docker
 
 from runner.config import settings
 from runner.exceptions import CleanupError, WorkspaceError
@@ -12,41 +15,47 @@ SOURCE_FILENAMES = {
 }
 
 
-def create_workspace(job_id: UUID) -> Path:
-    """Job 전용 임시 Workspace를 생성한다."""
-    workspace = settings.workspace_root / str(job_id)
+@dataclass(frozen=True)
+class VolumeWorkspace:
+    """한 Job이 Compile과 Execution에서 공유하는 Docker Volume 정보."""
+
+    job_id: UUID
+    volume_name: str
+
+
+def create_workspace(client, job_id: UUID) -> VolumeWorkspace:
+    """Job 전용 Docker Volume을 생성한다."""
+
+    volume_name = f"{settings.volume_name_prefix}{job_id}"
 
     try:
-        settings.workspace_root.mkdir(parents=True, exist_ok=True)
-        workspace.mkdir(exist_ok=False)
-        return workspace
-
-    except FileExistsError as exc:
-        raise WorkspaceError(
-            "이미 존재하는 Job Workspace입니다.",
-            details={
-                "job_id": str(job_id),
-                "path": str(workspace),
+        volume = client.volumes.create(
+            name=volume_name,
+            labels={
+                "codeguard.managed": "true",
+                "codeguard.job_id": str(job_id),
+                "codeguard.purpose": "workspace",
             },
-        ) from exc
-
-    except OSError as exc:
+        )
+    except docker.errors.DockerException as exc:
         raise WorkspaceError(
-            "Workspace 생성에 실패했습니다.",
+            "Job Volume 생성에 실패했습니다.",
             details={
                 "job_id": str(job_id),
-                "path": str(workspace),
+                "volume_name": volume_name,
                 "reason": str(exc),
             },
         ) from exc
 
+    return VolumeWorkspace(
+        job_id=job_id,
+        volume_name=volume.name,
+    )
 
-def write_source(
-    workspace: Path,
-    language: str,
-    code: str,
-) -> Path:
-    """사용자 코드를 Workspace에 UTF-8 소스 파일로 저장한다."""
+
+def build_source_archive(language: str, code: str) -> bytes:
+    """소스 코드 한 개를 호스트 파일 없이 메모리 TAR로 만든다."""
+
     language_value = getattr(language, "value", language)
     filename = SOURCE_FILENAMES.get(language_value)
 
@@ -56,42 +65,32 @@ def write_source(
             details={"language": str(language_value)},
         )
 
-    source_path = workspace / filename
+    source_bytes = code.encode("utf-8")
+    archive_buffer = io.BytesIO()
+
+    with tarfile.open(fileobj=archive_buffer, mode="w") as archive:
+        file_info = tarfile.TarInfo(name=filename)
+        file_info.size = len(source_bytes)
+        file_info.mode = 0o600
+        archive.addfile(file_info, io.BytesIO(source_bytes))
+
+    return archive_buffer.getvalue()
+
+
+def remove_workspace(client, workspace: VolumeWorkspace) -> None:
+    """Job Volume을 삭제한다. 이미 사라진 Volume은 정리 완료로 본다."""
 
     try:
-        source_path.write_text(code, encoding="utf-8")
-        return source_path
-
-    except OSError as exc:
-        raise WorkspaceError(
-            "소스 코드 저장에 실패했습니다.",
-            details={
-                "path": str(source_path),
-                "reason": str(exc),
-            },
-        ) from exc
-
-
-def remove_workspace(workspace: Path) -> None:
-    """허용된 Job Workspace와 내부 파일을 모두 삭제한다."""
-    root = settings.workspace_root.resolve()
-    target = workspace.resolve()
-
-    if target.parent != root:
+        volume = client.volumes.get(workspace.volume_name)
+        volume.remove(force=True)
+    except docker.errors.NotFound:
+        return
+    except docker.errors.DockerException as exc:
         raise CleanupError(
-            "삭제할 수 없는 Workspace 경로입니다.",
-            details={"path": str(target)},
-        )
-
-    try:
-        if target.exists():
-            shutil.rmtree(target)
-
-    except OSError as exc:
-        raise CleanupError(
-            "Workspace 삭제에 실패했습니다.",
+            "Job Volume 삭제에 실패했습니다.",
             details={
-                "path": str(target),
+                "job_id": str(workspace.job_id),
+                "volume_name": workspace.volume_name,
                 "reason": str(exc),
             },
         ) from exc

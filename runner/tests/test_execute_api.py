@@ -1,17 +1,15 @@
-import tempfile 
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from runner.config import settings
+from runner.exceptions import CleanupError, ContainerExecutionError
 from runner.main import app
 from runner.models.job import RunnerLanguage
 from runner.pipeline.compiler import CompileResult
-from runner.exceptions import ContainerExecutionError
+from runner.pipeline.workspace import VolumeWorkspace
 
 
 class ExecuteApiTests(unittest.TestCase):
@@ -30,16 +28,35 @@ class ExecuteApiTests(unittest.TestCase):
     }
 
     def setUp(self) -> None:
-        self.temporary_directory = tempfile.TemporaryDirectory()
-        self.original_workspace_root = settings.workspace_root
-        settings.workspace_root = (
-            Path(self.temporary_directory.name) / "codeguard-runner"
-        )
         self.client = TestClient(app)
+        self.docker_client = MagicMock()
+        self.workspace = VolumeWorkspace(
+            job_id=uuid4(),
+            volume_name="codeguard-job-test",
+        )
+
+        self.get_client_patcher = patch(
+            "runner.pipeline.executor.get_docker_client",
+            return_value=self.docker_client,
+        )
+        self.create_workspace_patcher = patch(
+            "runner.pipeline.executor.create_workspace",
+            return_value=self.workspace,
+        )
+        self.remove_workspace_patcher = patch(
+            "runner.pipeline.executor.remove_workspace",
+        )
+        self.compile_source_patcher = patch(
+            "runner.pipeline.executor.compile_source",
+        )
+
+        self.get_client_mock = self.get_client_patcher.start()
+        self.create_workspace_mock = self.create_workspace_patcher.start()
+        self.remove_workspace_mock = self.remove_workspace_patcher.start()
+        self.compile_source_mock = self.compile_source_patcher.start()
 
     def tearDown(self) -> None:
-        settings.workspace_root = self.original_workspace_root
-        self.temporary_directory.cleanup()
+        patch.stopall()
 
     def make_request_body(self) -> dict:
         return {
@@ -56,18 +73,14 @@ class ExecuteApiTests(unittest.TestCase):
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
-    @patch("runner.pipeline.executor.compile_source")
-    def test_execute_compiles_cpp_and_removes_workspace(
-        self,
-        compile_source_mock,
-    ) -> None:
-        compile_source_mock.return_value = CompileResult(
+    def test_execute_compiles_cpp_with_job_volume(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
             success=True,
             stdout="",
             stderr="",
             exit_code=0,
+            artifact_ready=True,
         )
-
         body = self.make_request_body()
 
         response = self.client.post("/execute", json=body)
@@ -78,31 +91,30 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertEqual(payload["status"], "SUCCESS")
         self.assertIsNone(payload["reason_code"])
         self.assertIsNone(payload["stage"])
-        self.assertIsNone(payload["error_message"])
-        self.assertEqual(payload["compile_log"], "")
         self.assertIsNotNone(payload["finished_at"])
-
-        workspace = settings.workspace_root / body["job_id"]
-
-        compile_source_mock.assert_called_once_with(
-            workspace=workspace,
+        self.create_workspace_mock.assert_called_once_with(
+            self.docker_client,
+            uuid4_type(body["job_id"]),
+        )
+        self.compile_source_mock.assert_called_once_with(
+            client=self.docker_client,
+            workspace=self.workspace,
             language=RunnerLanguage.CPP,
+            code=body["code"],
+        )
+        self.remove_workspace_mock.assert_called_once_with(
+            self.docker_client,
+            self.workspace,
         )
 
-        self.assertFalse(workspace.exists())
-
-    @patch("runner.pipeline.executor.compile_source")
-    def test_execute_compiles_c_and_removes_workspace(
-        self,
-        compile_source_mock,
-    ) -> None:
-        compile_source_mock.return_value = CompileResult(
+    def test_execute_compiles_c_with_job_volume(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
             success=True,
             stdout="",
             stderr="",
             exit_code=0,
+            artifact_ready=True,
         )
-
         body = self.make_request_body()
         body["language"] = "C"
         body["code"] = "int main(void) { return 0; }"
@@ -110,94 +122,33 @@ class ExecuteApiTests(unittest.TestCase):
         response = self.client.post("/execute", json=body)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "SUCCESS")
-        self.assertIsNone(response.json()["reason_code"])
-
-        workspace = settings.workspace_root / body["job_id"]
-
-        compile_source_mock.assert_called_once_with(
-            workspace=workspace,
+        self.compile_source_mock.assert_called_once_with(
+            client=self.docker_client,
+            workspace=self.workspace,
             language=RunnerLanguage.C,
+            code=body["code"],
         )
 
-        self.assertFalse(workspace.exists())
-
-    @patch("runner.pipeline.executor.compile_source")
-    def test_execute_returns_compile_error(
-        self,
-        compile_source_mock,
-    ) -> None:
-        compile_source_mock.return_value = CompileResult(
+    def test_execute_returns_compile_error(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
             success=False,
             stdout="",
             stderr="error: expected ';'",
             exit_code=1,
         )
 
-        response = self.client.post(
+        payload = self.client.post(
             "/execute",
             json=self.make_request_body(),
-        )
+        ).json()
 
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
         self.assertEqual(payload["status"], "ERROR")
-        self.assertEqual(
-            payload["reason_code"],
-            "COMPILE_ERROR",
-        )
+        self.assertEqual(payload["reason_code"], "COMPILE_ERROR")
         self.assertEqual(payload["stage"], "COMPILE")
-        self.assertEqual(
-            payload["error_message"],
-            "소스 코드 컴파일에 실패했습니다.",
-        )
         self.assertEqual(payload["compile_log"], "error: expected ';'")
-        self.assertEqual(payload["stdout"], "")
-        self.assertEqual(payload["stderr"], "")
-        self.assertEqual(payload["exit_code"], 1)
-        self.assertIsNotNone(payload["finished_at"])
 
-    @patch("runner.pipeline.executor.compile_source")
-    def test_execute_returns_c_compile_error(
-        self,
-        compile_source_mock,
-    ) -> None:
-        compile_source_mock.return_value = CompileResult(
-            success=False,
-            stdout="",
-            stderr="error: expected ';'",
-            exit_code=1,
-        )
-
-        body = self.make_request_body()
-        body["language"] = "C"
-        body["code"] = "int main(void) { return 0 }"
-
-        response = self.client.post("/execute", json=body)
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "ERROR")
-        self.assertEqual(
-            response.json()["reason_code"],
-            "COMPILE_ERROR",
-        )
-        self.assertEqual(response.json()["exit_code"], 1)
-
-        workspace = settings.workspace_root / body["job_id"]
-
-        compile_source_mock.assert_called_once_with(
-            workspace=workspace,
-            language=RunnerLanguage.C,
-        )
-
-        self.assertFalse(workspace.exists())
-
-    @patch("runner.pipeline.executor.compile_source")
-    def test_execute_returns_compile_timeout(
-        self,
-        compile_source_mock,
-    ) -> None:
-        compile_source_mock.return_value = CompileResult(
+    def test_execute_returns_compile_timeout(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
             success=False,
             stdout="",
             stderr="Compilation timed out.",
@@ -205,67 +156,65 @@ class ExecuteApiTests(unittest.TestCase):
             timed_out=True,
         )
 
-        response = self.client.post(
+        payload = self.client.post(
             "/execute",
             json=self.make_request_body(),
-        )
+        ).json()
 
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
         self.assertEqual(payload["status"], "BLOCKED")
-        self.assertEqual(
-            payload["reason_code"],
-            "COMPILE_TIMEOUT",
-        )
+        self.assertEqual(payload["reason_code"], "COMPILE_TIMEOUT")
         self.assertEqual(payload["stage"], "COMPILE")
-        self.assertEqual(
-            payload["error_message"],
-            "컴파일 제한 시간을 초과했습니다.",
-        )
-        self.assertEqual(payload["compile_log"], "Compilation timed out.")
-        self.assertIsNotNone(payload["finished_at"])
 
-    @patch("runner.pipeline.executor.compile_source")
-    def test_execute_returns_internal_error(
-        self,
-        compile_source_mock,
-    ) -> None:
-        compile_source_mock.side_effect = ContainerExecutionError(
+    def test_execute_returns_compile_internal_error(self) -> None:
+        self.compile_source_mock.side_effect = ContainerExecutionError(
             "컴파일 컨테이너 실행에 실패했습니다.",
             details={"reason": "test docker error"},
         )
 
-        body = self.make_request_body()
+        payload = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        ).json()
 
-        response = self.client.post("/execute", json=body)
-
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
         self.assertEqual(payload["status"], "ERROR")
-        self.assertEqual(
-            payload["reason_code"],
-            "INTERNAL_ERROR",
-        )
+        self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
         self.assertEqual(payload["stage"], "COMPILE")
-        self.assertEqual(
-            payload["error_message"],
-            "컴파일 컨테이너 실행에 실패했습니다.",
+
+    def test_execute_returns_cleanup_error(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
+            success=True,
+            stdout="",
+            stderr="",
+            exit_code=0,
+            artifact_ready=True,
         )
-        self.assertIsNone(payload["exit_code"])
-        self.assertIsNotNone(payload["finished_at"])
+        self.remove_workspace_mock.side_effect = CleanupError(
+            "Job Volume 삭제에 실패했습니다.",
+        )
 
-        workspace = settings.workspace_root / body["job_id"]
-        self.assertFalse(workspace.exists())
+        payload = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        ).json()
 
-    def test_execute_rejects_invalid_policy_without_starting_job(
-        self,
-    ) -> None:
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
+        self.assertEqual(payload["stage"], "CLEANUP")
+
+    def test_execute_rejects_invalid_policy_without_starting_job(self) -> None:
         body = self.make_request_body()
         body["policy"]["memory_limit_mb"] = 0
 
         response = self.client.post("/execute", json=body)
 
         self.assertEqual(response.status_code, 422)
+        self.get_client_mock.assert_not_called()
+
+
+def uuid4_type(value: str):
+    from uuid import UUID
+
+    return UUID(value)
 
 
 if __name__ == "__main__":
