@@ -18,6 +18,7 @@ class RunnerReasonCode(str, Enum):
     NETWORK_BLOCKED = "NETWORK_BLOCKED"
     COMPILE_ERROR = "COMPILE_ERROR"
     COMPILE_TIMEOUT = "COMPILE_TIMEOUT"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
 class RunnerResponse(BaseModel):

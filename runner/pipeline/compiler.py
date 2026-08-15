@@ -14,13 +14,28 @@ from runner.exceptions import (
 
 @dataclass
 class CompileResult:
-    """C++ 컴파일 결과."""
+    """C/C++ 컴파일 결과."""
 
     success: bool
     stdout: str
     stderr: str
     exit_code: int | None
     timed_out: bool = False
+
+
+# 언어별 컴파일 설정
+COMPILER_CONFIG = {
+    "C": {
+        "source_filename": "main.c",
+        "compiler": "gcc",
+        "standard": "-std=c17",
+    },
+    "CPP": {
+        "source_filename": "main.cpp",
+        "compiler": "g++",
+        "standard": "-std=c++17",
+    },
+}
 
 
 def get_docker_client():
@@ -40,19 +55,42 @@ def get_docker_client():
         ) from exc
 
 
-def compile_cpp(workspace: Path) -> CompileResult:
+def compile_source(
+    workspace: Path,
+    language,
+) -> CompileResult:
     """
-    workspace 내부의 main.cpp 파일을 Docker 컨테이너에서 컴파일한다.
+    workspace 내부의 C/C++ 소스 파일을 Docker 컨테이너에서 컴파일한다.
+
+    C   -> main.c   -> gcc -std=c17
+    CPP -> main.cpp -> g++ -std=c++17
 
     성공하면 workspace/main 실행 파일이 생성된다.
     """
 
-    source_path = workspace / "main.cpp"
+    # RunnerLanguage Enum이 들어오더라도 문자열 값으로 변환
+    language_value = getattr(language, "value", language)
+
+    config = COMPILER_CONFIG.get(language_value)
+
+    if config is None:
+        raise WorkspaceError(
+            "지원하지 않는 언어입니다.",
+            details={
+                "language": str(language_value),
+            },
+        )
+
+    source_filename = config["source_filename"]
+    compiler = config["compiler"]
+    standard = config["standard"]
+
+    source_path = workspace / source_filename
 
     # 컴파일할 소스 파일이 실제로 존재하는지 확인
     if not source_path.is_file():
         raise WorkspaceError(
-            "컴파일할 main.cpp 파일이 없습니다.",
+            f"컴파일할 {source_filename} 파일이 없습니다.",
             details={
                 "path": str(source_path),
             },
@@ -66,8 +104,9 @@ def compile_cpp(workspace: Path) -> CompileResult:
         container = client.containers.run(
             image=settings.cpp_image,
             command=[
-                "g++",
-                "/workspace/main.cpp",
+                compiler,
+                standard,
+                f"/workspace/{source_filename}",
                 "-o",
                 "/workspace/main",
             ],
@@ -151,3 +190,12 @@ def compile_cpp(workspace: Path) -> CompileResult:
 
             except docker.errors.DockerException:
                 pass
+
+
+# 기존 코드/테스트와의 호환을 위한 임시 함수
+def compile_cpp(workspace: Path) -> CompileResult:
+    """기존 C++ 전용 호출과의 호환을 위해 유지한다."""
+    return compile_source(
+        workspace=workspace,
+        language="CPP",
+    )
