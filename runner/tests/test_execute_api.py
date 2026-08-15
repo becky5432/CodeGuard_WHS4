@@ -15,6 +15,20 @@ from runner.exceptions import ContainerExecutionError
 
 
 class ExecuteApiTests(unittest.TestCase):
+    RESPONSE_FIELDS = {
+        "job_id",
+        "run_id",
+        "status",
+        "reason_code",
+        "stage",
+        "error_message",
+        "exit_code",
+        "stdout",
+        "stderr",
+        "compile_log",
+        "finished_at",
+    }
+
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.original_workspace_root = settings.workspace_root
@@ -59,8 +73,14 @@ class ExecuteApiTests(unittest.TestCase):
         response = self.client.post("/execute", json=body)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "SUCCESS")
-        self.assertIsNone(response.json()["reason_code"])
+        payload = response.json()
+        self.assertEqual(set(payload), self.RESPONSE_FIELDS)
+        self.assertEqual(payload["status"], "SUCCESS")
+        self.assertIsNone(payload["reason_code"])
+        self.assertIsNone(payload["stage"])
+        self.assertIsNone(payload["error_message"])
+        self.assertEqual(payload["compile_log"], "")
+        self.assertIsNotNone(payload["finished_at"])
 
         workspace = settings.workspace_root / body["job_id"]
 
@@ -120,12 +140,22 @@ class ExecuteApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "ERROR")
+        payload = response.json()
+        self.assertEqual(payload["status"], "ERROR")
         self.assertEqual(
-            response.json()["reason_code"],
+            payload["reason_code"],
             "COMPILE_ERROR",
         )
-        self.assertEqual(response.json()["exit_code"], 1)
+        self.assertEqual(payload["stage"], "COMPILE")
+        self.assertEqual(
+            payload["error_message"],
+            "소스 코드 컴파일에 실패했습니다.",
+        )
+        self.assertEqual(payload["compile_log"], "error: expected ';'")
+        self.assertEqual(payload["stdout"], "")
+        self.assertEqual(payload["stderr"], "")
+        self.assertEqual(payload["exit_code"], 1)
+        self.assertIsNotNone(payload["finished_at"])
 
     @patch("runner.pipeline.executor.compile_source")
     def test_execute_returns_c_compile_error(
@@ -181,11 +211,19 @@ class ExecuteApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "BLOCKED")
+        payload = response.json()
+        self.assertEqual(payload["status"], "BLOCKED")
         self.assertEqual(
-            response.json()["reason_code"],
+            payload["reason_code"],
             "COMPILE_TIMEOUT",
         )
+        self.assertEqual(payload["stage"], "COMPILE")
+        self.assertEqual(
+            payload["error_message"],
+            "컴파일 제한 시간을 초과했습니다.",
+        )
+        self.assertEqual(payload["compile_log"], "Compilation timed out.")
+        self.assertIsNotNone(payload["finished_at"])
 
     @patch("runner.pipeline.executor.compile_source")
     def test_execute_returns_internal_error(
@@ -202,12 +240,19 @@ class ExecuteApiTests(unittest.TestCase):
         response = self.client.post("/execute", json=body)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], "ERROR")
+        payload = response.json()
+        self.assertEqual(payload["status"], "ERROR")
         self.assertEqual(
-            response.json()["reason_code"],
+            payload["reason_code"],
             "INTERNAL_ERROR",
         )
-        self.assertIsNone(response.json()["exit_code"])
+        self.assertEqual(payload["stage"], "COMPILE")
+        self.assertEqual(
+            payload["error_message"],
+            "컴파일 컨테이너 실행에 실패했습니다.",
+        )
+        self.assertIsNone(payload["exit_code"])
+        self.assertIsNotNone(payload["finished_at"])
 
         workspace = settings.workspace_root / body["job_id"]
         self.assertFalse(workspace.exists())

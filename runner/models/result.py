@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
@@ -10,6 +11,13 @@ class RunnerStatus(str, Enum):
     ERROR = "ERROR"
 
 
+class RunnerStage(str, Enum):
+    WORKSPACE = "WORKSPACE"
+    COMPILE = "COMPILE"
+    EXECUTE = "EXECUTE"
+    CLEANUP = "CLEANUP"
+
+
 class RunnerReasonCode(str, Enum):
     TIME_LIMIT = "TIME_LIMIT"
     MEMORY_LIMIT = "MEMORY_LIMIT"
@@ -18,6 +26,7 @@ class RunnerReasonCode(str, Enum):
     NETWORK_BLOCKED = "NETWORK_BLOCKED"
     COMPILE_ERROR = "COMPILE_ERROR"
     COMPILE_TIMEOUT = "COMPILE_TIMEOUT"
+    RUNTIME_ERROR = "RUNTIME_ERROR"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -26,6 +35,10 @@ class RunnerResponse(BaseModel):
     run_id: UUID
     status: RunnerStatus
     reason_code: RunnerReasonCode | None = None
+    stage: RunnerStage | None = None
+    error_message: str | None = None
+    exit_code: int | None = None
     stdout: str = ""
     stderr: str = ""
-    exit_code: int | None = None
+    compile_log: str | None = None
+    finished_at: datetime | None = None
