@@ -80,6 +80,10 @@ def save_result(
     compile_log: str = "",
     stage: str | None = None,
     error_message: str | None = None,
+    wall_time_ms: int | None = None,
+    cpu_time_ms: int | None = None,
+    memory_peak_bytes: int | None = None,
+    process_peak: int | None = None,
 ) -> Execution | None:
     """Runner 결과를 실행 기록에 반영하고 최종 상태로 갱신
 
@@ -99,6 +103,10 @@ def save_result(
     execution.stdout = (stdout or "")[:limit]
     execution.stderr = (stderr or "")[:limit]
     execution.compile_log = (compile_log or "")[:limit]
+    execution.wall_time_ms = wall_time_ms
+    execution.cpu_time_ms = cpu_time_ms
+    execution.memory_peak_bytes = memory_peak_bytes
+    execution.process_peak = process_peak
     execution.finished_at = datetime.now(timezone.utc)
     execution.stage = stage
     execution.error_message = error_message

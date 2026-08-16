@@ -38,4 +38,8 @@ class Execution(Base):
     stage = Column(String)          # WORKSPACE / COMPILE / EXECUTE / CLEANUP
     error_message = Column(Text)
     # TODO: 
-    # wall_time_ms / cpu_time_ms / memory_peak_bytes / process_peak
+    wall_time_ms = Column(Integer)                         # 전체 실행 시간
+    cpu_time_ms = Column(Integer)                          # CPU 사용 시간
+    memory_peak_bytes = Column(Integer)                    # 최대 메모리 (bytes 단위 주의)
+    process_peak = Column(Integer)                         # 최대 프로세스 수
+
