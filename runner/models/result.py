@@ -23,6 +23,13 @@ class RunnerReasonCode(str, Enum):
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
+class ResourceUsage(BaseModel):
+    wall_time_ms: int | None = None
+    cpu_time_ms: int | None = None
+    memory_peak_bytes: int | None = None
+    process_peak: int | None = None
+
+
 class RunnerResponse(BaseModel):
     job_id: UUID
     run_id: UUID
@@ -34,4 +41,5 @@ class RunnerResponse(BaseModel):
     stdout: str = ""
     stderr: str = ""
     compile_log: str | None = None
+    resource_usage: ResourceUsage | None = None
     finished_at: datetime | None = None
