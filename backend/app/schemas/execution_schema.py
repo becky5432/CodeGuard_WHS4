@@ -1,4 +1,5 @@
 from enum import Enum
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -19,7 +20,8 @@ class PolicyLimits(BaseModel):
     timeout_ms: int = Field(gt=0)
     memory_limit_mb: int = Field(gt=0)
     process_limit: int = Field(gt=0)
-    cpu_limit: float = Field(gt=0)
+    cpu_limit: float = Field(gt=0)    # cpu_limit: CPU 코어 수 (1.0 == 1개)
+    # output_limit_bytes: int = Field(gt=0) 출력값 제한은 후순위로 설정
 
 
 class ExecutionStatus(str, Enum):
@@ -28,6 +30,25 @@ class ExecutionStatus(str, Enum):
     SUCCESS = "SUCCESS"
     ERROR = "ERROR"
     BLOCKED = "BLOCKED"
+
+
+class ExecutionStage(str, Enum):
+    WORKSPACE = "WORKSPACE"
+    COMPILE = "COMPILE"
+    EXECUTE = "EXECUTE"
+    CLEANUP = "CLEANUP"
+
+
+class ExecutionReasonCode(str, Enum):
+    TIME_LIMIT = "TIME_LIMIT"
+    MEMORY_LIMIT = "MEMORY_LIMIT"
+    PROCESS_LIMIT = "PROCESS_LIMIT"
+    OUTPUT_LIMIT = "OUTPUT_LIMIT"
+    NETWORK_BLOCKED = "NETWORK_BLOCKED"
+    COMPILE_ERROR = "COMPILE_ERROR"
+    COMPILE_TIMEOUT = "COMPILE_TIMEOUT"
+    RUNTIME_ERROR = "RUNTIME_ERROR"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
 class ExecutionCreateRequest(BaseModel):
@@ -39,17 +60,25 @@ class ExecutionCreateRequest(BaseModel):
 
 
 class ExecutionCreateResponse(BaseModel): # 실행 요청 직후 응답
-    job_id: str
+    job_id: UUID
     status: ExecutionStatus
+    
+    
+class ResourceUsage(BaseModel):
+    wall_time_ms: int | None = None       # 전체 실행 시간
+    cpu_time_ms: int | None = None        # CPU 사용 시간 (누적)
+    memory_peak_bytes: int | None = None  # 최대 메모리 (bytes 단위 주의)
+    process_peak: int | None = None       # 최대 프로세스 수
 
 
 class ExecutionResultResponse(BaseModel): # 상태/결과 조회
-    job_id: str
+    # 필요한 필드 생기면 추가하기
+    job_id: UUID
     status: ExecutionStatus
     exit_code: int | None = None
     stdout: str | None = None
     stderr: str | None = None
-    reason_code: str | None = None
-    stage: str | None = None
+    reason_code: ExecutionReasonCode | None = None
+    stage: ExecutionStage | None = None
     error_message: str | None = None
-    # 필요한 필드 생기면 추가하기
+    resource_usage: ResourceUsage | None = None

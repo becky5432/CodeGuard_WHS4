@@ -38,6 +38,13 @@ class RunnerReasonCode(str, Enum):
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
+class ResourceUsage(BaseModel):
+    wall_time_ms: int | None = None       # 전체 실행 시간
+    cpu_time_ms: int | None = None        # CPU 사용 시간 (누적)
+    memory_peak_bytes: int | None = None  # 최대 메모리 (bytes 단위 주의)
+    process_peak: int | None = None       # 최대 프로세스 수
+
+
 class RunnerRequest(BaseModel):
     job_id: UUID
     language: RunnerLanguage
@@ -60,4 +67,4 @@ class RunnerResponse(BaseModel):
     stderr: str
     compile_log: str | None = None
     finished_at: datetime | None = None
-    
+    resource_usage: ResourceUsage | None = None
