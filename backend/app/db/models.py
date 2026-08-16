@@ -15,7 +15,7 @@ class Execution(Base):
     stdin = Column(Text, default="", nullable=False)
     status = Column(String, nullable=False, default="PENDING")
     created_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
@@ -35,6 +35,7 @@ class Execution(Base):
     stderr = Column(Text, default="")
     compile_log = Column(Text, default="")   
     finished_at = Column(DateTime)
-
+    stage = Column(String)          # WORKSPACE / COMPILE / EXECUTE / CLEANUP
+    error_message = Column(Text)
     # TODO: 
     # wall_time_ms / cpu_time_ms / memory_peak_bytes / process_peak
