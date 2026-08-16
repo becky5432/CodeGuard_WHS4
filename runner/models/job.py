@@ -10,9 +10,17 @@ class RunnerLanguage(str, Enum):
     CPP = "CPP"
 
 
+class PolicyLimits(BaseModel):
+    timeout_ms: int = Field(gt=0)
+    memory_limit_mb: int = Field(gt=0)
+    process_limit: int = Field(gt=0)
+    cpu_limit: float = Field(gt=0)
+
+
 class RunnerRequest(BaseModel):
     job_id: UUID
     language: RunnerLanguage
     code: str = Field(min_length=1)
     stdin: str = ""
+    policy: PolicyLimits
     created_at: datetime
