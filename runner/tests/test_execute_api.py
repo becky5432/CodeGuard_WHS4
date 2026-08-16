@@ -27,6 +27,7 @@ class ExecuteApiTests(unittest.TestCase):
         "stdout",
         "stderr",
         "compile_log",
+    "resource_usage",
         "finished_at",
     }
 
@@ -174,6 +175,7 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertIsNotNone(payload["finished_at"])
         self.assertEqual(payload["stdout"], "Hello\n")
         self.assertEqual(payload["compile_log"], "compiler note")
+        self.assertIsNone(payload["resource_usage"])
 
         self.create_workspace_mock.assert_called_once_with(
             self.docker_client,
