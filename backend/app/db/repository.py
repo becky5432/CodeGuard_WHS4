@@ -78,6 +78,8 @@ def save_result(
     stdout: str = "",
     stderr: str = "",
     compile_log: str = "",
+    stage: str | None = None,
+    error_message: str | None = None,
 ) -> Execution | None:
     """Runner 결과를 실행 기록에 반영하고 최종 상태로 갱신
 
@@ -98,7 +100,10 @@ def save_result(
     execution.stderr = (stderr or "")[:limit]
     execution.compile_log = (compile_log or "")[:limit]
     execution.finished_at = datetime.now(timezone.utc)
+    execution.stage = stage
+    execution.error_message = error_message
 
+    
     db.commit()
     db.refresh(execution)
     return execution
