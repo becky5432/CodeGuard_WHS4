@@ -5,6 +5,7 @@ from fastapi import (
     HTTPException,
 )
 from sqlalchemy.orm import Session
+from uuid import UUID
 
 from app.clients.runner_client import MockRunnerClient
 from app.db.database import get_db
@@ -56,11 +57,11 @@ def create_execution(
     response_model=ExecutionResultResponse,
 )
 def get_execution(
-    job_id: str,
+    job_id: UUID,
     db: Session = Depends(get_db),
 ):
     result = execution_service.get_execution(
-        job_id=job_id,
+        job_id=str(job_id),
         db=db,
     )
 

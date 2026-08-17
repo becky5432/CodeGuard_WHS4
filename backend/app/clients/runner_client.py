@@ -1,7 +1,12 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from app.schemas.runner_schema import RunnerRequest, RunnerResponse, RunnerStatus
+from app.schemas.runner_schema import (
+    ResourceUsage,
+    RunnerRequest,
+    RunnerResponse,
+    RunnerStatus,
+)
 
 
 # TODO: Runner /execute 엔드포인트 및 요청·응답 규격 확정 후 HttpRunnerClient 구현
@@ -19,4 +24,10 @@ class MockRunnerClient:
             stderr="",
             compile_log="",
             finished_at=datetime.now(timezone.utc),
+            resource_usage=ResourceUsage(
+                wall_time_ms=850,              # 테스트용 가짜 값
+                cpu_time_ms=120,
+                memory_peak_bytes=44040192,
+                process_peak=2,
+            ),
         )
