@@ -9,6 +9,7 @@ from runner.models.result import (
     RunnerResponse,
     RunnerStage,
     RunnerStatus,
+    StageError,
 )
 from runner.pipeline.classifier import classify_execution
 from runner.pipeline.compiler import (
@@ -60,18 +61,26 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
     response = None
     compile_log = ""
     current_stage = RunnerStage.WORKSPACE
+
+    # cleanup 단계에서 발생한 오류를 별도로 기록
     cleanup_failed = False
+    cleanup_errors: list[StageError] = []
 
     try:
         client = get_docker_client()
         workspace = create_workspace(client, job.job_id)
 
+        # -------------------------
+        # Compile
+        # -------------------------
         current_stage = RunnerStage.COMPILE
+
         compile_container = create_compile_container(
             client=client,
             workspace=workspace,
             language=job.language,
         )
+
         compile_result = compile_source(
             container=compile_container,
             workspace=workspace,
@@ -79,11 +88,13 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             code=job.code,
             stdin=job.stdin,
         )
+
         compile_log = _compile_log(
             compile_result.stdout,
             compile_result.stderr,
         )
 
+        # exit code는 성공인데 실행 파일이 생성되지 않은 경우
         if compile_result.exit_code == 0 and not compile_result.artifact_ready:
             response = RunnerResponse(
                 job_id=job.job_id,
@@ -95,6 +106,8 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 exit_code=compile_result.exit_code,
                 compile_log=compile_log,
             )
+
+        # 컴파일 실패
         elif not compile_result.success:
             response = RunnerResponse(
                 job_id=job.job_id,
@@ -106,8 +119,13 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 exit_code=compile_result.exit_code,
                 compile_log=compile_log,
             )
+
+        # -------------------------
+        # Execute
+        # -------------------------
         else:
             current_stage = RunnerStage.EXECUTE
+
             execution_container = create_execution_container(
                 client=client,
                 workspace=workspace,
@@ -115,12 +133,15 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 job_id=job.job_id,
                 run_id=run_id,
             )
+
             execution_result = execute_program(
                 container=execution_container,
                 job_id=job.job_id,
                 run_id=run_id,
             )
+
             classification = classify_execution(execution_result)
+
             response = RunnerResponse(
                 job_id=job.job_id,
                 run_id=run_id,
@@ -134,12 +155,14 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 compile_log=compile_log,
             )
 
+    # Runner에서 정의한 예외
     except RunnerError as exc:
         error_stage = (
             RunnerStage.WORKSPACE
             if isinstance(exc, WorkspaceError)
             else current_stage
         )
+
         logger.error(
             "event=runner_internal_error "
             "job_id=%s run_id=%s code=%s message=%s details=%s",
@@ -149,6 +172,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             exc.message,
             exc.details,
         )
+
         response = RunnerResponse(
             job_id=job.job_id,
             run_id=run_id,
@@ -158,6 +182,8 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             error_message=exc.message,
             compile_log=compile_log,
         )
+
+    # 예상하지 못한 예외
     except Exception:
         logger.exception(
             "event=runner_unexpected_error job_id=%s run_id=%s stage=%s",
@@ -165,6 +191,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             run_id,
             current_stage.value,
         )
+
         response = RunnerResponse(
             job_id=job.job_id,
             run_id=run_id,
@@ -174,7 +201,12 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             error_message="Runner 내부 오류가 발생했습니다.",
             compile_log=compile_log,
         )
+
+    # -------------------------
+    # Cleanup
+    # -------------------------
     finally:
+        # Execution Container 삭제
         if not _remove_container(
             execution_container,
             "execute",
@@ -183,6 +215,14 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
         ):
             cleanup_failed = True
 
+            cleanup_errors.append(
+                StageError(
+                    stage=RunnerStage.CLEANUP,
+                    message="Execution Container 정리에 실패했습니다.",
+                )
+            )
+
+        # Compile Container 삭제
         if not _remove_container(
             compile_container,
             "compile",
@@ -191,11 +231,28 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
         ):
             cleanup_failed = True
 
+            cleanup_errors.append(
+                StageError(
+                    stage=RunnerStage.CLEANUP,
+                    message="Compile Container 정리에 실패했습니다.",
+                )
+            )
+
+        # Job Volume 삭제
         if client is not None and workspace is not None:
             try:
                 remove_workspace(client, workspace)
+
             except RunnerError as exc:
                 cleanup_failed = True
+
+                cleanup_errors.append(
+                    StageError(
+                        stage=RunnerStage.CLEANUP,
+                        message=exc.message,
+                    )
+                )
+
                 logger.error(
                     "event=volume_cleanup_error "
                     "job_id=%s run_id=%s code=%s message=%s details=%s",
@@ -206,17 +263,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                     exc.details,
                 )
 
-        if cleanup_failed:
-            response = RunnerResponse(
-                job_id=job.job_id,
-                run_id=run_id,
-                status=RunnerStatus.ERROR,
-                reason_code=RunnerReasonCode.INTERNAL_ERROR,
-                stage=RunnerStage.CLEANUP,
-                error_message="실행 환경 정리에 실패했습니다.",
-                compile_log="",
-            )
-
+    # 예외적인 상황에서 response가 생성되지 않은 경우
     if response is None:
         response = RunnerResponse(
             job_id=job.job_id,
@@ -228,7 +275,13 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             compile_log="",
         )
 
+    # cleanup 실패는 기존 실행 결과를 덮어쓰지 않고
+    # stage_summary.errors에만 기록
+    if cleanup_failed:
+        response.stage_summary.errors.extend(cleanup_errors)
+
     response.finished_at = datetime.now(timezone.utc)
+
     return response
 
 

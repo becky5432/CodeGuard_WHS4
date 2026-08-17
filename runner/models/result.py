@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RunnerStatus(str, Enum):
@@ -21,6 +21,15 @@ class RunnerReasonCode(str, Enum):
     COMPILE_ERROR = "COMPILE_ERROR"
     RUNTIME_ERROR = "RUNTIME_ERROR"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+
+
+class StageError(BaseModel):
+    stage: RunnerStage
+    message: str
+
+
+class StageSummary(BaseModel):
+    errors: list[StageError] = Field(default_factory=list)
 
 
 class ResourceUsage(BaseModel):
@@ -43,3 +52,4 @@ class RunnerResponse(BaseModel):
     compile_log: str | None = None
     resource_usage: ResourceUsage | None = None
     finished_at: datetime | None = None
+    stage_summary: StageSummary = Field(default_factory=StageSummary)
