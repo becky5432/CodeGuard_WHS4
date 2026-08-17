@@ -1,4 +1,3 @@
-
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -111,7 +110,6 @@ def save_result(
     execution.stage = stage
     execution.error_message = error_message
 
-    
     db.commit()
     db.refresh(execution)
     return execution

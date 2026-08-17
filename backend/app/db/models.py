@@ -33,11 +33,11 @@ class Execution(Base):
     exit_code = Column(Integer)
     stdout = Column(Text, default="")
     stderr = Column(Text, default="")
-    compile_log = Column(Text, default="")   
-    finished_at = Column(DateTime)
+    compile_log = Column(Text, default="")
     stage = Column(String)          # WORKSPACE / COMPILE / EXECUTE / CLEANUP
-    error_message = Column(Text)
-    # TODO: 
+    error_message = Column(Text)    
+    finished_at = Column(DateTime)
+    
     wall_time_ms = Column(Integer)                         # 전체 실행 시간
     cpu_time_ms = Column(Integer)                          # CPU 사용 시간
     memory_peak_bytes = Column(Integer)                    # 최대 메모리 (bytes 단위 주의)
