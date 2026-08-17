@@ -21,6 +21,11 @@ class CompileResult:
     exit_code: int | None
     artifact_ready: bool = False
 
+COMMON_COMPILE_FLAGS = [
+    "-Wall",
+    "-Wextra",
+    "-O0",
+]
 
 COMPILER_CONFIG = {
     "C": {
@@ -89,6 +94,7 @@ def create_compile_container(
             command=[
                 config["compiler"],
                 config["standard"],
+                *COMMON_COMPILE_FLAGS,
                 f"/workspace/{source_filename}",
                 "-o",
                 "/workspace/main",
