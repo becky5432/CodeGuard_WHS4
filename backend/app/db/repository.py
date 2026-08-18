@@ -77,7 +77,7 @@ def save_result(
     stdout: str = "",
     stderr: str = "",
     compile_log: str = "",
-    stage: str | None = None,
+    stage_summary: str | None = None,  # ← 추가 (JSON 문자열)
     error_message: str | None = None,
     wall_time_ms: int | None = None,
     cpu_time_ms: int | None = None,
@@ -107,7 +107,7 @@ def save_result(
     execution.memory_peak_bytes = memory_peak_bytes
     execution.process_peak = process_peak
     execution.finished_at = datetime.now(timezone.utc)
-    execution.stage = stage
+    execution.stage_summary = stage_summary
     execution.error_message = error_message
 
     db.commit()

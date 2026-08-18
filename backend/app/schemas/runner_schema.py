@@ -69,6 +69,17 @@ class RunnerRequest(BaseModel):
     created_at: datetime   # 백엔드가 실행 요청을 접수해서 생성한 시각
 
 
+class StageError(BaseModel):
+    reason_code: RunnerReasonCode
+    message: str
+
+
+class StageSummary(BaseModel):
+    succeeded: list[RunnerStage] = []
+    failed: list[RunnerStage] = []
+    skipped: list[RunnerStage] = []
+    errors: list[StageError] = []
+
 class RunnerResponse(BaseModel):
     job_id: UUID
     run_id: UUID
@@ -80,7 +91,5 @@ class RunnerResponse(BaseModel):
     stderr: str = ""
     compile_log: str | None = None
     resource_usage: ResourceUsage | None = None
-
-    # Runner는 최종 응답에서 반드시 반환
-    stage_summary: StageSummary
-    finished_at: datetime
+    stage_summary: StageSummary          # 필수 (단일 stage는 제거)
+    finished_at: datetime                # 필수로 변경
