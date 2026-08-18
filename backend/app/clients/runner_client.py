@@ -6,6 +6,8 @@ from app.schemas.runner_schema import (
     RunnerRequest,
     RunnerResponse,
     RunnerStatus,
+    RunnerStage,
+    StageSummary,
 )
 
 
@@ -17,7 +19,14 @@ class MockRunnerClient:
             run_id=uuid4(),
             status=RunnerStatus.SUCCESS,
             reason_code=None,
-            stage=None,
+            stage_summary=StageSummary(
+                succeeded=[
+                    RunnerStage.WORKSPACE,
+                    RunnerStage.COMPILE,
+                    RunnerStage.EXECUTE,
+                    RunnerStage.CLEANUP,
+                ]
+            ),
             error_message=None,
             exit_code=0,
             stdout="Hello from MockRunner!\n",

@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.execution_schema import PolicyLimits
 # execution_schema.py에 있는 PolicyLimits를 그대로 전달
@@ -43,6 +43,21 @@ class ResourceUsage(BaseModel):
     cpu_time_ms: int | None = None        # CPU 사용 시간 (누적)
     memory_peak_bytes: int | None = None  # 최대 메모리 (bytes 단위 주의)
     process_peak: int | None = None       # 최대 프로세스 수
+
+
+class StageError(BaseModel):
+    reason_code: RunnerReasonCode
+    message: str
+
+
+class StageSummary(BaseModel):
+    succeeded: list[RunnerStage] = Field(default_factory=list)
+    failed: list[RunnerStage] = Field(default_factory=list)
+    skipped: list[RunnerStage] = Field(default_factory=list)
+    errors: dict[
+        RunnerStage,
+        list[StageError],
+    ] = Field(default_factory=dict)
 
 
 class RunnerRequest(BaseModel):
