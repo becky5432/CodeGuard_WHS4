@@ -34,7 +34,7 @@ class Execution(Base):
     stdout = Column(Text, default="")
     stderr = Column(Text, default="")
     compile_log = Column(Text, default="")
-    stage = Column(String)          # WORKSPACE / COMPILE / EXECUTE / CLEANUP
+    stage_summary = Column(Text)   # ← JSON 문자열로 저장
     error_message = Column(Text)    
     finished_at = Column(DateTime)
     
