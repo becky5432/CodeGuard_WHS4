@@ -13,18 +13,52 @@ from app.schemas.execution_schema import (
     ExecutionStage,
     ExecutionStatus,
     ResourceUsage,
+    StageError,
+    StageSummary as ExecutionStageSummary,
 )
 from app.schemas.runner_schema import (
     RunnerLanguage,
     RunnerRequest,
     RunnerResponse,
     RunnerStatus,
+    StageSummary as RunnerStageSummary,
 )
 
 
 class ExecutionService:
     def __init__(self, runner_client: MockRunnerClient):
         self.runner_client = runner_client
+            
+    def convert_stage_summary(
+        self,
+        summary: RunnerStageSummary,
+    ) -> ExecutionStageSummary:
+        return ExecutionStageSummary(
+            succeeded=[
+                ExecutionStage(stage.value)
+                for stage in summary.succeeded
+            ],
+            failed=[
+                ExecutionStage(stage.value)
+                for stage in summary.failed
+            ],
+            skipped=[
+                ExecutionStage(stage.value)
+                for stage in summary.skipped
+            ],
+            errors={
+                ExecutionStage(stage.value): [
+                    StageError(
+                        reason_code=ExecutionReasonCode(
+                            error.reason_code.value
+                        ),
+                        message=error.message,
+                    )
+                    for error in errors
+                ]
+                for stage, errors in summary.errors.items()
+            },
+        )
 
     # 프론트의 실행 요청 접수
     def submit(
@@ -64,6 +98,7 @@ class ExecutionService:
         )
 
         return response, runner_request
+       
 
     # submit() 이후 백그라운드에서 실행
     def process_execution(
@@ -102,6 +137,10 @@ class ExecutionService:
                 )
 
             usage = runner_response.resource_usage
+            
+            stage_summary = self.convert_stage_summary(
+                runner_response.stage_summary
+            )
 
             repository.save_result(
                 db=db,
@@ -112,17 +151,14 @@ class ExecutionService:
                     if runner_response.reason_code
                     else None
                 ),
-                stage=(
-                    runner_response.stage.value
-                    if runner_response.stage
-                    else None
-                ),
                 error_message=runner_response.error_message,
                 run_id=str(runner_response.run_id),
                 exit_code=runner_response.exit_code,
                 stdout=runner_response.stdout,
                 stderr=runner_response.stderr,
                 compile_log=runner_response.compile_log,
+                stage_summary=stage_summary.model_dump(mode="json"),
+                finished_at=runner_response.finished_at,
                 wall_time_ms=(
                     usage.wall_time_ms
                     if usage
@@ -194,6 +230,14 @@ class ExecutionService:
             if any(value is not None for value in metric_values)
             else None
         )
+        
+        stage_summary = (
+            ExecutionStageSummary.model_validate(
+                execution.stage_summary
+            )
+            if execution.stage_summary
+            else None
+        )
 
         return ExecutionResultResponse(
             job_id=UUID(execution.job_id),
@@ -203,14 +247,12 @@ class ExecutionService:
                 if execution.reason_code
                 else None
             ),
-            stage=(
-                ExecutionStage(execution.stage)
-                if execution.stage
-                else None
-            ),
             error_message=execution.error_message,
             exit_code=execution.exit_code,
             stdout=execution.stdout,
             stderr=execution.stderr,
+            compile_log=execution.compile_log,
             resource_usage=resource_usage,
+            stage_summary=stage_summary,
+            finished_at=execution.finished_at,
         )
