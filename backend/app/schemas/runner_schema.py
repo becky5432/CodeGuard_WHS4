@@ -69,17 +69,6 @@ class RunnerRequest(BaseModel):
     created_at: datetime   # 백엔드가 실행 요청을 접수해서 생성한 시각
 
 
-class StageError(BaseModel):
-    reason_code: RunnerReasonCode
-    message: str
-
-
-class StageSummary(BaseModel):
-    succeeded: list[RunnerStage] = []
-    failed: list[RunnerStage] = []
-    skipped: list[RunnerStage] = []
-    errors: list[StageError] = []
-
 class RunnerResponse(BaseModel):
     job_id: UUID
     run_id: UUID
