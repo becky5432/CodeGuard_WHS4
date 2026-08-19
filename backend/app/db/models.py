@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-
+from sqlalchemy import JSON
 from sqlalchemy import Column, DateTime, Float, Integer, String, Text
 
 from app.db.database import Base
@@ -34,9 +34,9 @@ class Execution(Base):
     stdout = Column(Text, default="")
     stderr = Column(Text, default="")
     compile_log = Column(Text, default="")
-    stage_summary = Column(Text)   # ← JSON 문자열로 저장
+    stage_summary = Column(JSON)  
     error_message = Column(Text)    
-    finished_at = Column(DateTime)
+    finished_at = Column(DateTime(timezone=True))
     
     wall_time_ms = Column(Integer)                         # 전체 실행 시간
     cpu_time_ms = Column(Integer)                          # CPU 사용 시간
