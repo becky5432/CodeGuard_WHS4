@@ -83,6 +83,7 @@ def save_result(
     cpu_time_ms: int | None = None,
     memory_peak_bytes: int | None = None,
     process_peak: int | None = None,
+    finished_at: datetime | None = None,
 ) -> Execution | None:
     """Runner 결과를 실행 기록에 반영하고 최종 상태로 갱신
 
@@ -106,7 +107,7 @@ def save_result(
     execution.cpu_time_ms = cpu_time_ms
     execution.memory_peak_bytes = memory_peak_bytes
     execution.process_peak = process_peak
-    execution.finished_at = datetime.now(timezone.utc)
+    execution.finished_at = finished_at or datetime.now(timezone.utc)
     execution.stage_summary = stage_summary
     execution.error_message = error_message
 
