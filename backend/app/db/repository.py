@@ -77,7 +77,7 @@ def save_result(
     stdout: str = "",
     stderr: str = "",
     compile_log: str = "",
-    stage_summary: str | None = None,  # ← 추가 (JSON 문자열)
+    stage_summary: dict | None = None,  # ← 추가 (JSON 문자열)
     error_message: str | None = None,
     wall_time_ms: int | None = None,
     cpu_time_ms: int | None = None,
