@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 class RunnerStatus(str, Enum):
     SUCCESS = "SUCCESS"
+    BLOCKED = "BLOCKED"
     ERROR = "ERROR"
 
 
@@ -18,18 +19,27 @@ class RunnerStage(str, Enum):
 
 
 class RunnerReasonCode(str, Enum):
+    TIME_LIMIT = "TIME_LIMIT"
+    MEMORY_LIMIT = "MEMORY_LIMIT"
+    PROCESS_LIMIT = "PROCESS_LIMIT"
+    OUTPUT_LIMIT = "OUTPUT_LIMIT"
+    NETWORK_BLOCKED = "NETWORK_BLOCKED"
     COMPILE_ERROR = "COMPILE_ERROR"
+    COMPILE_TIMEOUT = "COMPILE_TIMEOUT"
     RUNTIME_ERROR = "RUNTIME_ERROR"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
 class StageError(BaseModel):
-    stage: RunnerStage
+    reason_code: RunnerReasonCode
     message: str
 
 
 class StageSummary(BaseModel):
-    errors: list[StageError] = Field(default_factory=list)
+    succeeded: list[RunnerStage] = Field(default_factory=list)
+    failed: list[RunnerStage] = Field(default_factory=list)
+    skipped: list[RunnerStage] = Field(default_factory=list)
+    errors: dict[RunnerStage, list[StageError]] = Field(default_factory=dict)
 
 
 class ResourceUsage(BaseModel):
@@ -44,7 +54,6 @@ class RunnerResponse(BaseModel):
     run_id: UUID
     status: RunnerStatus
     reason_code: RunnerReasonCode | None = None
-    stage: RunnerStage | None = None
     error_message: str | None = None
     exit_code: int | None = None
     stdout: str = ""
