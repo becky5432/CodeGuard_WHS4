@@ -2,7 +2,6 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
-from app.clients.runner_client import MockRunnerClient
 from app.db import repository
 from app.db.database import SessionLocal
 from app.schemas.execution_schema import (
@@ -26,39 +25,17 @@ from app.schemas.runner_schema import (
 
 
 class ExecutionService:
-    def __init__(self, runner_client: MockRunnerClient):
+    def __init__(self, runner_client):
         self.runner_client = runner_client
-            
+
     def convert_stage_summary(
         self,
         summary: RunnerStageSummary,
     ) -> ExecutionStageSummary:
-        return ExecutionStageSummary(
-            succeeded=[
-                ExecutionStage(stage.value)
-                for stage in summary.succeeded
-            ],
-            failed=[
-                ExecutionStage(stage.value)
-                for stage in summary.failed
-            ],
-            skipped=[
-                ExecutionStage(stage.value)
-                for stage in summary.skipped
-            ],
-            errors={
-                ExecutionStage(stage.value): [
-                    StageError(
-                        reason_code=ExecutionReasonCode(
-                            error.reason_code.value
-                        ),
-                        message=error.message,
-                    )
-                    for error in errors
-                ]
-                for stage, errors in summary.errors.items()
-            },
+        return ExecutionStageSummary.model_validate(
+            summary.model_dump(mode="json")
         )
+         
 
     # 프론트의 실행 요청 접수
     def submit(
@@ -98,7 +75,6 @@ class ExecutionService:
         )
 
         return response, runner_request
-       
 
     # submit() 이후 백그라운드에서 실행
     def process_execution(
@@ -118,9 +94,23 @@ class ExecutionService:
             if execution is None:
                 return
 
-            runner_response: RunnerResponse = (
-                self.runner_client.execute(runner_request)
-            )
+            try:
+                runner_response: RunnerResponse = (
+                    self.runner_client.execute(runner_request)
+                )
+            except Exception:
+                db.rollback()
+
+                repository.save_result(
+                    db=db,
+                    job_id=job_id,
+                    status=ExecutionStatus.ERROR.value,
+                    reason_code=ExecutionReasonCode.INTERNAL_ERROR.value,
+                    error_message="Runner 서버로부터 실행 결과를 "
+                            "받지 못했습니다.", 
+                )
+
+                return
 
             status_mapping = {
                 RunnerStatus.SUCCESS: ExecutionStatus.SUCCESS,
@@ -137,7 +127,7 @@ class ExecutionService:
                 )
 
             usage = runner_response.resource_usage
-            
+
             stage_summary = self.convert_stage_summary(
                 runner_response.stage_summary
             )
@@ -181,6 +171,7 @@ class ExecutionService:
                 ),
             )
 
+        # DB 오류, 응답 변환 오류 등 Backend 내부 오류
         except Exception:
             db.rollback()
 
@@ -190,6 +181,7 @@ class ExecutionService:
                     job_id=job_id,
                     status=ExecutionStatus.ERROR.value,
                     reason_code=ExecutionReasonCode.INTERNAL_ERROR.value,
+                    error_message="Backend 내부 오류가 발생했습니다.",
                 )
             except Exception:
                 db.rollback()
@@ -230,7 +222,7 @@ class ExecutionService:
             if any(value is not None for value in metric_values)
             else None
         )
-        
+
         stage_summary = (
             ExecutionStageSummary.model_validate(
                 execution.stage_summary
