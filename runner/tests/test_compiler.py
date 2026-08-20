@@ -45,6 +45,9 @@ class CompilerTests(unittest.TestCase):
             command=[
                 "g++",
                 "-std=c++17",
+                "-Wall",
+                "-Wextra",
+                "-O0",
                 "/workspace/main.cpp",
                 "-o",
                 "/workspace/main",
@@ -72,7 +75,8 @@ class CompilerTests(unittest.TestCase):
 
         command = self.client.containers.create.call_args.kwargs["command"]
         self.assertEqual(command[0:2], ["gcc", "-std=c17"])
-        self.assertEqual(command[2], "/workspace/main.c")
+        self.assertEqual(command[2:5], ["-Wall", "-Wextra", "-O0"])
+        self.assertEqual(command[5], "/workspace/main.c")
 
     def test_compile_source_uploads_and_runs_without_removing_container(self) -> None:
         result = compile_source(

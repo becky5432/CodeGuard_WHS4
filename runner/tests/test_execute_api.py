@@ -21,14 +21,14 @@ class ExecuteApiTests(unittest.TestCase):
         "run_id",
         "status",
         "reason_code",
-        "stage",
         "error_message",
         "exit_code",
         "stdout",
         "stderr",
         "compile_log",
-    "resource_usage",
+        "resource_usage",
         "finished_at",
+        "stage_summary",
     }
 
     def setUp(self) -> None:
@@ -121,12 +121,18 @@ class ExecuteApiTests(unittest.TestCase):
             },
         )
 
-        self.assertNotIn("BLOCKED", RunnerStatus.__members__)
+        self.assertIn("BLOCKED", RunnerStatus.__members__)
 
         self.assertEqual(
             set(RunnerReasonCode.__members__),
             {
+                "TIME_LIMIT",
+                "MEMORY_LIMIT",
+                "PROCESS_LIMIT",
+                "OUTPUT_LIMIT",
+                "NETWORK_BLOCKED",
                 "COMPILE_ERROR",
+                "COMPILE_TIMEOUT",
                 "RUNTIME_ERROR",
                 "INTERNAL_ERROR",
             },
@@ -171,11 +177,19 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertEqual(set(payload), self.RESPONSE_FIELDS)
         self.assertEqual(payload["status"], "SUCCESS")
         self.assertIsNone(payload["reason_code"])
-        self.assertIsNone(payload["stage"])
         self.assertIsNotNone(payload["finished_at"])
         self.assertEqual(payload["stdout"], "Hello\n")
         self.assertEqual(payload["compile_log"], "compiler note")
         self.assertIsNone(payload["resource_usage"])
+        self.assertEqual(
+            payload["stage_summary"],
+            {
+                "succeeded": ["WORKSPACE", "COMPILE", "EXECUTE", "CLEANUP"],
+                "failed": [],
+                "skipped": [],
+                "errors": {},
+            },
+        )
 
         self.create_workspace_mock.assert_called_once_with(
             self.docker_client,
@@ -275,9 +289,14 @@ class ExecuteApiTests(unittest.TestCase):
             payload["reason_code"],
             "COMPILE_ERROR",
         )
+        self.assertEqual(payload["stage_summary"]["failed"], ["COMPILE"])
+        self.assertEqual(payload["stage_summary"]["skipped"], ["EXECUTE"])
         self.assertEqual(
-            payload["stage"],
-            "COMPILE",
+            payload["stage_summary"]["errors"]["COMPILE"][0],
+            {
+                "reason_code": "COMPILE_ERROR",
+                "message": "소스 코드 컴파일에 실패했습니다.",
+            },
         )
         self.assertEqual(
             payload["compile_log"],
@@ -311,10 +330,8 @@ class ExecuteApiTests(unittest.TestCase):
             payload["reason_code"],
             "INTERNAL_ERROR",
         )
-        self.assertEqual(
-            payload["stage"],
-            "COMPILE",
-        )
+        self.assertEqual(payload["stage_summary"]["failed"], ["COMPILE"])
+        self.assertEqual(payload["stage_summary"]["skipped"], ["EXECUTE"])
 
         self.create_execution_container_mock.assert_not_called()
         self.execute_program_mock.assert_not_called()
@@ -348,10 +365,7 @@ class ExecuteApiTests(unittest.TestCase):
             "INTERNAL_ERROR",
         )
 
-        self.assertEqual(
-            payload["stage"],
-            "EXECUTE",
-        )
+        self.assertEqual(payload["stage_summary"]["failed"], ["EXECUTE"])
 
         self.assertEqual(
             payload["compile_log"],
@@ -394,19 +408,15 @@ class ExecuteApiTests(unittest.TestCase):
             json=self.make_request_body(),
         ).json()
 
+        self.assertEqual(payload["status"], "SUCCESS")
+        self.assertIsNone(payload["reason_code"])
+        self.assertEqual(payload["stage_summary"]["failed"], ["CLEANUP"])
         self.assertEqual(
-            payload["status"],
-            "ERROR",
-        )
-
-        self.assertEqual(
-            payload["reason_code"],
-            "INTERNAL_ERROR",
-        )
-
-        self.assertEqual(
-            payload["stage"],
-            "CLEANUP",
+            payload["stage_summary"]["errors"]["CLEANUP"][0],
+            {
+                "reason_code": "INTERNAL_ERROR",
+                "message": "Job Volume 삭제에 실패했습니다.",
+            },
         )
 
     def test_cleanup_continues_in_reverse_creation_order_after_failure(
@@ -455,10 +465,8 @@ class ExecuteApiTests(unittest.TestCase):
             json=self.make_request_body(),
         ).json()
 
-        self.assertEqual(
-            payload["stage"],
-            "CLEANUP",
-        )
+        self.assertEqual(payload["status"], "SUCCESS")
+        self.assertEqual(payload["stage_summary"]["failed"], ["CLEANUP"])
 
         self.compile_container.remove.assert_called_once_with(
             force=True,
@@ -508,10 +516,7 @@ class ExecuteApiTests(unittest.TestCase):
             "RUNTIME_ERROR",
         )
 
-        self.assertEqual(
-            payload["stage"],
-            "EXECUTE",
-        )
+        self.assertEqual(payload["stage_summary"]["failed"], ["EXECUTE"])
 
         self.assertEqual(
             payload["stdout"],

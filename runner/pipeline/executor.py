@@ -10,6 +10,7 @@ from runner.models.result import (
     RunnerStage,
     RunnerStatus,
     StageError,
+    StageSummary,
 )
 from runner.pipeline.classifier import classify_execution
 from runner.pipeline.compiler import (
@@ -25,6 +26,34 @@ from runner.pipeline.workspace import create_workspace, remove_workspace
 
 
 logger = logging.getLogger("runner")
+
+
+def _append_stage(stages: list[RunnerStage], stage: RunnerStage) -> None:
+    if stage not in stages:
+        stages.append(stage)
+
+
+def _mark_succeeded(summary: StageSummary, stage: RunnerStage) -> None:
+    _append_stage(summary.succeeded, stage)
+
+
+def _mark_skipped(summary: StageSummary, stage: RunnerStage) -> None:
+    _append_stage(summary.skipped, stage)
+
+
+def _mark_failed(
+    summary: StageSummary,
+    stage: RunnerStage,
+    reason_code: RunnerReasonCode,
+    message: str,
+) -> None:
+    _append_stage(summary.failed, stage)
+    summary.errors.setdefault(stage, []).append(
+        StageError(
+            reason_code=reason_code,
+            message=message,
+        )
+    )
 
 
 def _compile_log(stdout: str, stderr: str) -> str:
@@ -61,14 +90,13 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
     response = None
     compile_log = ""
     current_stage = RunnerStage.WORKSPACE
-
-    # cleanup 단계에서 발생한 오류를 별도로 기록
+    stage_summary = StageSummary()
     cleanup_failed = False
-    cleanup_errors: list[StageError] = []
 
     try:
         client = get_docker_client()
         workspace = create_workspace(client, job.job_id)
+        _mark_succeeded(stage_summary, RunnerStage.WORKSPACE)
 
         # -------------------------
         # Compile
@@ -96,26 +124,40 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
 
         # exit code는 성공인데 실행 파일이 생성되지 않은 경우
         if compile_result.exit_code == 0 and not compile_result.artifact_ready:
+            message = "컴파일 실행 파일을 확인하지 못했습니다."
+            _mark_failed(
+                stage_summary,
+                RunnerStage.COMPILE,
+                RunnerReasonCode.INTERNAL_ERROR,
+                message,
+            )
+            _mark_skipped(stage_summary, RunnerStage.EXECUTE)
             response = RunnerResponse(
                 job_id=job.job_id,
                 run_id=run_id,
                 status=RunnerStatus.ERROR,
                 reason_code=RunnerReasonCode.INTERNAL_ERROR,
-                stage=RunnerStage.COMPILE,
-                error_message="컴파일 실행 파일을 확인하지 못했습니다.",
+                error_message=message,
                 exit_code=compile_result.exit_code,
                 compile_log=compile_log,
             )
 
         # 컴파일 실패
         elif not compile_result.success:
+            message = "소스 코드 컴파일에 실패했습니다."
+            _mark_failed(
+                stage_summary,
+                RunnerStage.COMPILE,
+                RunnerReasonCode.COMPILE_ERROR,
+                message,
+            )
+            _mark_skipped(stage_summary, RunnerStage.EXECUTE)
             response = RunnerResponse(
                 job_id=job.job_id,
                 run_id=run_id,
                 status=RunnerStatus.ERROR,
                 reason_code=RunnerReasonCode.COMPILE_ERROR,
-                stage=RunnerStage.COMPILE,
-                error_message="소스 코드 컴파일에 실패했습니다.",
+                error_message=message,
                 exit_code=compile_result.exit_code,
                 compile_log=compile_log,
             )
@@ -124,6 +166,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
         # Execute
         # -------------------------
         else:
+            _mark_succeeded(stage_summary, RunnerStage.COMPILE)
             current_stage = RunnerStage.EXECUTE
 
             execution_container = create_execution_container(
@@ -142,12 +185,29 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
 
             classification = classify_execution(execution_result)
 
+            if classification.status == RunnerStatus.SUCCESS:
+                _mark_succeeded(stage_summary, RunnerStage.EXECUTE)
+            else:
+                reason_code = (
+                    classification.reason_code
+                    or RunnerReasonCode.INTERNAL_ERROR
+                )
+                message = (
+                    classification.error_message
+                    or "프로그램 실행 단계에서 오류가 발생했습니다."
+                )
+                _mark_failed(
+                    stage_summary,
+                    RunnerStage.EXECUTE,
+                    reason_code,
+                    message,
+                )
+
             response = RunnerResponse(
                 job_id=job.job_id,
                 run_id=run_id,
                 status=classification.status,
                 reason_code=classification.reason_code,
-                stage=classification.stage,
                 error_message=classification.error_message,
                 exit_code=execution_result.exit_code,
                 stdout=execution_result.stdout,
@@ -173,12 +233,22 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             exc.details,
         )
 
+        _mark_failed(
+            stage_summary,
+            error_stage,
+            RunnerReasonCode.INTERNAL_ERROR,
+            exc.message,
+        )
+        if error_stage == RunnerStage.WORKSPACE:
+            _mark_skipped(stage_summary, RunnerStage.COMPILE)
+        if error_stage in {RunnerStage.WORKSPACE, RunnerStage.COMPILE}:
+            _mark_skipped(stage_summary, RunnerStage.EXECUTE)
+
         response = RunnerResponse(
             job_id=job.job_id,
             run_id=run_id,
             status=RunnerStatus.ERROR,
             reason_code=RunnerReasonCode.INTERNAL_ERROR,
-            stage=error_stage,
             error_message=exc.message,
             compile_log=compile_log,
         )
@@ -192,13 +262,24 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             current_stage.value,
         )
 
+        message = "Runner 내부 오류가 발생했습니다."
+        _mark_failed(
+            stage_summary,
+            current_stage,
+            RunnerReasonCode.INTERNAL_ERROR,
+            message,
+        )
+        if current_stage == RunnerStage.WORKSPACE:
+            _mark_skipped(stage_summary, RunnerStage.COMPILE)
+        if current_stage in {RunnerStage.WORKSPACE, RunnerStage.COMPILE}:
+            _mark_skipped(stage_summary, RunnerStage.EXECUTE)
+
         response = RunnerResponse(
             job_id=job.job_id,
             run_id=run_id,
             status=RunnerStatus.ERROR,
             reason_code=RunnerReasonCode.INTERNAL_ERROR,
-            stage=current_stage,
-            error_message="Runner 내부 오류가 발생했습니다.",
+            error_message=message,
             compile_log=compile_log,
         )
 
@@ -214,12 +295,11 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             run_id,
         ):
             cleanup_failed = True
-
-            cleanup_errors.append(
-                StageError(
-                    stage=RunnerStage.CLEANUP,
-                    message="Execution Container 정리에 실패했습니다.",
-                )
+            _mark_failed(
+                stage_summary,
+                RunnerStage.CLEANUP,
+                RunnerReasonCode.INTERNAL_ERROR,
+                "Execution Container 정리에 실패했습니다.",
             )
 
         # Compile Container 삭제
@@ -230,12 +310,11 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             run_id,
         ):
             cleanup_failed = True
-
-            cleanup_errors.append(
-                StageError(
-                    stage=RunnerStage.CLEANUP,
-                    message="Compile Container 정리에 실패했습니다.",
-                )
+            _mark_failed(
+                stage_summary,
+                RunnerStage.CLEANUP,
+                RunnerReasonCode.INTERNAL_ERROR,
+                "Compile Container 정리에 실패했습니다.",
             )
 
         # Job Volume 삭제
@@ -245,12 +324,11 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
 
             except RunnerError as exc:
                 cleanup_failed = True
-
-                cleanup_errors.append(
-                    StageError(
-                        stage=RunnerStage.CLEANUP,
-                        message=exc.message,
-                    )
+                _mark_failed(
+                    stage_summary,
+                    RunnerStage.CLEANUP,
+                    RunnerReasonCode.INTERNAL_ERROR,
+                    exc.message,
                 )
 
                 logger.error(
@@ -263,23 +341,28 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                     exc.details,
                 )
 
+        if not cleanup_failed:
+            _mark_succeeded(stage_summary, RunnerStage.CLEANUP)
+
     # 예외적인 상황에서 response가 생성되지 않은 경우
     if response is None:
+        message = "Runner 결과를 생성하지 못했습니다."
+        _mark_failed(
+            stage_summary,
+            current_stage,
+            RunnerReasonCode.INTERNAL_ERROR,
+            message,
+        )
         response = RunnerResponse(
             job_id=job.job_id,
             run_id=run_id,
             status=RunnerStatus.ERROR,
             reason_code=RunnerReasonCode.INTERNAL_ERROR,
-            stage=current_stage,
-            error_message="Runner 결과를 생성하지 못했습니다.",
+            error_message=message,
             compile_log="",
         )
 
-    # cleanup 실패는 기존 실행 결과를 덮어쓰지 않고
-    # stage_summary.errors에만 기록
-    if cleanup_failed:
-        response.stage_summary.errors.extend(cleanup_errors)
-
+    response.stage_summary = stage_summary
     response.finished_at = datetime.now(timezone.utc)
 
     return response
