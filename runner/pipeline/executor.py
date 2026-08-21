@@ -7,6 +7,7 @@ from runner.models.job import RunnerRequest
 from runner.models.result import (
     RunnerReasonCode,
     RunnerResponse,
+    ResourceUsage,
     RunnerStage,
     RunnerStatus,
     StageError,
@@ -175,12 +176,15 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 stdin=job.stdin,
                 job_id=job.job_id,
                 run_id=run_id,
+                memory_limit_mb=job.policy.memory_limit_mb,
             )
 
             execution_result = execute_program(
                 container=execution_container,
                 job_id=job.job_id,
                 run_id=run_id,
+                timeout_ms=job.policy.timeout_ms,
+                output_limit_bytes=job.policy.output_limit_bytes,
             )
 
             classification = classify_execution(execution_result)
@@ -213,6 +217,12 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 stdout=execution_result.stdout,
                 stderr=execution_result.stderr,
                 compile_log=compile_log,
+                resource_usage=ResourceUsage(
+                    wall_time_ms=execution_result.wall_time_ms,
+                    memory_peak_bytes=(
+                        execution_result.memory_peak_bytes
+                    ),
+                ),
             )
 
     # Runner에서 정의한 예외
