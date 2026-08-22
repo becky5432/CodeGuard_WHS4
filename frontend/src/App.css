@@ -114,14 +114,92 @@ button {
   background-color: var(--white);
 }
 
-.code-editor-area {
-  flex: 1;
-  padding: 16px;
+.editor-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
-.code-editor-area .code-editor {
+.editor-fullscreen-button {
+  display: grid;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--gray-300);
+  border-radius: 8px;
+  color: var(--gray-700);
+  background-color: var(--white);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.editor-fullscreen-button:hover {
+  border-color: var(--blue-600);
+  color: var(--blue-600);
+  background-color: var(--blue-100);
+}
+
+.code-editor-area {
+  flex: 1;
+  min-height: 420px;
+  overflow: hidden;
+  background-color: var(--white);
+}
+
+.code-editor {
   height: 100%;
-  min-height: 360px;
+  min-height: 420px;
+}
+
+.code-editor .cm-editor {
+  height: 100%;
+  min-height: 420px;
+  color: var(--gray-950);
+  background-color: var(--white);
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 14px;
+}
+
+.code-editor .cm-scroller {
+  overflow: auto;
+  line-height: 1.75;
+}
+
+.code-editor .cm-content {
+  padding: 18px 0;
+  caret-color: var(--gray-950);
+}
+
+.code-editor .cm-line {
+  padding: 0 16px;
+}
+
+.code-editor .cm-gutters {
+  min-width: 46px;
+  border-right: 1px solid var(--gray-200);
+  color: var(--gray-500);
+  background-color: var(--white);
+}
+
+.code-editor .cm-lineNumbers .cm-gutterElement {
+  min-width: 40px;
+  padding: 0 10px 0 6px;
+}
+
+.code-editor .cm-activeLine,
+.code-editor .cm-activeLineGutter {
+  background-color: #f5f7ff;
+}
+
+.code-editor .cm-focused {
+  outline: none;
+}
+
+.code-editor .cm-selectionBackground,
+.code-editor .cm-content ::selection {
+  background-color: #dce5ff !important;
 }
 
 .io-section {
@@ -223,6 +301,25 @@ button {
   .resource-placeholder {
     grid-template-columns: 1fr;
   }
+}
+
+.editor-section-fullscreen {
+  position: fixed;
+  z-index: 1000;
+  inset: 16px;
+  min-height: 0;
+  box-shadow: 0 20px 60px rgba(16, 26, 51, 0.24);
+}
+
+.editor-section-fullscreen .code-editor-area,
+.editor-section-fullscreen .code-editor,
+.editor-section-fullscreen .cm-editor {
+  min-height: 0;
+  height: 100%;
+}
+
+.editor-section-fullscreen .io-section {
+  display: none;
 }
 
 /* 왼쪽 사이드바 */
@@ -385,28 +482,17 @@ button {
   font-weight: 700;
 }
 
-.code-editor,
 .standard-input {
   display: block;
   width: 100%;
   border: 1px solid var(--gray-300);
   border-radius: 8px;
   outline: none;
-  color: #d8e2f2;
-  background-color: #121b2e;
+  color: var(--gray-950);
+  background-color: var(--white);
   transition:
     border-color 0.2s ease,
     box-shadow 0.2s ease;
-}
-
-.code-editor {
-  min-height: 420px;
-  padding: 18px;
-  font-family: Consolas, Monaco, "Courier New", monospace;
-  font-size: 14px;
-  line-height: 1.7;
-  resize: vertical;
-  tab-size: 4;
 }
 
 .standard-input {
@@ -419,8 +505,7 @@ button {
   resize: vertical;
 }
 
-.code-editor:focus,
-.standard-input:focus,
+.code-input:focus,
 .language-selector select:focus {
   border-color: var(--blue-600);
   box-shadow: 0 0 0 3px rgba(65, 105, 225, 0.14);

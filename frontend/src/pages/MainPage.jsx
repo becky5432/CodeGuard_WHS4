@@ -1,4 +1,6 @@
 import { useRef, useState } from "react";
+import CodeMirror from "@uiw/react-codemirror";
+import { cpp } from "@codemirror/lang-cpp";
 import StateMessage from "../components/StateMessage";
 import { ApiError, createExecution, getExecution } from "../api/executionApi";
 
@@ -51,6 +53,7 @@ function MainPage() {
   const [code, setCode] = useState(DEFAULT_CODE);
   const [standardInput, setStandardInput] = useState("");
   const [executionState, setExecutionState] = useState("idle");
+  const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [executionResult, setExecutionResult] = useState(null);
   const [message, setMessage] = useState(
@@ -178,33 +181,75 @@ function MainPage() {
   return (
     <form className="main-workspace" onSubmit={handleSubmit}>
       <div className="main-workspace-grid">
-        <section className="workspace-panel editor-section">
+        <section
+          className={`workspace-panel editor-section${
+            isEditorFullscreen ? " editor-section-fullscreen" : ""
+          }`}
+        >
           <div className="workspace-panel-header">
             <h2>코드 편집기</h2>
 
-            <div className="language-selector">
-              <label htmlFor="language">언어</label>
+            <div className="editor-header-controls">
+              <div className="language-selector">
+                <label htmlFor="language">언어</label>
 
-              <select
-                id="language"
-                value={language}
-                onChange={(event) => setLanguage(event.target.value)}
+                <select
+                  id="language"
+                  value={language}
+                  onChange={(event) => setLanguage(event.target.value)}
+                >
+                  <option value="C">C</option>
+                  <option value="CPP">C++</option>
+                </select>
+              </div>
+
+              <button
+                className="editor-fullscreen-button"
+                type="button"
+                aria-label={
+                  isEditorFullscreen
+                    ? "코드 편집기 전체 화면 종료"
+                    : "코드 편집기 전체 화면"
+                }
+                title={isEditorFullscreen ? "전체 화면 종료" : "전체 화면"}
+                onClick={() => setIsEditorFullscreen((current) => !current)}
               >
-                <option value="C">C</option>
-                <option value="CPP">C++</option>
-              </select>
+                {isEditorFullscreen ? "×" : "⛶"}
+              </button>
             </div>
           </div>
 
           <div className="code-editor-area">
-            <textarea
-              id="source-code"
+            <CodeMirror
               className="code-editor"
               value={code}
-              onChange={(event) => setCode(event.target.value)}
-              spellCheck="false"
-              rows="18"
-              placeholder="실행할 C/C++ 코드를 입력하세요."
+              height="100%"
+              minHeight="360px"
+              extensions={[cpp()]}
+              onChange={(value) => setCode(value)}
+              basicSetup={{
+                lineNumbers: true,
+                highlightActiveLineGutter: true,
+                highlightActiveLine: true,
+                foldGutter: false,
+                dropCursor: true,
+                allowMultipleSelections: true,
+                indentOnInput: true,
+                bracketMatching: true,
+                closeBrackets: true,
+                autocompletion: true,
+                rectangularSelection: true,
+                crosshairCursor: false,
+                highlightSelectionMatches: true,
+                closeBracketsKeymap: true,
+                defaultKeymap: true,
+                searchKeymap: true,
+                historyKeymap: true,
+                foldKeymap: false,
+                completionKeymap: true,
+                lintKeymap: true,
+              }}
+              theme="light"
             />
           </div>
 
