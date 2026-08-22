@@ -11,15 +11,21 @@ int main() {
     return 0;
 }`;
 
-const DEFAULT_POLICY = {
-  timeout_ms: 2000,
-  memory_limit_mb: 128,
-  pids_limit: 10,
-  cpu_limit: 1.0,
-};
+const DISPLAYED_EXECUTION_STAGES = [
+  {
+    key: "COMPILE",
+    label: "compile",
+  },
+  {
+    key: "EXECUTE",
+    label: "execute",
+  },
+  {
+    key: "CLEANUP",
+    label: "cleanup",
+  },
+];
 
-// 실행 설정 UI 확인을 위한 임시 프로필 값
-// 실제 요청값은 API 연결 단계에서 최신 명세에 맞춰 교체
 const POLICY_PROFILE_PREVIEW = {
   basic: {
     label: "기본",
@@ -51,13 +57,61 @@ const POLICY_PROFILE_PREVIEW = {
 };
 
 const POLLING_INTERVAL_MS = 1000;
+
 const wait = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
+
 function calculateUsagePercentage(value, limit) {
   if (!value || !limit) {
     return 0;
   }
 
   return Math.min(Math.round((value / limit) * 100), 100);
+}
+
+function getExecutionStageStatus(stage, stageSummary) {
+  if (!stageSummary) {
+    return "waiting";
+  }
+
+  if (stageSummary.succeeded?.includes(stage)) {
+    return "success";
+  }
+
+  if (stageSummary.failed?.includes(stage)) {
+    return "failed";
+  }
+
+  if (stageSummary.skipped?.includes(stage)) {
+    return "skipped";
+  }
+
+  return "waiting";
+}
+
+function getExecutionStageLabel(status) {
+  const labels = {
+    waiting: "- 대기",
+    success: "✓ 성공",
+    failed: "× 실패",
+    skipped: "— 건너뜀",
+  };
+
+  return labels[status];
+}
+
+function getPreferredOutputTab(result) {
+  if (
+    result.reason_code === "COMPILE_ERROR" ||
+    result.reason_code === "COMPILE_TIMEOUT"
+  ) {
+    return "compileLog";
+  }
+
+  if (result.stderr) {
+    return "stderr";
+  }
+
+  return "stdout";
 }
 
 function getExecutionErrorMessage(error, phase) {
@@ -87,6 +141,7 @@ function getExecutionErrorMessage(error, phase) {
 }
 
 function MainPage() {
+  // 입력 및 화면 상태
   const [language, setLanguage] = useState("CPP");
   const [code, setCode] = useState(DEFAULT_CODE);
   const [standardInput, setStandardInput] = useState("");
@@ -95,12 +150,16 @@ function MainPage() {
   const [jobId, setJobId] = useState(null);
   const [executionResult, setExecutionResult] = useState(null);
   const [message, setMessage] = useState(
-    "코드를 실행하면 이곳에서 결과 를 확인할 수 있습니다.",
+    "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
   );
   const [activeIoTab, setActiveIoTab] = useState("stdin");
   const [activeOutputTab, setActiveOutputTab] = useState("stdout");
   const [selectedPolicyProfile, setSelectedPolicyProfile] = useState("basic");
+
+  // 실행 중복 요청 방지
   const executionLockRef = useRef(false);
+
+  // 선택값 및 실행 상태 파생 데이터
   const isExecuting = executionState === "loading";
   const selectedPolicy = POLICY_PROFILE_PREVIEW[selectedPolicyProfile];
 
@@ -121,19 +180,17 @@ function MainPage() {
   const resultOutput = executionResult
     ? outputByTab[activeOutputTab] || "출력 내용이 없습니다."
     : "아직 실행 결과가 없습니다.";
-  const executionReasonCode = executionResult?.reason_code ?? "-";
 
+  const executionReasonCode = executionResult?.reason_code ?? "-";
   const executionExitCode = executionResult?.exit_code ?? "-";
 
+  // 실제 Runner 응답 기반 자원 사용량
   const resourceUsage = executionResult?.resource_usage;
-
   const wallTimeMs = resourceUsage?.wall_time_ms ?? 0;
-
   const memoryPeakMb = resourceUsage?.memory_peak_bytes
     ? resourceUsage.memory_peak_bytes / 1024 / 1024
     : 0;
-
-  const processPeak = resourceUsage?.process_peak ?? 0;
+  const pidsPeak = resourceUsage?.pids_peak ?? 0;
 
   const wallTimePercentage = calculateUsagePercentage(
     wallTimeMs,
@@ -145,11 +202,26 @@ function MainPage() {
     selectedPolicy.memoryLimitMb,
   );
 
-  const processPercentage = calculateUsagePercentage(
-    processPeak,
+  const pidsPercentage = calculateUsagePercentage(
+    pidsPeak,
     selectedPolicy.processLimit,
   );
 
+  // WORKSPACE를 제외하고 화면에 표시할 실행 단계
+  const executionStages = DISPLAYED_EXECUTION_STAGES.map((stage) => {
+    const status = getExecutionStageStatus(
+      stage.key,
+      executionResult?.stage_summary,
+    );
+
+    return {
+      ...stage,
+      status,
+      statusLabel: getExecutionStageLabel(status),
+    };
+  });
+
+  // 실행 결과 폴링
   const pollExecution = async (currentJobId) => {
     while (true) {
       await wait(POLLING_INTERVAL_MS);
@@ -170,24 +242,34 @@ function MainPage() {
       if (result.status === "SUCCESS") {
         setExecutionState("success");
         setMessage("코드 실행이 완료되었습니다.");
+        setActiveIoTab("output");
+        setActiveOutputTab(getPreferredOutputTab(result));
         return;
       }
 
       if (result.status === "ERROR") {
         setExecutionState("error");
         setMessage(result.error_message ?? "코드 실행 중 오류가 발생했습니다.");
+        setActiveIoTab("output");
+        setActiveOutputTab(getPreferredOutputTab(result));
         return;
       }
 
       if (result.status === "BLOCKED") {
         setExecutionState("blocked");
-        setMessage("정책에 의해 코드 실행이 차단되었습니다.");
+        setMessage(
+          result.error_message ?? "정책에 의해 코드 실행이 차단되었습니다.",
+        );
+        setActiveIoTab("output");
+        setActiveOutputTab(getPreferredOutputTab(result));
         return;
       }
 
       throw new Error(`알 수 없는 실행 상태입니다. (${result.status})`);
     }
   };
+
+  // 실행 요청
   const handleSubmit = async (event) => {
     event.preventDefault();
 
@@ -211,9 +293,9 @@ function MainPage() {
       language,
       code,
       stdin: standardInput,
-      policy_profile: "basic",
-      policy: DEFAULT_POLICY,
+      policy_profile: selectedPolicyProfile,
     };
+
     let errorPhase = "request";
 
     try {
@@ -239,6 +321,7 @@ function MainPage() {
   return (
     <form className="main-workspace" onSubmit={handleSubmit}>
       <div className="main-workspace-grid">
+        {/* 코드 편집기 및 I/O 영역 */}
         <section
           className={`workspace-panel editor-section${
             isEditorFullscreen ? " editor-section-fullscreen" : ""
@@ -420,6 +503,7 @@ function MainPage() {
           </div>
         </section>
 
+        {/* 실행 설정 영역 */}
         <section className="workspace-panel settings-section">
           <div className="workspace-panel-header">
             <h2>실행 설정</h2>
@@ -491,6 +575,7 @@ function MainPage() {
           </button>
         </section>
 
+        {/* 실행 결과 영역 */}
         <section className="workspace-panel result-section">
           <div className="workspace-panel-header">
             <h2>실행 결과</h2>
@@ -529,30 +614,26 @@ function MainPage() {
             <div className="execution-stage-section">
               <h3>단계별 결과</h3>
 
-              <div className="execution-stage-row">
-                <span>compile</span>
-                <span className="execution-stage-waiting">- 대기</span>
-              </div>
+              {executionStages.map((stage) => (
+                <div className="execution-stage-row" key={stage.key}>
+                  <span>{stage.label}</span>
 
-              <div className="execution-stage-row">
-                <span>execute</span>
-                <span className="execution-stage-waiting">- 대기</span>
-              </div>
-
-              <div className="execution-stage-row">
-                <span>cleanup</span>
-                <span className="execution-stage-waiting">- 대기</span>
-              </div>
+                  <span className={`execution-stage-${stage.status}`}>
+                    {stage.statusLabel}
+                  </span>
+                </div>
+              ))}
             </div>
 
             <div className="execution-total-time">
               <strong>총 소요 시간</strong>
-              <span>{wallTimeMs.toLocaleString()} ms</span>{" "}
+              <span>{wallTimeMs.toLocaleString()} ms</span>
             </div>
           </div>
         </section>
       </div>
 
+      {/* 자원 사용량 요약 영역 */}
       <section className="workspace-panel resource-section">
         <div className="resource-section-header">
           <h2>자원 사용량 요약</h2>
@@ -646,18 +727,18 @@ function MainPage() {
                 <span>Process Peak</span>
 
                 <strong>
-                  {processPeak.toLocaleString()}
+                  {pidsPeak.toLocaleString()}
                   <small> 개</small>
                 </strong>
               </div>
 
-              {processPercentage >= 100 && (
+              {pidsPercentage >= 100 && (
                 <span className="resource-limit-badge">제한 초과</span>
               )}
             </div>
 
             <p>
-              제한 {selectedPolicy.processLimit}개 ({processPercentage}%)
+              제한 {selectedPolicy.processLimit}개 ({pidsPercentage}%)
             </p>
 
             <div
@@ -666,9 +747,9 @@ function MainPage() {
               aria-label="프로세스 사용률"
               aria-valuemin="0"
               aria-valuemax="100"
-              aria-valuenow={processPercentage}
+              aria-valuenow={pidsPercentage}
             >
-              <span style={{ width: `${processPercentage}%` }} />
+              <span style={{ width: `${pidsPercentage}%` }} />
             </div>
           </article>
         </div>
