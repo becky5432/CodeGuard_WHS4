@@ -7,7 +7,8 @@ from fastapi import (
 from sqlalchemy.orm import Session
 from uuid import UUID
 
-from app.clients.runner_client import MockRunnerClient
+from app.clients.runner_client import HttpRunnerClient
+from app.config import settings
 from app.db.database import get_db
 from app.schemas.execution_schema import (
     ExecutionCreateRequest,
@@ -23,7 +24,10 @@ router = APIRouter(
 )
 
 execution_service = ExecutionService(
-    runner_client=MockRunnerClient(),
+    runner_client=HttpRunnerClient(
+        base_url=settings.RUNNER_URL,
+        timeout=settings.RUNNER_TIMEOUT_SECONDS,
+    ),
 )
 
 

@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.execution_schema import PolicyLimits
 # execution_schema.py에 있는 PolicyLimits를 그대로 전달
@@ -45,6 +45,21 @@ class ResourceUsage(BaseModel):
     process_peak: int | None = None       # 최대 프로세스 수
 
 
+class StageError(BaseModel):
+    reason_code: RunnerReasonCode
+    message: str
+
+
+class StageSummary(BaseModel):
+    succeeded: list[RunnerStage] = Field(default_factory=list)
+    failed: list[RunnerStage] = Field(default_factory=list)
+    skipped: list[RunnerStage] = Field(default_factory=list)
+    errors: dict[
+        RunnerStage,
+        list[StageError],
+    ] = Field(default_factory=dict)
+
+
 class RunnerRequest(BaseModel):
     job_id: UUID
     language: RunnerLanguage
@@ -58,13 +73,12 @@ class RunnerResponse(BaseModel):
     job_id: UUID
     run_id: UUID
     status: RunnerStatus
-    reason_code: RunnerReasonCode | None = None  # 이 실행을 최종적으로 왜 BLOCKED/ERROR 처리했는가
-    # violations: list[RunnerReasonCode]  # 여러 위반 사유 제시가 필요해지면 추가
-    stage: RunnerStage | None = None
+    reason_code: RunnerReasonCode | None = None
     error_message: str | None = None
     exit_code: int | None = None
-    stdout: str
-    stderr: str
+    stdout: str = ""
+    stderr: str = ""
     compile_log: str | None = None
-    finished_at: datetime | None = None
     resource_usage: ResourceUsage | None = None
+    stage_summary: StageSummary          # 필수 (단일 stage는 제거)
+    finished_at: datetime                # 필수로 변경

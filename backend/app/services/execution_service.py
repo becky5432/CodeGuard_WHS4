@@ -2,7 +2,6 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
-from app.clients.runner_client import MockRunnerClient
 from app.db import repository
 from app.db.database import SessionLocal
 from app.schemas.execution_schema import (
@@ -13,18 +12,30 @@ from app.schemas.execution_schema import (
     ExecutionStage,
     ExecutionStatus,
     ResourceUsage,
+    StageError,
+    StageSummary as ExecutionStageSummary,
 )
 from app.schemas.runner_schema import (
     RunnerLanguage,
     RunnerRequest,
     RunnerResponse,
     RunnerStatus,
+    StageSummary as RunnerStageSummary,
 )
 
 
 class ExecutionService:
-    def __init__(self, runner_client: MockRunnerClient):
+    def __init__(self, runner_client):
         self.runner_client = runner_client
+
+    def convert_stage_summary(
+        self,
+        summary: RunnerStageSummary,
+    ) -> ExecutionStageSummary:
+        return ExecutionStageSummary.model_validate(
+            summary.model_dump(mode="json")
+        )
+         
 
     # 프론트의 실행 요청 접수
     def submit(
@@ -83,9 +94,23 @@ class ExecutionService:
             if execution is None:
                 return
 
-            runner_response: RunnerResponse = (
-                self.runner_client.execute(runner_request)
-            )
+            try:
+                runner_response: RunnerResponse = (
+                    self.runner_client.execute(runner_request)
+                )
+            except Exception:
+                db.rollback()
+
+                repository.save_result(
+                    db=db,
+                    job_id=job_id,
+                    status=ExecutionStatus.ERROR.value,
+                    reason_code=ExecutionReasonCode.INTERNAL_ERROR.value,
+                    error_message="Runner 서버로부터 실행 결과를 "
+                            "받지 못했습니다.", 
+                )
+
+                return
 
             status_mapping = {
                 RunnerStatus.SUCCESS: ExecutionStatus.SUCCESS,
@@ -103,6 +128,10 @@ class ExecutionService:
 
             usage = runner_response.resource_usage
 
+            stage_summary = self.convert_stage_summary(
+                runner_response.stage_summary
+            )
+
             repository.save_result(
                 db=db,
                 job_id=job_id,
@@ -112,17 +141,14 @@ class ExecutionService:
                     if runner_response.reason_code
                     else None
                 ),
-                stage=(
-                    runner_response.stage.value
-                    if runner_response.stage
-                    else None
-                ),
                 error_message=runner_response.error_message,
                 run_id=str(runner_response.run_id),
                 exit_code=runner_response.exit_code,
                 stdout=runner_response.stdout,
                 stderr=runner_response.stderr,
                 compile_log=runner_response.compile_log,
+                stage_summary=stage_summary.model_dump(mode="json"),
+                finished_at=runner_response.finished_at,
                 wall_time_ms=(
                     usage.wall_time_ms
                     if usage
@@ -145,6 +171,7 @@ class ExecutionService:
                 ),
             )
 
+        # DB 오류, 응답 변환 오류 등 Backend 내부 오류
         except Exception:
             db.rollback()
 
@@ -154,6 +181,7 @@ class ExecutionService:
                     job_id=job_id,
                     status=ExecutionStatus.ERROR.value,
                     reason_code=ExecutionReasonCode.INTERNAL_ERROR.value,
+                    error_message="Backend 내부 오류가 발생했습니다.",
                 )
             except Exception:
                 db.rollback()
@@ -195,6 +223,14 @@ class ExecutionService:
             else None
         )
 
+        stage_summary = (
+            ExecutionStageSummary.model_validate(
+                execution.stage_summary
+            )
+            if execution.stage_summary
+            else None
+        )
+
         return ExecutionResultResponse(
             job_id=UUID(execution.job_id),
             status=ExecutionStatus(execution.status),
@@ -203,14 +239,12 @@ class ExecutionService:
                 if execution.reason_code
                 else None
             ),
-            stage=(
-                ExecutionStage(execution.stage)
-                if execution.stage
-                else None
-            ),
             error_message=execution.error_message,
             exit_code=execution.exit_code,
             stdout=execution.stdout,
             stderr=execution.stderr,
+            compile_log=execution.compile_log,
             resource_usage=resource_usage,
+            stage_summary=stage_summary,
+            finished_at=execution.finished_at,
         )

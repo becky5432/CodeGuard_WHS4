@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
@@ -51,6 +52,28 @@ class ExecutionReasonCode(str, Enum):
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
+class ResourceUsage(BaseModel):
+    wall_time_ms: int | None = None       # 전체 실행 시간
+    cpu_time_ms: int | None = None        # CPU 사용 시간 (누적)
+    memory_peak_bytes: int | None = None  # 최대 메모리 (bytes 단위 주의)
+    process_peak: int | None = None       # 최대 프로세스 수
+    
+    
+class StageError(BaseModel):
+    reason_code: ExecutionReasonCode
+    message: str
+
+
+class StageSummary(BaseModel):
+    succeeded: list[ExecutionStage] = Field(default_factory=list)
+    failed: list[ExecutionStage] = Field(default_factory=list)
+    skipped: list[ExecutionStage] = Field(default_factory=list)
+    errors: dict[
+        ExecutionStage,
+        list[StageError],
+    ] = Field(default_factory=dict)
+
+
 class ExecutionCreateRequest(BaseModel):
     language: Language
     code: str = Field(min_length=1)
@@ -62,23 +85,18 @@ class ExecutionCreateRequest(BaseModel):
 class ExecutionCreateResponse(BaseModel): # 실행 요청 직후 응답
     job_id: UUID
     status: ExecutionStatus
-    
-    
-class ResourceUsage(BaseModel):
-    wall_time_ms: int | None = None       # 전체 실행 시간
-    cpu_time_ms: int | None = None        # CPU 사용 시간 (누적)
-    memory_peak_bytes: int | None = None  # 최대 메모리 (bytes 단위 주의)
-    process_peak: int | None = None       # 최대 프로세스 수
 
 
 class ExecutionResultResponse(BaseModel): # 상태/결과 조회
-    # 필요한 필드 생기면 추가하기
+    # 필요한 부분은 나중에 추가하기
     job_id: UUID
     status: ExecutionStatus
+    reason_code: ExecutionReasonCode | None = None
+    error_message: str | None = None
     exit_code: int | None = None
     stdout: str | None = None
     stderr: str | None = None
-    reason_code: ExecutionReasonCode | None = None
-    stage: ExecutionStage | None = None
-    error_message: str | None = None
+    compile_log: str | None = None
     resource_usage: ResourceUsage | None = None
+    stage_summary: StageSummary | None = None
+    finished_at: datetime | None = None

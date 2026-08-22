@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from runner.policies import EXECUTION_OUTPUT_LIMIT_BYTES
+
 
 class RunnerLanguage(str, Enum):
     C = "C"
@@ -15,6 +17,10 @@ class PolicyLimits(BaseModel):
     memory_limit_mb: int = Field(gt=0)
     process_limit: int = Field(gt=0)
     cpu_limit: float = Field(gt=0)
+    output_limit_bytes: int = Field(
+        default=EXECUTION_OUTPUT_LIMIT_BYTES,
+        gt=0,
+    )
 
 
 class RunnerRequest(BaseModel):
