@@ -176,57 +176,52 @@ function MainPage() {
   };
 
   return (
-    <>
-      <section className="page-introduction">
-        <div>
-          <h2>코드 실행</h2>
-          <p>실행할 코드와 입력값을 작성한 후 실행 버튼을 눌러주세요.</p>
-        </div>
-      </section>
+    <form className="main-workspace" onSubmit={handleSubmit}>
+      <div className="main-workspace-grid">
+        <section className="workspace-panel editor-section">
+          <div className="workspace-panel-header">
+            <h2>코드 편집기</h2>
 
-      <form className="execution-layout" onSubmit={handleSubmit}>
-        <section className="editor-card">
-          <div className="card-header">
-            <label htmlFor="language">실행 언어</label>
+            <div className="language-selector">
+              <label htmlFor="language">언어</label>
 
-            <select
-              id="language"
-              value={language}
-              onChange={(event) => setLanguage(event.target.value)}
-            >
-              <option value="C">C</option>
-              <option value="CPP">C++</option>
-            </select>
+              <select
+                id="language"
+                value={language}
+                onChange={(event) => setLanguage(event.target.value)}
+              >
+                <option value="C">C</option>
+                <option value="CPP">C++</option>
+              </select>
+            </div>
           </div>
 
-          <label className="field-label" htmlFor="source-code">
-            소스 코드
-          </label>
+          <div className="code-editor-area">
+            <textarea
+              id="source-code"
+              className="code-editor"
+              value={code}
+              onChange={(event) => setCode(event.target.value)}
+              spellCheck="false"
+              rows="18"
+              placeholder="실행할 C/C++ 코드를 입력하세요."
+            />
+          </div>
 
-          <textarea
-            id="source-code"
-            className="code-editor"
-            value={code}
-            onChange={(event) => setCode(event.target.value)}
-            spellCheck="false"
-            rows="18"
-            placeholder="실행할 C/C++ 코드를 입력하세요."
-          />
+          <div className="io-section">
+            <label className="field-label" htmlFor="standard-input">
+              표준 입력(stdin)
+            </label>
 
-          <label className="field-label" htmlFor="standard-input">
-            표준 입력(stdin)
-          </label>
+            <textarea
+              id="standard-input"
+              className="standard-input"
+              value={standardInput}
+              onChange={(event) => setStandardInput(event.target.value)}
+              rows="4"
+              placeholder="프로그램에 전달할 입력값이 있다면 작성하세요."
+            />
 
-          <textarea
-            id="standard-input"
-            className="standard-input"
-            value={standardInput}
-            onChange={(event) => setStandardInput(event.target.value)}
-            rows="4"
-            placeholder="프로그램에 전달할 입력값이 있다면 작성하세요."
-          />
-
-          <div className="editor-actions">
             <button
               className="secondary-button"
               type="button"
@@ -244,21 +239,32 @@ function MainPage() {
             >
               초기화
             </button>
-
-            <button
-              className="run-button"
-              type="submit"
-              disabled={isExecuting}
-              aria-busy={isExecuting}
-            >
-              {isExecuting ? "실행 중..." : "실행"}
-            </button>
           </div>
         </section>
 
-        <section className="result-card">
-          <div className="card-header">
-            <h3>실행 결과</h3>
+        <section className="workspace-panel settings-section">
+          <div className="workspace-panel-header">
+            <h2>실행 설정</h2>
+          </div>
+
+          <div className="settings-placeholder">
+            <p>정책 프로필과 실행 제한값이 표시될 영역입니다.</p>
+          </div>
+
+          <button
+            className="run-button"
+            type="submit"
+            disabled={isExecuting}
+            aria-busy={isExecuting}
+          >
+            {isExecuting ? "실행 중..." : "실행"}
+          </button>
+        </section>
+
+        <section className="workspace-panel result-section">
+          <div className="workspace-panel-header">
+            <h2>실행 결과</h2>
+
             <span
               className="waiting-badge"
               title={jobId ? `실행 ID: ${jobId}` : undefined}
@@ -266,50 +272,56 @@ function MainPage() {
               {executionStatusLabel}
             </span>
           </div>
-          <StateMessage
-            type={stateMessageType}
-            title={stateMessageTitle}
-            description={message}
-          />
-          <div className="result-tabs">
-            <button className="result-tab active" type="button">
-              stdout
-            </button>
 
-            <button className="result-tab" type="button">
-              stderr
-            </button>
+          <div className="result-placeholder">
+            <StateMessage
+              type={stateMessageType}
+              title={stateMessageTitle}
+              description={message}
+            />
 
-            <button className="result-tab" type="button">
-              컴파일 로그
-            </button>
+            <div className="result-tabs">
+              <button className="result-tab active" type="button">
+                stdout
+              </button>
+
+              <button className="result-tab" type="button">
+                stderr
+              </button>
+
+              <button className="result-tab" type="button">
+                컴파일 로그
+              </button>
+            </div>
+
+            <pre className="result-output">{resultOutput}</pre>
           </div>
-          <pre className="result-output">{resultOutput}</pre>
         </section>
-      </form>
+      </div>
 
-      <section className="policy-summary">
-        <article>
-          <span>실행 시간</span>
-          <strong>제한 예정</strong>
-        </article>
+      <section className="workspace-panel resource-section">
+        <div className="resource-section-header">
+          <h2>자원 사용량 요약</h2>
+        </div>
 
-        <article>
-          <span>메모리</span>
-          <strong>제한 예정</strong>
-        </article>
+        <div className="resource-placeholder">
+          <article>
+            <span>Wall Time</span>
+            <strong>-</strong>
+          </article>
 
-        <article>
-          <span>프로세스</span>
-          <strong>제한 예정</strong>
-        </article>
+          <article>
+            <span>Memory Peak</span>
+            <strong>-</strong>
+          </article>
 
-        <article>
-          <span>네트워크</span>
-          <strong>차단 예정</strong>
-        </article>
+          <article>
+            <span>Process Peak</span>
+            <strong>-</strong>
+          </article>
+        </div>
       </section>
-    </>
+    </form>
   );
 }
 
