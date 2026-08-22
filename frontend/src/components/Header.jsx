@@ -5,8 +5,6 @@ function Header({ title, description }) {
         <h1>{title}</h1>
         <p>{description}</p>
       </div>
-
-      <span className="environment-status">실행 환경 준비 중</span>
     </header>
   );
 }

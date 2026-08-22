@@ -611,24 +611,42 @@ button {
 /* 왼쪽 사이드바 */
 
 .sidebar {
-  display: flex;
   position: sticky;
   top: 0;
+  display: flex;
   flex: 0 0 var(--sidebar-width);
   flex-direction: column;
   width: var(--sidebar-width);
   height: 100vh;
-  padding: 24px 16px;
+  padding: 22px 16px 18px;
   color: var(--white);
   background-color: var(--navy-900);
+  transition:
+    width 0.2s ease,
+    flex-basis 0.2s ease,
+    padding 0.2s ease;
+}
+
+.sidebar-collapsed {
+  flex-basis: 82px;
+  width: 82px;
+  padding-right: 14px;
+  padding-left: 14px;
 }
 
 .service-logo {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 4px 8px 24px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  min-height: 58px;
+  padding: 0 6px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.sidebar-collapsed .service-logo {
+  justify-content: center;
+  padding-right: 0;
+  padding-left: 0;
 }
 
 .logo-symbol {
@@ -640,47 +658,56 @@ button {
   border-radius: 12px;
   color: var(--white);
   background: linear-gradient(135deg, #4a73e8, #54b89b);
+  font-size: 17px;
   font-weight: 800;
 }
 
-.service-logo strong {
-  display: block;
-  font-size: 17px;
+.service-logo-text {
+  min-width: 0;
 }
 
-.service-logo span {
+.service-logo-text strong {
+  display: block;
+  font-size: 17px;
+  white-space: nowrap;
+}
+
+.service-logo-text span {
   display: block;
   margin-top: 4px;
-  color: #aeb9ce;
-  font-size: 11px;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 10px;
+  white-space: nowrap;
 }
 
 .navigation {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-top: 24px;
+  gap: 10px;
+  margin-top: 22px;
 }
 
 .navigation-item {
-  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
   padding: 12px 14px;
-  border: 0;
-  border-radius: 8px;
-  color: #c7d0df;
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.85);
   background-color: transparent;
-  text-align: left;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
   transition:
     color 0.2s ease,
     background-color 0.2s ease;
-  text-decoration: none;
 }
 
 .navigation-item:hover {
   color: var(--white);
-  background-color: rgba(255, 255, 255, 0.08);
+  background-color: rgba(255, 255, 255, 0.12);
 }
 
 .navigation-item.active {
@@ -688,10 +715,34 @@ button {
   background-color: var(--blue-600);
 }
 
+.sidebar-collapsed .navigation-item {
+  justify-content: center;
+  width: 54px;
+  height: 54px;
+  padding: 0;
+}
+
+.navigation-icon {
+  display: grid;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+}
+
+.navigation-icon svg {
+  display: block;
+}
+
+.navigation-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .service-status {
   margin-top: auto;
-  padding: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 15px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 10px;
   background-color: var(--navy-800);
 }
@@ -705,15 +756,50 @@ button {
   align-items: center;
   gap: 8px;
   margin: 10px 0 0;
-  color: #c7d0df;
-  font-size: 12px;
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.collapsed-service-status {
+  display: grid;
+  width: 54px;
+  height: 42px;
+  margin-top: auto;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  background-color: var(--navy-800);
 }
 
 .status-dot {
+  display: block;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background-color: #f5b942;
+  background-color: #ffd25a;
+}
+
+.sidebar-toggle {
+  display: grid;
+  width: 100%;
+  min-height: 42px;
+  margin-top: 12px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.86);
+  background-color: transparent;
+}
+
+.sidebar-toggle:hover {
+  color: var(--white);
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+.sidebar-toggle svg {
+  display: block;
 }
 
 /* 오른쪽 전체 페이지 */
@@ -742,16 +828,6 @@ button {
   margin: 6px 0 0;
   color: var(--gray-600);
   font-size: 13px;
-}
-
-.environment-status {
-  padding: 8px 12px;
-  border: 1px solid #f0d7a0;
-  border-radius: 999px;
-  color: #8a641b;
-  background-color: #fff8e7;
-  font-size: 12px;
-  font-weight: 700;
 }
 
 .main-content {
@@ -924,25 +1000,6 @@ button {
 }
 
 @media (max-width: 720px) {
-  .app {
-    display: block;
-  }
-
-  .sidebar {
-    position: static;
-    width: 100%;
-    height: auto;
-  }
-
-  .navigation {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .service-status {
-    margin-top: 20px;
-  }
-
   .header {
     align-items: flex-start;
     flex-direction: column;
