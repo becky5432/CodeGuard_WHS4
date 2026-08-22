@@ -57,7 +57,7 @@ class ResourceUsage(BaseModel):
     wall_time_ms: int | None = None       # 전체 실행 시간
     cpu_time_ms: int | None = None        # 해당 실행 동안의 누적 CPU 사용 시간(ms)
     memory_peak_bytes: int | None = None  # 최대 메모리 (bytes 단위 주의)
-    process_peak: int | None = None       # 최대 프로세스 수
+    pids_peak: int | None = None          # 최대 프로세스 및 스레드 수 
     
     
 class StageError(BaseModel):
