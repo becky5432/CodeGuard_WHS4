@@ -188,7 +188,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "wall_time_ms": None,
                 "cpu_time_ms": None,
                 "memory_peak_bytes": None,
-                "process_peak": None,
+                "pids_peak": None,
             },
         )
         self.assertEqual(

@@ -46,7 +46,7 @@ class ResourceUsage(BaseModel):
     wall_time_ms: int | None = None
     cpu_time_ms: int | None = None
     memory_peak_bytes: int | None = None
-    process_peak: int | None = None
+    pids_peak: int | None = None
 
 
 class RunnerResponse(BaseModel):
