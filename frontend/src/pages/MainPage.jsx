@@ -59,6 +59,8 @@ function MainPage() {
   const [message, setMessage] = useState(
     "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
   );
+  const [activeIoTab, setActiveIoTab] = useState("stdin");
+  const [activeOutputTab, setActiveOutputTab] = useState("stdout");
 
   const executionLockRef = useRef(false);
 
@@ -87,10 +89,15 @@ function MainPage() {
     blocked: "실행 차단",
   }[executionState];
 
-  const resultOutput =
-    executionResult?.stdout ||
-    executionResult?.stderr ||
-    "아직 실행 결과가 없습니다.";
+  const outputByTab = {
+    stdout: executionResult?.stdout,
+    stderr: executionResult?.stderr,
+    compileLog: executionResult?.compile_log,
+  };
+
+  const resultOutput = executionResult
+    ? outputByTab[activeOutputTab] || "출력 내용이 없습니다."
+    : "아직 실행 결과가 없습니다.";
 
   const pollExecution = async (currentJobId) => {
     while (true) {
@@ -254,21 +261,94 @@ function MainPage() {
           </div>
 
           <div className="io-section">
-            <label className="field-label" htmlFor="standard-input">
-              표준 입력(stdin)
-            </label>
+            <div
+              className="io-main-tabs"
+              role="tablist"
+              aria-label="입출력 영역"
+            >
+              <button
+                className={`io-main-tab${activeIoTab === "stdin" ? " active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={activeIoTab === "stdin"}
+                onClick={() => setActiveIoTab("stdin")}
+              >
+                표준 입력(stdin)
+              </button>
 
-            <textarea
-              id="standard-input"
-              className="standard-input"
-              value={standardInput}
-              onChange={(event) => setStandardInput(event.target.value)}
-              rows="4"
-              placeholder="프로그램에 전달할 입력값이 있다면 작성하세요."
-            />
+              <button
+                className={`io-main-tab${activeIoTab === "output" ? " active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={activeIoTab === "output"}
+                onClick={() => setActiveIoTab("output")}
+              >
+                출력 결과
+              </button>
+            </div>
+
+            <div className="io-content">
+              {activeIoTab === "stdin" ? (
+                <textarea
+                  id="standard-input"
+                  className="standard-input"
+                  value={standardInput}
+                  onChange={(event) => setStandardInput(event.target.value)}
+                  rows="4"
+                  placeholder="프로그램에 전달할 입력값이 있다면 작성하세요."
+                  aria-label="표준 입력"
+                />
+              ) : (
+                <div className="output-content">
+                  <div
+                    className="output-tabs"
+                    role="tablist"
+                    aria-label="출력 결과 종류"
+                  >
+                    <button
+                      className={`output-tab${
+                        activeOutputTab === "stdout" ? " active" : ""
+                      }`}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeOutputTab === "stdout"}
+                      onClick={() => setActiveOutputTab("stdout")}
+                    >
+                      stdout
+                    </button>
+
+                    <button
+                      className={`output-tab${
+                        activeOutputTab === "stderr" ? " active" : ""
+                      }`}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeOutputTab === "stderr"}
+                      onClick={() => setActiveOutputTab("stderr")}
+                    >
+                      stderr
+                    </button>
+
+                    <button
+                      className={`output-tab${
+                        activeOutputTab === "compileLog" ? " active" : ""
+                      }`}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeOutputTab === "compileLog"}
+                      onClick={() => setActiveOutputTab("compileLog")}
+                    >
+                      컴파일 로그
+                    </button>
+                  </div>
+
+                  <pre className="io-result-output">{resultOutput}</pre>
+                </div>
+              )}
+            </div>
 
             <button
-              className="secondary-button"
+              className="io-reset-button"
               type="button"
               disabled={isExecuting}
               onClick={() => {
@@ -280,9 +360,11 @@ function MainPage() {
                 setMessage(
                   "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
                 );
+                setActiveIoTab("stdin");
+                setActiveOutputTab("stdout");
               }}
             >
-              초기화
+              ↻ 초기화
             </button>
           </div>
         </section>
