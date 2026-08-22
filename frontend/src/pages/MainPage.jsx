@@ -13,7 +13,7 @@ int main() {
 const DEFAULT_POLICY = {
   timeout_ms: 2000,
   memory_limit_mb: 128,
-  process_limit: 10,
+  pids_limit: 10,
   cpu_limit: 1.0,
 };
 
@@ -25,7 +25,7 @@ function getExecutionErrorMessage(error, phase) {
 
   if (error instanceof ApiError) {
     if (error.type === "network") {
-      return `${action}을 위한 네트워크 연결에 실패했습니다. 연결 상태를 확인한 후 다시 시도해주세요.`;
+      return `${action} 중 네트워크 연결에 실패했습니다. 연결 상태를 확인한 후 다시 시도해주세요.`;
     }
 
     if (error.type === "server") {
