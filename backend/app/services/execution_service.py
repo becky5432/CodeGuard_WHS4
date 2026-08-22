@@ -164,8 +164,8 @@ class ExecutionService:
                     if usage
                     else None
                 ),
-                process_peak=(
-                    usage.process_peak
+                pids_peak=(
+                    usage.pids_peak
                     if usage
                     else None
                 ),
@@ -209,7 +209,7 @@ class ExecutionService:
             execution.wall_time_ms,
             execution.cpu_time_ms,
             execution.memory_peak_bytes,
-            execution.process_peak,
+            execution.pids_peak,
         )
 
         resource_usage = (
@@ -217,7 +217,7 @@ class ExecutionService:
                 wall_time_ms=execution.wall_time_ms,
                 cpu_time_ms=execution.cpu_time_ms,
                 memory_peak_bytes=execution.memory_peak_bytes,
-                process_peak=execution.process_peak,
+                pids_peak=execution.pids_peak,
             )
             if any(value is not None for value in metric_values)
             else None
