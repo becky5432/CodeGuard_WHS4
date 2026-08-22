@@ -32,7 +32,7 @@ class ResultContractTests(unittest.TestCase):
             {
                 "TIME_LIMIT",
                 "MEMORY_LIMIT",
-                "PROCESS_LIMIT",
+                "PIDS_LIMIT",
                 "OUTPUT_LIMIT",
                 "NETWORK_BLOCKED",
                 "COMPILE_ERROR",

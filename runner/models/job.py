@@ -15,7 +15,7 @@ class RunnerLanguage(str, Enum):
 class PolicyLimits(BaseModel):
     timeout_ms: int = Field(gt=0)
     memory_limit_mb: int = Field(gt=0)
-    process_limit: int = Field(gt=0)
+    pids_limit: int = Field(gt=0)
     cpu_limit: float = Field(gt=0)
     output_limit_bytes: int = Field(
         default=EXECUTION_OUTPUT_LIMIT_BYTES,
