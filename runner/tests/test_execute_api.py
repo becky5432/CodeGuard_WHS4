@@ -13,6 +13,7 @@ from runner.models.result import RunnerReasonCode, RunnerStatus
 from runner.pipeline.compiler import CompileResult
 from runner.pipeline.execution import ExecutionResult
 from runner.pipeline.workspace import VolumeWorkspace
+from runner.policies import EXECUTION_OUTPUT_LIMIT_BYTES
 
 
 class ExecuteApiTests(unittest.TestCase):
@@ -102,7 +103,7 @@ class ExecuteApiTests(unittest.TestCase):
             "policy": {
                 "timeout_ms": 2000,
                 "memory_limit_mb": 128,
-                "process_limit": 10,
+                "pids_limit": 10,
                 "cpu_limit": 1.0,
             },
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -116,8 +117,9 @@ class ExecuteApiTests(unittest.TestCase):
             {
                 "timeout_ms",
                 "memory_limit_mb",
-                "process_limit",
+                "pids_limit",
                 "cpu_limit",
+                "output_limit_bytes",
             },
         )
 
@@ -128,7 +130,7 @@ class ExecuteApiTests(unittest.TestCase):
             {
                 "TIME_LIMIT",
                 "MEMORY_LIMIT",
-                "PROCESS_LIMIT",
+                "PIDS_LIMIT",
                 "OUTPUT_LIMIT",
                 "NETWORK_BLOCKED",
                 "COMPILE_ERROR",
@@ -180,7 +182,15 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertIsNotNone(payload["finished_at"])
         self.assertEqual(payload["stdout"], "Hello\n")
         self.assertEqual(payload["compile_log"], "compiler note")
-        self.assertIsNone(payload["resource_usage"])
+        self.assertEqual(
+            payload["resource_usage"],
+            {
+                "wall_time_ms": None,
+                "cpu_time_ms": None,
+                "memory_peak_bytes": None,
+                "process_peak": None,
+            },
+        )
         self.assertEqual(
             payload["stage_summary"],
             {
@@ -216,6 +226,7 @@ class ExecuteApiTests(unittest.TestCase):
             stdin=body["stdin"],
             job_id=UUID(body["job_id"]),
             run_id=ANY,
+            memory_limit_mb=body["policy"]["memory_limit_mb"],
         )
 
         self.remove_workspace_mock.assert_called_once_with(
@@ -227,6 +238,8 @@ class ExecuteApiTests(unittest.TestCase):
             container=self.execution_container,
             job_id=UUID(body["job_id"]),
             run_id=ANY,
+            timeout_ms=body["policy"]["timeout_ms"],
+            output_limit_bytes=EXECUTION_OUTPUT_LIMIT_BYTES,
         )
 
         self.execution_container.remove.assert_called_once_with(
