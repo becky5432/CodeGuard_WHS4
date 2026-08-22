@@ -19,6 +19,38 @@ const DEFAULT_POLICY = {
   cpu_limit: 1.0,
 };
 
+// 실행 설정 UI 확인을 위한 임시 프로필 값
+// 실제 요청값은 API 연결 단계에서 최신 명세에 맞춰 교체
+const POLICY_PROFILE_PREVIEW = {
+  basic: {
+    label: "기본",
+    title: "기본 정책 프로필",
+    description: "일반적인 코드 실행을 위한 기본 안전 프로필",
+    timeoutMs: 1000,
+    memoryLimitMb: 64,
+    processLimit: 32,
+    cpuLimit: 1.0,
+  },
+  strict: {
+    label: "엄격",
+    title: "엄격 정책 프로필",
+    description: "더 제한된 자원으로 코드를 검사하는 강화 프로필",
+    timeoutMs: 500,
+    memoryLimitMb: 32,
+    processLimit: 8,
+    cpuLimit: 0.5,
+  },
+  relaxed: {
+    label: "완화",
+    title: "완화 정책 프로필",
+    description: "자원 사용 범위를 확대한 테스트용 프로필",
+    timeoutMs: 3000,
+    memoryLimitMb: 256,
+    processLimit: 64,
+    cpuLimit: 2.0,
+  },
+};
+
 const POLLING_INTERVAL_MS = 1000;
 const wait = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
 
@@ -61,10 +93,10 @@ function MainPage() {
   );
   const [activeIoTab, setActiveIoTab] = useState("stdin");
   const [activeOutputTab, setActiveOutputTab] = useState("stdout");
-
+  const [selectedPolicyProfile, setSelectedPolicyProfile] = useState("basic");
   const executionLockRef = useRef(false);
-
   const isExecuting = executionState === "loading";
+  const selectedPolicy = POLICY_PROFILE_PREVIEW[selectedPolicyProfile];
 
   const executionStatusLabel = {
     idle: "실행 전",
@@ -374,8 +406,60 @@ function MainPage() {
             <h2>실행 설정</h2>
           </div>
 
-          <div className="settings-placeholder">
-            <p>정책 프로필과 실행 제한값이 표시될 영역입니다.</p>
+          <div className="settings-content">
+            <h3>정책 프로필</h3>
+
+            <div
+              className="policy-profile-tabs"
+              role="tablist"
+              aria-label="정책 프로필"
+            >
+              {Object.entries(POLICY_PROFILE_PREVIEW).map(
+                ([profileKey, profile]) => (
+                  <button
+                    className={`policy-profile-tab${
+                      selectedPolicyProfile === profileKey ? " active" : ""
+                    }`}
+                    key={profileKey}
+                    type="button"
+                    role="tab"
+                    aria-selected={selectedPolicyProfile === profileKey}
+                    onClick={() => setSelectedPolicyProfile(profileKey)}
+                  >
+                    {profile.label}
+                  </button>
+                ),
+              )}
+            </div>
+
+            <div className="policy-profile-card">
+              <div className="policy-profile-description">
+                <strong>{selectedPolicy.title}</strong>
+                <p>{selectedPolicy.description}</p>
+              </div>
+
+              <dl className="policy-limit-list">
+                <div>
+                  <dt>실행 시간</dt>
+                  <dd>{selectedPolicy.timeoutMs.toLocaleString()} ms</dd>
+                </div>
+
+                <div>
+                  <dt>메모리</dt>
+                  <dd>{selectedPolicy.memoryLimitMb} MB</dd>
+                </div>
+
+                <div>
+                  <dt>프로세스</dt>
+                  <dd>{selectedPolicy.processLimit}개</dd>
+                </div>
+
+                <div>
+                  <dt>CPU 한도</dt>
+                  <dd>{selectedPolicy.cpuLimit.toFixed(1)} CPU</dd>
+                </div>
+              </dl>
+            </div>
           </div>
 
           <button

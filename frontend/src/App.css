@@ -305,13 +305,117 @@ button {
   opacity: 0.6;
 }
 
-.settings-placeholder,
 .result-placeholder {
   flex: 1;
   padding: 20px;
 }
 
-.settings-placeholder {
+/* 실행 설정 영역 */
+
+.settings-content {
+  flex: 1;
+  padding: 28px 18px;
+}
+
+.settings-content h3 {
+  margin: 0 0 14px;
+  font-size: 14px;
+}
+
+.policy-profile-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.policy-profile-tab {
+  position: relative;
+  padding: 14px 6px;
+  border: 1px solid var(--gray-300);
+  border-right: 0;
+  color: var(--gray-700);
+  background-color: var(--white);
+  font-size: 14px;
+}
+
+.policy-profile-tab:first-child {
+  border-radius: 8px 0 0 8px;
+}
+
+.policy-profile-tab:last-child {
+  border-right: 1px solid var(--gray-300);
+  border-radius: 0 8px 8px 0;
+}
+
+.policy-profile-tab:hover {
+  z-index: 1;
+  color: var(--blue-600);
+  background-color: var(--blue-100);
+}
+
+.policy-profile-tab.active {
+  z-index: 2;
+  border-color: var(--blue-600);
+  color: var(--blue-600);
+  background-color: var(--blue-100);
+  font-weight: 700;
+}
+
+.policy-profile-tab.active + .policy-profile-tab {
+  border-left-color: var(--blue-600);
+}
+
+.policy-profile-tab:last-child.active {
+  border-right-color: var(--blue-600);
+}
+
+.policy-profile-card {
+  margin-top: 14px;
+  overflow: hidden;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+}
+
+.policy-profile-description {
+  min-height: 104px;
+  padding: 18px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.policy-profile-description strong {
+  font-size: 14px;
+}
+
+.policy-profile-description p {
+  margin: 8px 0 0;
+  color: var(--gray-600);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.policy-limit-list {
+  margin: 0;
+}
+
+.policy-limit-list div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 64px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.policy-limit-list div:last-child {
+  border-bottom: 0;
+}
+
+.policy-limit-list dt {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.policy-limit-list dd {
+  margin: 0;
   color: var(--gray-600);
   font-size: 13px;
 }
