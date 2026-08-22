@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import StateMessage from "../components/StateMessage";
-import { createExecution, getExecution } from "../api/executionApi";
+import { ApiError, createExecution, getExecution } from "../api/executionApi";
 
 const DEFAULT_CODE = `#include <iostream>
 using namespace std;
@@ -13,12 +13,38 @@ int main() {
 const DEFAULT_POLICY = {
   timeout_ms: 2000,
   memory_limit_mb: 128,
-  process_limit: 10,
+  pids_limit: 10,
   cpu_limit: 1.0,
 };
 
 const POLLING_INTERVAL_MS = 1000;
 const wait = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
+
+function getExecutionErrorMessage(error, phase) {
+  const action = phase === "polling" ? "실행 상태 및 결과 조회" : "실행 요청";
+
+  if (error instanceof ApiError) {
+    if (error.type === "network") {
+      return `${action} 중 네트워크 연결에 실패했습니다. 연결 상태를 확인한 후 다시 시도해주세요.`;
+    }
+
+    if (error.type === "server") {
+      return `${action} 중 서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.`;
+    }
+
+    if (error.type === "invalid-response") {
+      return `${action} 응답을 올바르게 처리할 수 없습니다.`;
+    }
+
+    return `${action}에 실패했습니다.${
+      error.status ? ` (${error.status})` : ""
+    }`;
+  }
+
+  return error instanceof Error
+    ? error.message
+    : `${action} 중 오류가 발생했습니다.`;
+}
 
 function MainPage() {
   const [language, setLanguage] = useState("CPP");
@@ -127,6 +153,7 @@ function MainPage() {
       policy_profile: "basic",
       policy: DEFAULT_POLICY,
     };
+    let errorPhase = "request";
 
     try {
       const response = await createExecution(executionData);
@@ -138,14 +165,11 @@ function MainPage() {
       setJobId(response.job_id);
       setMessage(`실행 요청이 접수되었습니다. (${response.status})`);
 
+      errorPhase = "polling";
       await pollExecution(response.job_id);
     } catch (error) {
       setExecutionState("error");
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "실행 요청 중 오류가 발생했습니다.",
-      );
+      setMessage(getExecutionErrorMessage(error, errorPhase));
     } finally {
       executionLockRef.current = false;
     }

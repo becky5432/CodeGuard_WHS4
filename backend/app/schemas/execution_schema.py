@@ -14,6 +14,7 @@ class PolicyProfile(str, Enum):
     BASIC = "basic"
     STRICT = "strict"
     RELAXED = "relaxed"
+    # CUSTOM = "custom"   # 사용자 설정 적용
 
 
 class PolicyLimits(BaseModel):
@@ -43,7 +44,7 @@ class ExecutionStage(str, Enum):
 class ExecutionReasonCode(str, Enum):
     TIME_LIMIT = "TIME_LIMIT"
     MEMORY_LIMIT = "MEMORY_LIMIT"
-    PROCESS_LIMIT = "PROCESS_LIMIT"
+    PIDS_LIMIT = "PIDS_LIMIT"      # 프로세스 + 스레드 수 제한
     OUTPUT_LIMIT = "OUTPUT_LIMIT"
     NETWORK_BLOCKED = "NETWORK_BLOCKED"
     COMPILE_ERROR = "COMPILE_ERROR"
@@ -79,7 +80,7 @@ class ExecutionCreateRequest(BaseModel):
     code: str = Field(min_length=1)
     stdin: str = ""
     policy_profile: PolicyProfile
-    policy: PolicyLimits  
+    policy: PolicyLimits | None = None    # 프리셋 선택할 경우 필수 X
 
 
 class ExecutionCreateResponse(BaseModel): # 실행 요청 직후 응답
