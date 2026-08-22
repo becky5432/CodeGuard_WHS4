@@ -29,7 +29,7 @@ class RunnerStage(str, Enum):
 class RunnerReasonCode(str, Enum):
     TIME_LIMIT = "TIME_LIMIT"
     MEMORY_LIMIT = "MEMORY_LIMIT"
-    PROCESS_LIMIT = "PROCESS_LIMIT"
+    PIDS_LIMIT = "PIDS_LIMIT"        # 프로세스 + 스레드 수 제한
     OUTPUT_LIMIT = "OUTPUT_LIMIT"
     NETWORK_BLOCKED = "NETWORK_BLOCKED"
     COMPILE_ERROR = "COMPILE_ERROR"
@@ -42,7 +42,7 @@ class ResourceUsage(BaseModel):
     wall_time_ms: int | None = None       # 전체 실행 시간
     cpu_time_ms: int | None = None        # CPU 사용 시간 (누적)
     memory_peak_bytes: int | None = None  # 최대 메모리 (bytes 단위 주의)
-    process_peak: int | None = None       # 최대 프로세스 수
+    pids_peak: int | None = None          # 최대 프로세스 및 스레드 수
 
 
 class StageError(BaseModel):
