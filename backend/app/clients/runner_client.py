@@ -38,7 +38,7 @@ class MockRunnerClient:
                 wall_time_ms=850,              # 테스트용 가짜 값
                 cpu_time_ms=120,
                 memory_peak_bytes=44040192,
-                process_peak=2,
+                pids_peak=2,
             ),
         )
 
