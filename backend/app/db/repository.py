@@ -25,7 +25,7 @@ def create_execution(
         policy_profile=policy_profile,
         timeout_ms=limits["timeout_ms"],
         memory_limit_mb=limits["memory_limit_mb"],
-        process_limit=limits["process_limit"],
+        pids_limit=limits["pids_limit"],
         cpu_limit=limits["cpu_limit"],
     )
 
@@ -77,12 +77,12 @@ def save_result(
     stdout: str = "",
     stderr: str = "",
     compile_log: str = "",
-    stage_summary: dict | None = None,  # ← 추가 (JSON 문자열)
+    stage_summary: dict | None = None,
     error_message: str | None = None,
     wall_time_ms: int | None = None,
     cpu_time_ms: int | None = None,
     memory_peak_bytes: int | None = None,
-    process_peak: int | None = None,
+    pids_peak: int | None = None,
     finished_at: datetime | None = None,
 ) -> Execution | None:
     """Runner 결과를 실행 기록에 반영하고 최종 상태로 갱신
@@ -99,17 +99,18 @@ def save_result(
     execution.run_id = run_id
     execution.status = status
     execution.reason_code = reason_code
+    execution.error_message = error_message
     execution.exit_code = exit_code
     execution.stdout = (stdout or "")[:limit]
     execution.stderr = (stderr or "")[:limit]
     execution.compile_log = (compile_log or "")[:limit]
+    execution.stage_summary = stage_summary
+    execution.finished_at = finished_at or datetime.now(timezone.utc)
+
     execution.wall_time_ms = wall_time_ms
     execution.cpu_time_ms = cpu_time_ms
     execution.memory_peak_bytes = memory_peak_bytes
-    execution.process_peak = process_peak
-    execution.finished_at = finished_at or datetime.now(timezone.utc)
-    execution.stage_summary = stage_summary
-    execution.error_message = error_message
+    execution.pids_peak = pids_peak
 
     db.commit()
     db.refresh(execution)
