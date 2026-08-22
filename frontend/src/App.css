@@ -421,6 +421,8 @@ button {
   padding: 14px 20px;
 }
 
+/* 자원 사용량 요약 영역 */
+
 .resource-section {
   padding: 16px;
 }
@@ -428,8 +430,6 @@ button {
 .resource-section-header {
   margin-bottom: 14px;
 }
-
-/* 자원 사용량 요약 */
 
 .resource-card-grid {
   display: grid;
@@ -545,6 +545,7 @@ button {
 .resource-limit-exceeded {
   border-color: #efaaa4;
   background-color: #fff7f6;
+  box-shadow: 0 0 0 1px rgba(224, 68, 53, 0.04);
 }
 
 .resource-limit-exceeded .resource-card-icon {
@@ -556,38 +557,11 @@ button {
   background-color: #e04435;
 }
 
-/* 메인 화면 반응형 배치 */
-
-@media (max-width: 1250px) {
-  .main-workspace-grid {
-    grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.9fr);
-  }
-
-  .result-section {
-    grid-column: 1 / -1;
-    min-height: auto;
-  }
+.resource-limit-exceeded .resource-card-value strong {
+  color: #b42318;
 }
 
-@media (max-width: 900px) {
-  .main-workspace-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .result-section {
-    grid-column: auto;
-  }
-
-  .resource-card-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .editor-section,
-  .settings-section,
-  .result-section {
-    min-height: auto;
-  }
-}
+/* 코드 편집기 전체 화면 */
 
 .editor-section-fullscreen {
   position: fixed;
@@ -836,6 +810,8 @@ button {
   padding: 32px;
 }
 
+/* 표준 입력 */
+
 .standard-input {
   display: block;
   width: calc(100% - 32px);
@@ -854,7 +830,8 @@ button {
     border-color 0.2s ease,
     box-shadow 0.2s ease;
 }
-.code-input:focus,
+
+.standard-input:focus,
 .language-selector select:focus {
   border-color: var(--blue-600);
   box-shadow: 0 0 0 3px rgba(65, 105, 225, 0.14);
@@ -862,21 +839,19 @@ button {
 
 .run-button {
   padding: 10px 20px;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.run-button {
   border: 1px solid var(--blue-600);
+  border-radius: 8px;
   color: var(--white);
   background-color: var(--blue-600);
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .run-button:hover {
   border-color: var(--blue-700);
   background-color: var(--blue-700);
 }
+
 /* 실행 결과 영역 */
 
 .execution-result-content {
@@ -926,10 +901,14 @@ button {
   background-color: var(--green-100);
 }
 
-.execution-status-error,
-.execution-status-blocked {
+.execution-status-error {
   color: #c9392f;
   background-color: #fff0ed;
+}
+
+.execution-status-blocked {
+  color: #b54708;
+  background-color: #fff4e5;
 }
 
 .execution-message {
@@ -949,11 +928,22 @@ button {
   background-color: #f3f6ff;
 }
 
-.execution-message-error,
-.execution-message-blocked {
+.execution-message-success {
+  border-color: #abd9c5;
+  color: var(--green-700);
+  background-color: #f1faf6;
+}
+
+.execution-message-error {
   border-color: #efaaa4;
   color: #c9392f;
   background-color: #fff7f6;
+}
+
+.execution-message-blocked {
+  border-color: #f1c48b;
+  color: #b54708;
+  background-color: #fff9f0;
 }
 
 .execution-stage-section {
@@ -980,6 +970,20 @@ button {
   color: var(--gray-500);
 }
 
+.execution-stage-success {
+  color: var(--green-700);
+  font-weight: 700;
+}
+
+.execution-stage-failed {
+  color: #c9392f;
+  font-weight: 700;
+}
+
+.execution-stage-skipped {
+  color: var(--gray-500);
+}
+
 .execution-total-time {
   display: flex;
   align-items: center;
@@ -999,18 +1003,7 @@ button {
   font-weight: 700;
 }
 
-@media (max-width: 720px) {
-  .header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 12px;
-    padding: 18px 20px;
-  }
-
-  .main-content {
-    padding: 24px 16px;
-  }
-}
+/* 공통 상태 안내 */
 
 .state-message {
   display: flex;
@@ -1110,5 +1103,51 @@ button {
 @media (prefers-reduced-motion: reduce) {
   .state-message-loading .state-message-icon {
     animation: none;
+  }
+}
+
+/* 반응형 배치 */
+
+@media (max-width: 1250px) {
+  .main-workspace-grid {
+    grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.9fr);
+  }
+
+  .result-section {
+    grid-column: 1 / -1;
+    min-height: auto;
+  }
+}
+
+@media (max-width: 900px) {
+  .main-workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .result-section {
+    grid-column: auto;
+  }
+
+  .resource-card-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .editor-section,
+  .settings-section,
+  .result-section {
+    min-height: auto;
+  }
+}
+
+@media (max-width: 720px) {
+  .header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+    padding: 18px 20px;
+  }
+
+  .main-content {
+    padding: 24px 16px;
   }
 }

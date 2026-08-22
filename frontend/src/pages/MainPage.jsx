@@ -58,6 +58,39 @@ const POLICY_PROFILE_PREVIEW = {
 
 const POLLING_INTERVAL_MS = 1000;
 
+const EXECUTION_RESULT_PRESENTATION = {
+  COMPILE_ERROR: {
+    state: "error",
+    label: "컴파일 오류",
+    message: "코드를 컴파일하지 못했습니다. 컴파일 로그를 확인해주세요.",
+  },
+  COMPILE_TIMEOUT: {
+    state: "blocked",
+    label: "컴파일 시간 초과",
+    message: "컴파일 시간이 정책 제한을 초과했습니다.",
+  },
+  RUNTIME_ERROR: {
+    state: "error",
+    label: "런타임 오류",
+    message: "프로그램 실행 중 오류가 발생했습니다. stderr를 확인해주세요.",
+  },
+  TIME_LIMIT: {
+    state: "blocked",
+    label: "시간 제한 초과",
+    message: "실행 시간 제한을 초과하여 실행이 중지되었습니다.",
+  },
+  MEMORY_LIMIT: {
+    state: "blocked",
+    label: "메모리 제한 초과",
+    message: "메모리 제한을 초과하여 실행이 중지되었습니다.",
+  },
+  PIDS_LIMIT: {
+    state: "blocked",
+    label: "프로세스 제한 초과",
+    message: "프로세스 및 스레드 제한을 초과하여 실행이 중지되었습니다.",
+  },
+};
+
 const wait = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
 
 function calculateUsagePercentage(value, limit) {
@@ -114,30 +147,87 @@ function getPreferredOutputTab(result) {
   return "stdout";
 }
 
-function getExecutionErrorMessage(error, phase) {
+function getExecutionResultPresentation(result) {
+  if (result.status === "SUCCESS") {
+    return {
+      state: "success",
+      label: "성공",
+      message: "코드 실행이 완료되었습니다.",
+    };
+  }
+
+  const reasonPresentation = EXECUTION_RESULT_PRESENTATION[result.reason_code];
+
+  if (reasonPresentation) {
+    return {
+      ...reasonPresentation,
+      message: result.error_message ?? reasonPresentation.message,
+    };
+  }
+
+  if (result.status === "BLOCKED") {
+    return {
+      state: "blocked",
+      label: "정책 위반",
+      message:
+        result.error_message ?? "정책에 의해 코드 실행이 차단되었습니다.",
+    };
+  }
+
+  return {
+    state: "error",
+    label: "실행 실패",
+    message: result.error_message ?? "코드 실행 중 오류가 발생했습니다.",
+  };
+}
+
+function getRequestErrorPresentation(error, phase) {
   const action = phase === "polling" ? "실행 상태 및 결과 조회" : "실행 요청";
 
   if (error instanceof ApiError) {
     if (error.type === "network") {
-      return `${action} 중 네트워크 연결에 실패했습니다. 연결 상태를 확인한 후 다시 시도해주세요.`;
+      return {
+        code: "NETWORK_ERROR",
+        label: "연결 실패",
+        message: `${action} 중 네트워크 연결에 실패했습니다. Backend 실행 상태를 확인해주세요.`,
+      };
     }
 
     if (error.type === "server") {
-      return `${action} 중 서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.`;
+      const isRunnerConnectionError = [502, 503, 504].includes(error.status);
+
+      return {
+        code: isRunnerConnectionError ? "RUNNER_UNAVAILABLE" : "BACKEND_ERROR",
+        label: isRunnerConnectionError ? "Runner 연결 실패" : "서버 오류",
+        message: isRunnerConnectionError
+          ? "Runner와 연결할 수 없습니다. 실행 환경 상태를 확인해주세요."
+          : `${action} 중 Backend 내부 오류가 발생했습니다. 잠시 후 다시 시도해주세요.`,
+      };
     }
 
     if (error.type === "invalid-response") {
-      return `${action} 응답을 올바르게 처리할 수 없습니다.`;
+      return {
+        code: "INVALID_RESPONSE",
+        label: "응답 오류",
+        message: `${action} 응답을 올바르게 처리할 수 없습니다.`,
+      };
     }
 
-    return `${action}에 실패했습니다.${
-      error.status ? ` (${error.status})` : ""
-    }`;
+    return {
+      code: "REQUEST_ERROR",
+      label: "요청 실패",
+      message: error.message || `${action}에 실패했습니다.`,
+    };
   }
 
-  return error instanceof Error
-    ? error.message
-    : `${action} 중 오류가 발생했습니다.`;
+  return {
+    code: "UNKNOWN_ERROR",
+    label: "알 수 없는 오류",
+    message:
+      error instanceof Error
+        ? error.message
+        : `${action} 중 오류가 발생했습니다.`,
+  };
 }
 
 function MainPage() {
@@ -149,6 +239,8 @@ function MainPage() {
   const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [executionResult, setExecutionResult] = useState(null);
+  const [executionStatusText, setExecutionStatusText] = useState("실행 전");
+  const [requestErrorCode, setRequestErrorCode] = useState(null);
   const [message, setMessage] = useState(
     "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
   );
@@ -163,14 +255,6 @@ function MainPage() {
   const isExecuting = executionState === "loading";
   const selectedPolicy = POLICY_PROFILE_PREVIEW[selectedPolicyProfile];
 
-  const executionStatusLabel = {
-    idle: "실행 전",
-    loading: "실행 중",
-    success: "성공",
-    error: "실행 실패",
-    blocked: "정책 위반",
-  }[executionState];
-
   const outputByTab = {
     stdout: executionResult?.stdout,
     stderr: executionResult?.stderr,
@@ -181,8 +265,13 @@ function MainPage() {
     ? outputByTab[activeOutputTab] || "출력 내용이 없습니다."
     : "아직 실행 결과가 없습니다.";
 
-  const executionReasonCode = executionResult?.reason_code ?? "-";
+  const executionReasonCode =
+    executionResult?.reason_code ?? requestErrorCode ?? "-";
   const executionExitCode = executionResult?.exit_code ?? "-";
+
+  const isTimeLimitExceeded = executionResult?.reason_code === "TIME_LIMIT";
+  const isMemoryLimitExceeded = executionResult?.reason_code === "MEMORY_LIMIT";
+  const isPidsLimitExceeded = executionResult?.reason_code === "PIDS_LIMIT";
 
   // 실제 Runner 응답 기반 자원 사용량
   const resourceUsage = executionResult?.resource_usage;
@@ -222,6 +311,7 @@ function MainPage() {
   });
 
   // 실행 결과 폴링
+  // 실행 결과 폴링
   const pollExecution = async (currentJobId) => {
     while (true) {
       await wait(POLLING_INTERVAL_MS);
@@ -230,36 +320,23 @@ function MainPage() {
       setExecutionResult(result);
 
       if (result.status === "PENDING") {
+        setExecutionStatusText("대기 중");
         setMessage("실행 요청이 대기 중입니다.");
         continue;
       }
 
       if (result.status === "RUNNING") {
+        setExecutionStatusText("실행 중");
         setMessage("코드를 실행하고 있습니다.");
         continue;
       }
 
-      if (result.status === "SUCCESS") {
-        setExecutionState("success");
-        setMessage("코드 실행이 완료되었습니다.");
-        setActiveIoTab("output");
-        setActiveOutputTab(getPreferredOutputTab(result));
-        return;
-      }
+      if (["SUCCESS", "ERROR", "BLOCKED"].includes(result.status)) {
+        const presentation = getExecutionResultPresentation(result);
 
-      if (result.status === "ERROR") {
-        setExecutionState("error");
-        setMessage(result.error_message ?? "코드 실행 중 오류가 발생했습니다.");
-        setActiveIoTab("output");
-        setActiveOutputTab(getPreferredOutputTab(result));
-        return;
-      }
-
-      if (result.status === "BLOCKED") {
-        setExecutionState("blocked");
-        setMessage(
-          result.error_message ?? "정책에 의해 코드 실행이 차단되었습니다.",
-        );
+        setExecutionState(presentation.state);
+        setExecutionStatusText(presentation.label);
+        setMessage(presentation.message);
         setActiveIoTab("output");
         setActiveOutputTab(getPreferredOutputTab(result));
         return;
@@ -279,14 +356,18 @@ function MainPage() {
 
     if (!code.trim()) {
       setExecutionState("error");
+      setExecutionStatusText("입력 오류");
+      setRequestErrorCode("EMPTY_CODE");
       setMessage("실행할 코드를 입력해주세요.");
       return;
     }
 
     executionLockRef.current = true;
     setExecutionState("loading");
+    setExecutionStatusText("실행 중");
     setJobId(null);
     setExecutionResult(null);
+    setRequestErrorCode(null);
     setMessage("코드 실행을 요청하고 있습니다.");
 
     const executionData = {
@@ -311,8 +392,12 @@ function MainPage() {
       errorPhase = "polling";
       await pollExecution(response.job_id);
     } catch (error) {
+      const errorPresentation = getRequestErrorPresentation(error, errorPhase);
+
       setExecutionState("error");
-      setMessage(getExecutionErrorMessage(error, errorPhase));
+      setExecutionStatusText(errorPresentation.label);
+      setRequestErrorCode(errorPresentation.code);
+      setMessage(errorPresentation.message);
     } finally {
       executionLockRef.current = false;
     }
@@ -489,8 +574,10 @@ function MainPage() {
                 setCode("");
                 setStandardInput("");
                 setExecutionState("idle");
+                setExecutionStatusText("실행 전");
                 setJobId(null);
                 setExecutionResult(null);
+                setRequestErrorCode(null);
                 setMessage(
                   "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
                 );
@@ -589,7 +676,7 @@ function MainPage() {
                 className={`execution-status-badge execution-status-${executionState}`}
                 title={jobId ? `실행 ID: ${jobId}` : undefined}
               >
-                {executionStatusLabel}
+                {executionStatusText}
               </span>
             </div>
 
@@ -640,7 +727,11 @@ function MainPage() {
         </div>
 
         <div className="resource-card-grid">
-          <article className="resource-usage-card resource-wall-time">
+          <article
+            className={`resource-usage-card resource-wall-time${
+              isTimeLimitExceeded ? " resource-limit-exceeded" : ""
+            }`}
+          >
             <div className="resource-card-main">
               <span className="resource-card-icon" aria-hidden="true">
                 ◷
@@ -654,17 +745,14 @@ function MainPage() {
                   <small> ms</small>
                 </strong>
               </div>
-
-              {wallTimePercentage >= 100 && (
+              {isTimeLimitExceeded && (
                 <span className="resource-limit-badge">제한 초과</span>
               )}
             </div>
-
             <p>
               제한 {selectedPolicy.timeoutMs.toLocaleString()} ms (
               {wallTimePercentage}%)
             </p>
-
             <div
               className="resource-progress"
               role="progressbar"
@@ -679,7 +767,7 @@ function MainPage() {
 
           <article
             className={`resource-usage-card resource-memory${
-              memoryPercentage >= 100 ? " resource-limit-exceeded" : ""
+              isMemoryLimitExceeded ? " resource-limit-exceeded" : ""
             }`}
           >
             <div className="resource-card-main">
@@ -696,7 +784,7 @@ function MainPage() {
                 </strong>
               </div>
 
-              {memoryPercentage >= 100 && (
+              {isMemoryLimitExceeded && (
                 <span className="resource-limit-badge">제한 초과</span>
               )}
             </div>
@@ -717,7 +805,11 @@ function MainPage() {
             </div>
           </article>
 
-          <article className="resource-usage-card resource-process">
+          <article
+            className={`resource-usage-card resource-process${
+              isPidsLimitExceeded ? " resource-limit-exceeded" : ""
+            }`}
+          >
             <div className="resource-card-main">
               <span className="resource-card-icon" aria-hidden="true">
                 ♙
@@ -732,15 +824,13 @@ function MainPage() {
                 </strong>
               </div>
 
-              {pidsPercentage >= 100 && (
+              {isPidsLimitExceeded && (
                 <span className="resource-limit-badge">제한 초과</span>
               )}
             </div>
-
             <p>
               제한 {selectedPolicy.processLimit}개 ({pidsPercentage}%)
             </p>
-
             <div
               className="resource-progress"
               role="progressbar"
