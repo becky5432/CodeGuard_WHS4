@@ -1,7 +1,6 @@
 import { useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { cpp } from "@codemirror/lang-cpp";
-import StateMessage from "../components/StateMessage";
 import { ApiError, createExecution, getExecution } from "../api/executionApi";
 
 const DEFAULT_CODE = `#include <iostream>
@@ -89,7 +88,7 @@ function MainPage() {
   const [jobId, setJobId] = useState(null);
   const [executionResult, setExecutionResult] = useState(null);
   const [message, setMessage] = useState(
-    "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
+    "코드를 실행하면 이곳에서 결과 를 확인할 수 있습니다.",
   );
   const [activeIoTab, setActiveIoTab] = useState("stdin");
   const [activeOutputTab, setActiveOutputTab] = useState("stdout");
@@ -101,24 +100,9 @@ function MainPage() {
   const executionStatusLabel = {
     idle: "실행 전",
     loading: "실행 중",
-    success: "실행 완료",
+    success: "성공",
     error: "실행 실패",
-    blocked: "실행 차단",
-  }[executionState];
-
-  const stateMessageType =
-    executionState === "error" || executionState === "blocked"
-      ? "error"
-      : executionState === "loading"
-        ? "loading"
-        : "info";
-
-  const stateMessageTitle = {
-    idle: "결과 대기 중",
-    loading: "실행 요청 중",
-    success: "실행 완료",
-    error: "오류 발생",
-    blocked: "실행 차단",
+    blocked: "정책 위반",
   }[executionState];
 
   const outputByTab = {
@@ -130,6 +114,11 @@ function MainPage() {
   const resultOutput = executionResult
     ? outputByTab[activeOutputTab] || "출력 내용이 없습니다."
     : "아직 실행 결과가 없습니다.";
+  const executionReasonCode = executionResult?.reason_code ?? "-";
+
+  const executionExitCode = executionResult?.exit_code ?? "-";
+
+  const totalExecutionTime = executionResult?.resource_usage?.wall_time_ms ?? 0;
 
   const pollExecution = async (currentJobId) => {
     while (true) {
@@ -475,37 +464,61 @@ function MainPage() {
         <section className="workspace-panel result-section">
           <div className="workspace-panel-header">
             <h2>실행 결과</h2>
-
-            <span
-              className="waiting-badge"
-              title={jobId ? `실행 ID: ${jobId}` : undefined}
-            >
-              {executionStatusLabel}
-            </span>
           </div>
 
-          <div className="result-placeholder">
-            <StateMessage
-              type={stateMessageType}
-              title={stateMessageTitle}
-              description={message}
-            />
+          <div className="execution-result-content">
+            <div className="execution-result-row">
+              <strong>상태</strong>
 
-            <div className="result-tabs">
-              <button className="result-tab active" type="button">
-                stdout
-              </button>
-
-              <button className="result-tab" type="button">
-                stderr
-              </button>
-
-              <button className="result-tab" type="button">
-                컴파일 로그
-              </button>
+              <span
+                className={`execution-status-badge execution-status-${executionState}`}
+                title={jobId ? `실행 ID: ${jobId}` : undefined}
+              >
+                {executionStatusLabel}
+              </span>
             </div>
 
-            <pre className="result-output">{resultOutput}</pre>
+            {executionState !== "idle" && (
+              <p
+                className={`execution-message execution-message-${executionState}`}
+              >
+                {message}
+              </p>
+            )}
+
+            <div className="execution-result-row">
+              <strong>사유 코드</strong>
+              <span>{executionReasonCode}</span>
+            </div>
+
+            <div className="execution-result-row">
+              <strong>exit code</strong>
+              <span>{executionExitCode}</span>
+            </div>
+
+            <div className="execution-stage-section">
+              <h3>단계별 결과</h3>
+
+              <div className="execution-stage-row">
+                <span>compile</span>
+                <span className="execution-stage-waiting">- 대기</span>
+              </div>
+
+              <div className="execution-stage-row">
+                <span>execute</span>
+                <span className="execution-stage-waiting">- 대기</span>
+              </div>
+
+              <div className="execution-stage-row">
+                <span>cleanup</span>
+                <span className="execution-stage-waiting">- 대기</span>
+              </div>
+            </div>
+
+            <div className="execution-total-time">
+              <strong>총 소요 시간</strong>
+              <span>{totalExecutionTime.toLocaleString()} ms</span>
+            </div>
           </div>
         </section>
       </div>
