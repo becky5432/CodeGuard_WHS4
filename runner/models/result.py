@@ -21,7 +21,7 @@ class RunnerStage(str, Enum):
 class RunnerReasonCode(str, Enum):
     TIME_LIMIT = "TIME_LIMIT"
     MEMORY_LIMIT = "MEMORY_LIMIT"
-    PROCESS_LIMIT = "PROCESS_LIMIT"
+    PIDS_LIMIT = "PIDS_LIMIT"
     OUTPUT_LIMIT = "OUTPUT_LIMIT"
     NETWORK_BLOCKED = "NETWORK_BLOCKED"
     COMPILE_ERROR = "COMPILE_ERROR"
@@ -46,7 +46,7 @@ class ResourceUsage(BaseModel):
     wall_time_ms: int | None = None
     cpu_time_ms: int | None = None
     memory_peak_bytes: int | None = None
-    process_peak: int | None = None
+    pids_peak: int | None = None
 
 
 class RunnerResponse(BaseModel):

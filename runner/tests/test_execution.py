@@ -18,7 +18,7 @@ class ExecutionTests(unittest.TestCase):
         self.container = MagicMock()
         self.client.containers.create.return_value = self.container
         self.container.wait.return_value = {"StatusCode": 0}
-        self.container.logs.side_effect = [b"Hello\n", b""]
+        self.container.attach.return_value = [(b"Hello\n", None)]
         self.workspace = VolumeWorkspace(
             job_id=uuid4(),
             volume_name="codeguard-job-test",
@@ -32,6 +32,7 @@ class ExecutionTests(unittest.TestCase):
             stdin="",
             job_id=self.workspace.job_id,
             run_id=self.run_id,
+            memory_limit_mb=128,
         )
 
         self.assertIs(result, self.container)
@@ -45,6 +46,8 @@ class ExecutionTests(unittest.TestCase):
                 }
             },
             detach=True,
+            mem_limit=128 * 1024 * 1024,
+            memswap_limit=128 * 1024 * 1024,
             labels={
                 "codeguard.managed": "true",
                 "codeguard.job_id": str(self.workspace.job_id),
@@ -60,6 +63,7 @@ class ExecutionTests(unittest.TestCase):
             stdin="21\n",
             job_id=self.workspace.job_id,
             run_id=self.run_id,
+            memory_limit_mb=128,
         )
 
         command = self.client.containers.create.call_args.kwargs["command"]
@@ -73,6 +77,7 @@ class ExecutionTests(unittest.TestCase):
             container=self.container,
             job_id=self.workspace.job_id,
             run_id=self.run_id,
+            timeout_ms=2000,
         )
 
         self.assertEqual(result.exit_code, 0)
@@ -94,6 +99,7 @@ class ExecutionTests(unittest.TestCase):
                 stdin="",
                 job_id=self.workspace.job_id,
                 run_id=self.run_id,
+                memory_limit_mb=128,
             )
 
     def test_execute_program_returns_system_error_without_removing_container(self) -> None:
@@ -103,6 +109,7 @@ class ExecutionTests(unittest.TestCase):
             container=self.container,
             job_id=self.workspace.job_id,
             run_id=self.run_id,
+            timeout_ms=2000,
         )
 
         self.assertIsNotNone(result.system_error)
