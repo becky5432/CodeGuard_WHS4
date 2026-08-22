@@ -52,6 +52,13 @@ const POLICY_PROFILE_PREVIEW = {
 
 const POLLING_INTERVAL_MS = 1000;
 const wait = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
+function calculateUsagePercentage(value, limit) {
+  if (!value || !limit) {
+    return 0;
+  }
+
+  return Math.min(Math.round((value / limit) * 100), 100);
+}
 
 function getExecutionErrorMessage(error, phase) {
   const action = phase === "polling" ? "실행 상태 및 결과 조회" : "실행 요청";
@@ -118,7 +125,30 @@ function MainPage() {
 
   const executionExitCode = executionResult?.exit_code ?? "-";
 
-  const totalExecutionTime = executionResult?.resource_usage?.wall_time_ms ?? 0;
+  const resourceUsage = executionResult?.resource_usage;
+
+  const wallTimeMs = resourceUsage?.wall_time_ms ?? 0;
+
+  const memoryPeakMb = resourceUsage?.memory_peak_bytes
+    ? resourceUsage.memory_peak_bytes / 1024 / 1024
+    : 0;
+
+  const processPeak = resourceUsage?.process_peak ?? 0;
+
+  const wallTimePercentage = calculateUsagePercentage(
+    wallTimeMs,
+    selectedPolicy.timeoutMs,
+  );
+
+  const memoryPercentage = calculateUsagePercentage(
+    memoryPeakMb,
+    selectedPolicy.memoryLimitMb,
+  );
+
+  const processPercentage = calculateUsagePercentage(
+    processPeak,
+    selectedPolicy.processLimit,
+  );
 
   const pollExecution = async (currentJobId) => {
     while (true) {
@@ -517,7 +547,7 @@ function MainPage() {
 
             <div className="execution-total-time">
               <strong>총 소요 시간</strong>
-              <span>{totalExecutionTime.toLocaleString()} ms</span>
+              <span>{wallTimeMs.toLocaleString()} ms</span>{" "}
             </div>
           </div>
         </section>
@@ -528,20 +558,118 @@ function MainPage() {
           <h2>자원 사용량 요약</h2>
         </div>
 
-        <div className="resource-placeholder">
-          <article>
-            <span>Wall Time</span>
-            <strong>-</strong>
+        <div className="resource-card-grid">
+          <article className="resource-usage-card resource-wall-time">
+            <div className="resource-card-main">
+              <span className="resource-card-icon" aria-hidden="true">
+                ◷
+              </span>
+
+              <div className="resource-card-value">
+                <span>Wall Time</span>
+
+                <strong>
+                  {wallTimeMs.toLocaleString()}
+                  <small> ms</small>
+                </strong>
+              </div>
+
+              {wallTimePercentage >= 100 && (
+                <span className="resource-limit-badge">제한 초과</span>
+              )}
+            </div>
+
+            <p>
+              제한 {selectedPolicy.timeoutMs.toLocaleString()} ms (
+              {wallTimePercentage}%)
+            </p>
+
+            <div
+              className="resource-progress"
+              role="progressbar"
+              aria-label="실행 시간 사용률"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={wallTimePercentage}
+            >
+              <span style={{ width: `${wallTimePercentage}%` }} />
+            </div>
           </article>
 
-          <article>
-            <span>Memory Peak</span>
-            <strong>-</strong>
+          <article
+            className={`resource-usage-card resource-memory${
+              memoryPercentage >= 100 ? " resource-limit-exceeded" : ""
+            }`}
+          >
+            <div className="resource-card-main">
+              <span className="resource-card-icon" aria-hidden="true">
+                ▦
+              </span>
+
+              <div className="resource-card-value">
+                <span>Memory Peak</span>
+
+                <strong>
+                  {memoryPeakMb.toFixed(1)}
+                  <small> MB</small>
+                </strong>
+              </div>
+
+              {memoryPercentage >= 100 && (
+                <span className="resource-limit-badge">제한 초과</span>
+              )}
+            </div>
+
+            <p>
+              제한 {selectedPolicy.memoryLimitMb} MB ({memoryPercentage}%)
+            </p>
+
+            <div
+              className="resource-progress"
+              role="progressbar"
+              aria-label="메모리 사용률"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={memoryPercentage}
+            >
+              <span style={{ width: `${memoryPercentage}%` }} />
+            </div>
           </article>
 
-          <article>
-            <span>Process Peak</span>
-            <strong>-</strong>
+          <article className="resource-usage-card resource-process">
+            <div className="resource-card-main">
+              <span className="resource-card-icon" aria-hidden="true">
+                ♙
+              </span>
+
+              <div className="resource-card-value">
+                <span>Process Peak</span>
+
+                <strong>
+                  {processPeak.toLocaleString()}
+                  <small> 개</small>
+                </strong>
+              </div>
+
+              {processPercentage >= 100 && (
+                <span className="resource-limit-badge">제한 초과</span>
+              )}
+            </div>
+
+            <p>
+              제한 {selectedPolicy.processLimit}개 ({processPercentage}%)
+            </p>
+
+            <div
+              className="resource-progress"
+              role="progressbar"
+              aria-label="프로세스 사용률"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow={processPercentage}
+            >
+              <span style={{ width: `${processPercentage}%` }} />
+            </div>
           </article>
         </div>
       </section>

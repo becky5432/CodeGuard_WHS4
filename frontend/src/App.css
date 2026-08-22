@@ -429,33 +429,131 @@ button {
   margin-bottom: 14px;
 }
 
-.resource-placeholder {
+/* 자원 사용량 요약 */
+
+.resource-card-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
 
-.resource-placeholder article {
-  min-height: 120px;
+.resource-usage-card {
+  min-width: 0;
   padding: 20px;
   border: 1px solid var(--gray-200);
   border-radius: 10px;
   background-color: var(--white);
 }
 
-.resource-placeholder span,
-.resource-placeholder strong {
-  display: block;
+.resource-card-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
 }
 
-.resource-placeholder span {
-  margin-bottom: 10px;
+.resource-card-icon {
+  display: grid;
+  flex: 0 0 46px;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 12px;
+  font-size: 21px;
+}
+
+.resource-wall-time .resource-card-icon {
+  color: var(--blue-600);
+  background-color: var(--blue-100);
+}
+
+.resource-memory .resource-card-icon {
+  color: var(--green-700);
+  background-color: var(--green-100);
+}
+
+.resource-process .resource-card-icon {
+  color: #7545d8;
+  background-color: #f1ebff;
+}
+
+.resource-card-value {
+  min-width: 0;
+}
+
+.resource-card-value > span {
+  display: block;
   color: var(--gray-600);
   font-size: 13px;
 }
 
-.resource-placeholder strong {
-  font-size: 24px;
+.resource-card-value strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 28px;
+  line-height: 1.2;
+}
+
+.resource-card-value small {
+  color: var(--gray-600);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.resource-limit-badge {
+  margin-left: auto;
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: #c9392f;
+  background-color: #ffdcd8;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.resource-usage-card > p {
+  margin: 14px 0 8px;
+  color: var(--gray-600);
+  font-size: 12px;
+}
+
+.resource-progress {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background-color: var(--gray-200);
+}
+
+.resource-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.25s ease;
+}
+
+.resource-wall-time .resource-progress span {
+  background-color: var(--blue-600);
+}
+
+.resource-memory .resource-progress span {
+  background-color: #54ad5f;
+}
+
+.resource-process .resource-progress span {
+  background-color: #7545d8;
+}
+
+.resource-limit-exceeded {
+  border-color: #efaaa4;
+  background-color: #fff7f6;
+}
+
+.resource-limit-exceeded .resource-card-icon {
+  color: #d83b31;
+  background-color: #ffe3df;
+}
+
+.resource-limit-exceeded .resource-progress span {
+  background-color: #e04435;
 }
 
 /* 메인 화면 반응형 배치 */
@@ -480,14 +578,14 @@ button {
     grid-column: auto;
   }
 
+  .resource-card-grid {
+    grid-template-columns: 1fr;
+  }
+
   .editor-section,
   .settings-section,
   .result-section {
     min-height: auto;
-  }
-
-  .resource-placeholder {
-    grid-template-columns: 1fr;
   }
 }
 
