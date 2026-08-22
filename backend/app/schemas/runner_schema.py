@@ -29,7 +29,7 @@ class RunnerStage(str, Enum):
 class RunnerReasonCode(str, Enum):
     TIME_LIMIT = "TIME_LIMIT"
     MEMORY_LIMIT = "MEMORY_LIMIT"
-    PROCESS_LIMIT = "PROCESS_LIMIT"
+    PIDS_LIMIT = "PIDS_LIMIT"        # 프로세스 + 스레드 수 제한
     OUTPUT_LIMIT = "OUTPUT_LIMIT"
     NETWORK_BLOCKED = "NETWORK_BLOCKED"
     COMPILE_ERROR = "COMPILE_ERROR"
