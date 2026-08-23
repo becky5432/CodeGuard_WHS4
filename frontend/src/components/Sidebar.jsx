@@ -100,6 +100,7 @@ function Sidebar({ isCollapsed, onToggle }) {
           {!isCollapsed && <span className="navigation-label">메인</span>}
         </NavLink>
 
+        {/* 중간발표 이후 실행 기록 화면 구현 시 다시 활성화
         <NavLink
           className={({ isActive }) =>
             `navigation-item${isActive ? " active" : ""}`
@@ -113,6 +114,7 @@ function Sidebar({ isCollapsed, onToggle }) {
 
           {!isCollapsed && <span className="navigation-label">실행 기록</span>}
         </NavLink>
+        */}
       </nav>
 
       {!isCollapsed ? (
