@@ -84,6 +84,7 @@ def create_execution_container(
     job_id: UUID,
     run_id: UUID,
     memory_limit_mb: int,
+    cpu_limit: float,
 ):
     """Job Volume을 연결한 실행 컨테이너를 생성하고 반환한다."""
 
@@ -96,6 +97,7 @@ def create_execution_container(
         ]
 
     memory_limit_bytes = memory_limit_mb * 1024 * 1024
+    nano_cpus_limit = int(cpu_limit * 1_000_000_000)
 
     try:
         return client.containers.create(
@@ -110,6 +112,7 @@ def create_execution_container(
             detach=True,
             mem_limit=memory_limit_bytes,
             memswap_limit=memory_limit_bytes,
+            nano_cpus=nano_cpus_limit,
             labels={
                 "codeguard.managed": "true",
                 "codeguard.job_id": str(job_id),
