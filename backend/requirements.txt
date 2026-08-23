@@ -1,5 +1,7 @@
-fastapi
-uvicorn[standard]
-sqlalchemy
-pydantic-settings
-httpx
+# Python runtime: 3.14.3
+fastapi==0.115.14
+uvicorn[standard]==0.51.0
+pydantic==2.12.5
+pydantic-settings==2.14.2
+httpx==0.28.1
+sqlalchemy==2.0.51
