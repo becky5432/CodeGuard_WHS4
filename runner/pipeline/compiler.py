@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import docker
+from requests.exceptions import Timeout
 
 from runner.config import settings
 from runner.exceptions import (
@@ -9,6 +10,7 @@ from runner.exceptions import (
     WorkspaceError,
 )
 from runner.pipeline.workspace import VolumeWorkspace, build_source_archive
+from runner.policies import COMPILE_TIMEOUT_SECONDS
 
 
 @dataclass
@@ -20,6 +22,7 @@ class CompileResult:
     stderr: str
     exit_code: int | None
     artifact_ready: bool = False
+    timed_out: bool = False
 
 COMMON_COMPILE_FLAGS = [
     "-Wall",
@@ -158,7 +161,28 @@ def compile_source(
             )
 
         container.start()
-        wait_result = container.wait()
+        try:
+            wait_result = container.wait(timeout=COMPILE_TIMEOUT_SECONDS)
+        except Timeout:
+            try:
+                container.kill()
+            except docker.errors.DockerException:
+                # executor의 finally에서 force remove를 다시 수행한다.
+                pass
+
+            try:
+                container.wait(timeout=2)
+            except (Timeout, docker.errors.DockerException):
+                pass
+
+            return CompileResult(
+                success=False,
+                stdout="",
+                stderr="",
+                exit_code=None,
+                artifact_ready=False,
+                timed_out=True,
+            )
         exit_code = int(wait_result["StatusCode"])
         stdout_bytes = container.logs(stdout=True, stderr=False)
         stderr_bytes = container.logs(stdout=False, stderr=True)

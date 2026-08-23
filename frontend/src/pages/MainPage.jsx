@@ -275,24 +275,24 @@ function MainPage() {
 
   // 실제 Runner 응답 기반 자원 사용량
   const resourceUsage = executionResult?.resource_usage;
-  const wallTimeMs = resourceUsage?.wall_time_ms ?? 0;
-  const memoryPeakMb = resourceUsage?.memory_peak_bytes
+  const wallTimeMs = resourceUsage?.wall_time_ms;
+  const memoryPeakMb = resourceUsage?.memory_peak_bytes != null
     ? resourceUsage.memory_peak_bytes / 1024 / 1024
-    : 0;
-  const pidsPeak = resourceUsage?.pids_peak ?? 0;
+    : null;
+  const pidsPeak = resourceUsage?.pids_peak;
 
   const wallTimePercentage = calculateUsagePercentage(
-    wallTimeMs,
+    wallTimeMs ?? 0,
     selectedPolicy.timeoutMs,
   );
 
   const memoryPercentage = calculateUsagePercentage(
-    memoryPeakMb,
+    memoryPeakMb ?? 0,
     selectedPolicy.memoryLimitMb,
   );
 
   const pidsPercentage = calculateUsagePercentage(
-    pidsPeak,
+    pidsPeak ?? 0,
     selectedPolicy.processLimit,
   );
 
@@ -741,8 +741,8 @@ function MainPage() {
                 <span>Wall Time</span>
 
                 <strong>
-                  {wallTimeMs.toLocaleString()}
-                  <small> ms</small>
+                  {wallTimeMs == null ? "-" : wallTimeMs.toLocaleString()}
+                  {wallTimeMs != null && <small> ms</small>}
                 </strong>
               </div>
               {isTimeLimitExceeded && (
@@ -779,8 +779,8 @@ function MainPage() {
                 <span>Memory Peak</span>
 
                 <strong>
-                  {memoryPeakMb.toFixed(1)}
-                  <small> MB</small>
+                  {memoryPeakMb == null ? "-" : memoryPeakMb.toFixed(1)}
+                  {memoryPeakMb != null && <small> MB</small>}
                 </strong>
               </div>
 
@@ -816,11 +816,11 @@ function MainPage() {
               </span>
 
               <div className="resource-card-value">
-                <span>Process Peak</span>
+                <span>PIDs Peak</span>
 
                 <strong>
-                  {pidsPeak.toLocaleString()}
-                  <small> 개</small>
+                  {pidsPeak == null ? "-" : pidsPeak.toLocaleString()}
+                  {pidsPeak != null && <small> 개</small>}
                 </strong>
               </div>
 

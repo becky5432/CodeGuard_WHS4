@@ -228,6 +228,7 @@ class ExecuteApiTests(unittest.TestCase):
             run_id=ANY,
             memory_limit_mb=body["policy"]["memory_limit_mb"],
             cpu_limit=body["policy"]["cpu_limit"],
+            pids_limit=body["policy"]["pids_limit"],
         )
 
         self.remove_workspace_mock.assert_called_once_with(
@@ -325,6 +326,60 @@ class ExecuteApiTests(unittest.TestCase):
         )
 
         self.execution_container.remove.assert_not_called()
+
+    def test_execute_returns_compile_timeout_and_skips_execution(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
+            success=False,
+            stdout="",
+            stderr="",
+            exit_code=None,
+            timed_out=True,
+        )
+
+        payload = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        ).json()
+
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertEqual(payload["reason_code"], "COMPILE_TIMEOUT")
+        self.assertEqual(payload["stage_summary"]["failed"], ["COMPILE"])
+        self.assertEqual(payload["stage_summary"]["skipped"], ["EXECUTE"])
+        self.create_execution_container_mock.assert_not_called()
+        self.execute_program_mock.assert_not_called()
+        self.compile_container.remove.assert_called_once_with(force=True)
+
+    def test_execute_returns_all_measured_resource_usage(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
+            success=True,
+            stdout="",
+            stderr="",
+            exit_code=0,
+            artifact_ready=True,
+        )
+        self.execute_program_mock.return_value = ExecutionResult(
+            exit_code=0,
+            stdout="",
+            stderr="",
+            wall_time_ms=25,
+            memory_peak_bytes=200,
+            pids_peak=5,
+        )
+
+        payload = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        ).json()
+
+        self.assertEqual(
+            payload["resource_usage"],
+            {
+                "wall_time_ms": 25,
+                "cpu_time_ms": None,
+                "memory_peak_bytes": 200,
+                "pids_peak": 5,
+            },
+        )
 
     def test_execute_returns_compile_internal_error(self) -> None:
         self.compile_source_mock.side_effect = ContainerExecutionError(

@@ -11,6 +11,7 @@ class ResourceMonitor:
     def __init__(self, container) -> None:
         self.container = container
         self.memory_peak_bytes: int | None = None
+        self.pids_peak: int | None = None
         self.error: Exception | None = None
         self._thread: threading.Thread | None = None
         self._stream = None
@@ -31,6 +32,16 @@ class ResourceMonitor:
 
     def stop(self, timeout: float = 1.5) -> bool:
         self._stop_event.set()
+        stream = self._stream
+        close = getattr(stream, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception as exc:
+                logger.warning(
+                    "event=resource_monitor_close_error error=%s",
+                    exc,
+                )
         self.join(timeout=timeout)
         stopped = self._thread is None or not self._thread.is_alive()
         if not stopped:
@@ -59,6 +70,12 @@ class ResourceMonitor:
                 or usage > self.memory_peak_bytes
             ):
                 self.memory_peak_bytes = usage
+
+        pids_stats = stats.get("pids_stats") or {}
+        current = pids_stats.get("current")
+        if isinstance(current, int):
+            if self.pids_peak is None or current > self.pids_peak:
+                self.pids_peak = current
 
     def _collect(self) -> None:
         stream = None
