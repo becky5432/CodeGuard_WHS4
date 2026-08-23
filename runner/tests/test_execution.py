@@ -43,7 +43,7 @@ class ExecutionTests(unittest.TestCase):
             volumes={
                 self.workspace.volume_name: {
                     "bind": "/workspace",
-                    "mode": "rw",
+                    "mode": "ro",
                 }
             },
             detach=True,
