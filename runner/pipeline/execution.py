@@ -106,7 +106,7 @@ def create_execution_container(
             volumes={
                 workspace.volume_name: {
                     "bind": "/workspace",
-                    "mode": "rw",
+                    "mode": "ro",
                 }
             },
             detach=True,
