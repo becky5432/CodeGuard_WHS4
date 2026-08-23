@@ -227,6 +227,7 @@ class ExecuteApiTests(unittest.TestCase):
             job_id=UUID(body["job_id"]),
             run_id=ANY,
             memory_limit_mb=body["policy"]["memory_limit_mb"],
+            cpu_limit=body["policy"]["cpu_limit"],
         )
 
         self.remove_workspace_mock.assert_called_once_with(
