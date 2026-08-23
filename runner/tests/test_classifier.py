@@ -28,6 +28,30 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(result.status, RunnerStatus.ERROR)
         self.assertEqual(result.reason_code, RunnerReasonCode.INTERNAL_ERROR)
 
+    def test_timeout_is_blocked_time_limit(self) -> None:
+        result = classify_execution(
+            ExecutionResult(None, "", "", timed_out=True),
+        )
+
+        self.assertEqual(result.status, RunnerStatus.BLOCKED)
+        self.assertEqual(result.reason_code, RunnerReasonCode.TIME_LIMIT)
+
+    def test_oom_kill_is_blocked_memory_limit(self) -> None:
+        result = classify_execution(
+            ExecutionResult(137, "", "", oom_killed=True),
+        )
+
+        self.assertEqual(result.status, RunnerStatus.BLOCKED)
+        self.assertEqual(result.reason_code, RunnerReasonCode.MEMORY_LIMIT)
+
+    def test_output_overflow_is_blocked_output_limit(self) -> None:
+        result = classify_execution(
+            ExecutionResult(137, "", "", output_limit_exceeded=True),
+        )
+
+        self.assertEqual(result.status, RunnerStatus.BLOCKED)
+        self.assertEqual(result.reason_code, RunnerReasonCode.OUTPUT_LIMIT)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -123,8 +123,27 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             compile_result.stderr,
         )
 
+        if compile_result.timed_out:
+            message = "컴파일 시간 제한을 초과했습니다."
+            _mark_failed(
+                stage_summary,
+                RunnerStage.COMPILE,
+                RunnerReasonCode.COMPILE_TIMEOUT,
+                message,
+            )
+            _mark_skipped(stage_summary, RunnerStage.EXECUTE)
+            response = RunnerResponse(
+                job_id=job.job_id,
+                run_id=run_id,
+                status=RunnerStatus.ERROR,
+                reason_code=RunnerReasonCode.COMPILE_TIMEOUT,
+                error_message=message,
+                exit_code=compile_result.exit_code,
+                compile_log=compile_log,
+            )
+
         # exit code는 성공인데 실행 파일이 생성되지 않은 경우
-        if compile_result.exit_code == 0 and not compile_result.artifact_ready:
+        elif compile_result.exit_code == 0 and not compile_result.artifact_ready:
             message = "컴파일 실행 파일을 확인하지 못했습니다."
             _mark_failed(
                 stage_summary,
@@ -178,6 +197,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 run_id=run_id,
                 memory_limit_mb=job.policy.memory_limit_mb,
                 cpu_limit=job.policy.cpu_limit,
+                pids_limit=job.policy.pids_limit,
             )
 
             execution_result = execute_program(
@@ -223,6 +243,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                     memory_peak_bytes=(
                         execution_result.memory_peak_bytes
                     ),
+                    pids_peak=execution_result.pids_peak,
                 ),
             )
 

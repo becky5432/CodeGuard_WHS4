@@ -34,6 +34,7 @@ class ExecutionTests(unittest.TestCase):
             run_id=self.run_id,
             memory_limit_mb=128,
             cpu_limit=1.0,
+            pids_limit=10,
         )
 
         self.assertIs(result, self.container)
@@ -50,6 +51,7 @@ class ExecutionTests(unittest.TestCase):
             mem_limit=128 * 1024 * 1024,
             memswap_limit=128 * 1024 * 1024,
             nano_cpus=1_000_000_000,
+            pids_limit=10,
             labels={
                 "codeguard.managed": "true",
                 "codeguard.job_id": str(self.workspace.job_id),
@@ -67,6 +69,7 @@ class ExecutionTests(unittest.TestCase):
             run_id=self.run_id,
             memory_limit_mb=128,
             cpu_limit=1.0,
+            pids_limit=10,
         )
 
         command = self.client.containers.create.call_args.kwargs["command"]
@@ -104,6 +107,7 @@ class ExecutionTests(unittest.TestCase):
                 run_id=self.run_id,
                 memory_limit_mb=128,
                 cpu_limit=1.0,
+                pids_limit=10,
             )
 
     def test_execute_program_returns_system_error_without_removing_container(self) -> None:

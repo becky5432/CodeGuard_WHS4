@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import docker
+from requests.exceptions import ReadTimeout
 
 from runner.exceptions import ContainerExecutionError, WorkspaceError
 from runner.pipeline.compiler import (
@@ -93,6 +94,28 @@ class CompilerTests(unittest.TestCase):
             self.assertEqual(archive.getnames(), ["main.cpp", "stdin"])
         method_names = [call[0] for call in self.container.method_calls]
         self.assertLess(method_names.index("put_archive"), method_names.index("start"))
+        self.container.remove.assert_not_called()
+
+    def test_compile_source_times_out_kills_and_reaps_container(self) -> None:
+        self.container.wait.side_effect = [
+            ReadTimeout("compile timeout"),
+            {"StatusCode": 137},
+        ]
+
+        result = compile_source(
+            container=self.container,
+            workspace=self.workspace,
+            language="CPP",
+            code="int main() { return 0; }",
+        )
+
+        self.assertTrue(result.timed_out)
+        self.assertFalse(result.success)
+        self.assertIsNone(result.exit_code)
+        self.container.kill.assert_called_once_with()
+        self.assertEqual(self.container.wait.call_count, 2)
+        self.container.wait.assert_any_call(timeout=10)
+        self.container.wait.assert_any_call(timeout=2)
         self.container.remove.assert_not_called()
 
     def test_compile_source_returns_compile_error(self) -> None:

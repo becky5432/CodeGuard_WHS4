@@ -27,6 +27,7 @@ class ExecutionResult:
     oom_killed: bool = False
     wall_time_ms: int | None = None
     memory_peak_bytes: int | None = None
+    pids_peak: int | None = None
 
 
 class _BoundedOutput:
@@ -85,6 +86,7 @@ def create_execution_container(
     run_id: UUID,
     memory_limit_mb: int,
     cpu_limit: float,
+    pids_limit: int,
 ):
     """Job Volume을 연결한 실행 컨테이너를 생성하고 반환한다."""
 
@@ -113,6 +115,7 @@ def create_execution_container(
             mem_limit=memory_limit_bytes,
             memswap_limit=memory_limit_bytes,
             nano_cpus=nano_cpus_limit,
+            pids_limit=pids_limit,
             labels={
                 "codeguard.managed": "true",
                 "codeguard.job_id": str(job_id),
@@ -345,6 +348,7 @@ def execute_program(
             oom_killed=oom_killed,
             wall_time_ms=int((finished_at - start) * 1000),
             memory_peak_bytes=memory_peak_bytes,
+            pids_peak=monitor.pids_peak,
         )
     except docker.errors.DockerException as exc:
         logger.error(
@@ -360,4 +364,5 @@ def execute_program(
             system_error="실행 컨테이너 처리에 실패했습니다.",
             wall_time_ms=int((time.monotonic() - start) * 1000),
             memory_peak_bytes=monitor.memory_peak_bytes,
+            pids_peak=monitor.pids_peak,
         )
