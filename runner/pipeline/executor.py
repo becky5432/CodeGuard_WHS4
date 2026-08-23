@@ -177,6 +177,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 job_id=job.job_id,
                 run_id=run_id,
                 memory_limit_mb=job.policy.memory_limit_mb,
+                cpu_limit=job.policy.cpu_limit,
             )
 
             execution_result = execute_program(
