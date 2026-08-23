@@ -2,6 +2,8 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
+from app.config import POLICY_PRESETS
+
 from app.db import repository
 from app.db.database import SessionLocal
 from app.schemas.execution_schema import (
@@ -11,6 +13,7 @@ from app.schemas.execution_schema import (
     ExecutionResultResponse,
     ExecutionStage,
     ExecutionStatus,
+    PolicyLimits,
     ResourceUsage,
     StageError,
     StageSummary as ExecutionStageSummary,
@@ -35,7 +38,23 @@ class ExecutionService:
         return ExecutionStageSummary.model_validate(
             summary.model_dump(mode="json")
         )
-         
+
+    # 정책 프리셋 설정파일에서 제한값 가져옴
+    def resolve_policy(
+        self,
+        request: ExecutionCreateRequest,
+    ) -> PolicyLimits:
+        policy_values = POLICY_PRESETS.get(
+            request.policy_profile.value
+        )
+
+        if policy_values is None:
+            raise ValueError(
+                f"지원하지 않는 정책 프로파일입니다: "
+                f"{request.policy_profile.value}"
+            )
+
+        return PolicyLimits.model_validate(policy_values)     
 
     # 프론트의 실행 요청 접수
     def submit(
@@ -44,7 +63,9 @@ class ExecutionService:
         db: Session,
     ) -> tuple[ExecutionCreateResponse, RunnerRequest]:
         job_id = uuid4()
-        limits = request.policy.model_dump()
+
+        resolved_policy = self.resolve_policy(request)
+        limits = resolved_policy.model_dump()
 
         try:
             execution = repository.create_execution(
@@ -65,7 +86,7 @@ class ExecutionService:
             language=RunnerLanguage(request.language.value),
             code=request.code,
             stdin=request.stdin,
-            policy=request.policy,
+            policy=resolved_policy,
             created_at=execution.created_at,
         )
 
