@@ -65,9 +65,9 @@ const EXECUTION_RESULT_PRESENTATION = {
     message: "코드를 컴파일하지 못했습니다. 컴파일 로그를 확인해주세요.",
   },
   COMPILE_TIMEOUT: {
-    state: "blocked",
+    state: "error",
     label: "컴파일 시간 초과",
-    message: "컴파일 시간이 정책 제한을 초과했습니다.",
+    message: "컴파일 제한 시간을 초과했습니다.",
   },
   RUNTIME_ERROR: {
     state: "error",
@@ -276,9 +276,10 @@ function MainPage() {
   // 실제 Runner 응답 기반 자원 사용량
   const resourceUsage = executionResult?.resource_usage;
   const wallTimeMs = resourceUsage?.wall_time_ms;
-  const memoryPeakMb = resourceUsage?.memory_peak_bytes != null
-    ? resourceUsage.memory_peak_bytes / 1024 / 1024
-    : null;
+  const memoryPeakMb =
+    resourceUsage?.memory_peak_bytes != null
+      ? resourceUsage.memory_peak_bytes / 1024 / 1024
+      : null;
   const pidsPeak = resourceUsage?.pids_peak;
 
   const wallTimePercentage = calculateUsagePercentage(
@@ -714,7 +715,9 @@ function MainPage() {
 
             <div className="execution-total-time">
               <strong>총 소요 시간</strong>
-              <span>{wallTimeMs.toLocaleString()} ms</span>
+              <span>
+                {wallTimeMs == null ? "-" : `${wallTimeMs.toLocaleString()} ms`}
+              </span>
             </div>
           </div>
         </section>
