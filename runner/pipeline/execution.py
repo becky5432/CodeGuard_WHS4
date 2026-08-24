@@ -272,6 +272,7 @@ def execute_program(
                         run_id,
                         exc,
                     )
+            pids_monitor.sample()
 
         final_policy_kill = timed_out or output.exceeded.is_set() or pids_limit_exceeded
         if not output_thread_stopped:
@@ -359,7 +360,7 @@ def execute_program(
             oom_killed=oom_killed,
             wall_time_ms=int((finished_at - start) * 1000),
             memory_peak_bytes=memory_peak_bytes,
-            pids_peak=monitor.pids_peak,
+            pids_peak=pids_monitor.pids_peak,
             pids_limit_exceeded=pids_limit_exceeded,
         )
     except docker.errors.DockerException as exc:
@@ -376,5 +377,5 @@ def execute_program(
             system_error="실행 컨테이너 처리에 실패했습니다.",
             wall_time_ms=int((time.monotonic() - start) * 1000),
             memory_peak_bytes=monitor.memory_peak_bytes,
-            pids_peak=monitor.pids_peak,
+            pids_peak=pids_monitor.pids_peak,
         )
