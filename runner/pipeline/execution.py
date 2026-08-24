@@ -9,6 +9,7 @@ import docker
 from runner.config import settings
 from runner.exceptions import ContainerExecutionError
 from runner.metrics.resource_monitor import ResourceMonitor
+from runner.metrics.pids_monitor import PidsLimitMonitor
 from runner.pipeline.workspace import VolumeWorkspace
 from runner.policies import EXECUTION_OUTPUT_LIMIT_BYTES
 
@@ -28,6 +29,7 @@ class ExecutionResult:
     wall_time_ms: int | None = None
     memory_peak_bytes: int | None = None
     pids_peak: int | None = None
+    pids_limit_exceeded: bool = False
 
 
 class _BoundedOutput:
@@ -156,10 +158,12 @@ def execute_program(
     start = time.monotonic()
     output = _BoundedOutput(output_limit_bytes)
     monitor = ResourceMonitor(container)
+    pids_monitor = PidsLimitMonitor(container)
     wait_done = threading.Event()
     wait_state: dict[str, object] = {}
     output_state: dict[str, Exception | None] = {}
     timed_out = False
+    pids_limit_exceeded = False
     system_error = None
     output_thread = None
     monitor_started = False
@@ -191,6 +195,8 @@ def execute_program(
             start = time.monotonic()
             container.start()
 
+            pids_monitor.start()
+
             thread = threading.Thread(
                 target=collect_output,
                 name="runner-output-monitor",
@@ -211,7 +217,12 @@ def execute_program(
 
             timeout_seconds = timeout_ms / 1000
             while not wait_done.is_set():
+
                 if output.exceeded.is_set():
+                    break
+
+                if pids_monitor.exceeded():
+                    pids_limit_exceeded = True
                     break
 
                 remaining = timeout_seconds - (time.monotonic() - start)
@@ -228,7 +239,7 @@ def execute_program(
             ):
                 timed_out = True
 
-            policy_kill = timed_out or output.exceeded.is_set()
+            policy_kill = timed_out or output.exceeded.is_set() or pids_limit_exceeded
             if policy_kill and not wait_done.is_set():
                 try:
                     container.kill()
@@ -262,7 +273,7 @@ def execute_program(
                         exc,
                     )
 
-        final_policy_kill = timed_out or output.exceeded.is_set()
+        final_policy_kill = timed_out or output.exceeded.is_set() or pids_limit_exceeded
         if not output_thread_stopped:
             system_error = "실행 출력 수집기를 종료하지 못했습니다."
             logger.error(
@@ -349,6 +360,7 @@ def execute_program(
             wall_time_ms=int((finished_at - start) * 1000),
             memory_peak_bytes=memory_peak_bytes,
             pids_peak=monitor.pids_peak,
+            pids_limit_exceeded=pids_limit_exceeded,
         )
     except docker.errors.DockerException as exc:
         logger.error(
