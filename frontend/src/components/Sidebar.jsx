@@ -19,7 +19,7 @@ function HomeIcon() {
     </svg>
   );
 }
-
+/* 중간발표 이후 실행 기록 메뉴 활성화 시 함께 복원
 function HistoryIcon() {
   return (
     <svg
@@ -39,6 +39,7 @@ function HistoryIcon() {
     </svg>
   );
 }
+*/
 
 function ChevronIcon({ isCollapsed }) {
   return (
