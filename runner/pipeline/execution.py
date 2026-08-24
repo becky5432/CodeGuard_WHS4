@@ -223,15 +223,6 @@ def execute_program(
 
                 if pids_monitor.exceeded():
                     pids_limit_exceeded = True
-
-                    logger.warning(
-                        "event=pids_limit_exceeded "
-                        "job_id=%s run_id=%s pids_events_max=%s",
-                        job_id,
-                        run_id,
-                        pids_monitor.events_max,
-                    )
-
                     break
 
                 remaining = timeout_seconds - (time.monotonic() - start)
