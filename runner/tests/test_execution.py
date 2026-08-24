@@ -1,10 +1,12 @@
 import unittest
-from unittest.mock import MagicMock
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import docker
 
 from runner.exceptions import ContainerExecutionError
+from runner.metrics.cgroup_reader import CgroupSnapshot
 from runner.pipeline.execution import (
     create_execution_container,
     execute_program,
@@ -92,6 +94,34 @@ class ExecutionTests(unittest.TestCase):
         self.container.start.assert_called_once_with()
         self.container.wait.assert_called_once_with()
         self.container.remove.assert_not_called()
+
+    @patch("runner.pipeline.execution.read_cgroup_snapshot")
+    @patch("runner.pipeline.execution.resolve_container_cgroup_path")
+    def test_execute_program_prefers_exact_cgroup_peaks(
+        self,
+        resolve_cgroup_path,
+        read_cgroup_snapshot,
+    ) -> None:
+        cgroup_path = Path("/sys/fs/cgroup/system.slice/docker-test.scope")
+        resolve_cgroup_path.return_value = cgroup_path
+        read_cgroup_snapshot.return_value = CgroupSnapshot(
+            memory_peak_bytes=4096,
+            pids_peak=32,
+            pids_limit_exceeded=True,
+        )
+
+        result = execute_program(
+            container=self.container,
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            timeout_ms=2000,
+        )
+
+        resolve_cgroup_path.assert_called_once_with(self.container)
+        read_cgroup_snapshot.assert_called_once_with(cgroup_path)
+        self.assertEqual(result.memory_peak_bytes, 4096)
+        self.assertEqual(result.pids_peak, 32)
+        self.assertTrue(result.pids_limit_exceeded)
 
     def test_create_execution_container_wraps_docker_failure(self) -> None:
         self.client.containers.create.side_effect = docker.errors.APIError(

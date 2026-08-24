@@ -32,6 +32,13 @@ def classify_execution(result) -> Classification:
             stage=RunnerStage.EXECUTE,
             error_message="메모리 제한을 초과했습니다.",
         )
+    if result.pids_limit_exceeded:
+        return Classification(
+            status=RunnerStatus.BLOCKED,
+            reason_code=RunnerReasonCode.PIDS_LIMIT,
+            stage=RunnerStage.EXECUTE,
+            error_message="PID 수 제한을 초과했습니다.",
+        )
     if result.timed_out:
         return Classification(
             status=RunnerStatus.BLOCKED,

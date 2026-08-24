@@ -8,6 +8,11 @@ import docker
 
 from runner.config import settings
 from runner.exceptions import ContainerExecutionError
+from runner.metrics.cgroup_reader import (
+    CgroupSnapshot,
+    read_cgroup_snapshot,
+    resolve_container_cgroup_path,
+)
 from runner.metrics.resource_monitor import ResourceMonitor
 from runner.pipeline.workspace import VolumeWorkspace
 from runner.policies import EXECUTION_OUTPUT_LIMIT_BYTES
@@ -28,6 +33,7 @@ class ExecutionResult:
     wall_time_ms: int | None = None
     memory_peak_bytes: int | None = None
     pids_peak: int | None = None
+    pids_limit_exceeded: bool = False
 
 
 class _BoundedOutput:
@@ -164,6 +170,7 @@ def execute_program(
     output_thread = None
     monitor_started = False
     output_thread_stopped = True
+    cgroup_path = None
 
     def wait_for_container() -> None:
         try:
@@ -190,6 +197,7 @@ def execute_program(
         try:
             start = time.monotonic()
             container.start()
+            cgroup_path = resolve_container_cgroup_path(container)
 
             thread = threading.Thread(
                 target=collect_output,
@@ -316,7 +324,15 @@ def execute_program(
                 exc,
             )
 
-        memory_peak_bytes = monitor.memory_peak_bytes
+        cgroup_snapshot = CgroupSnapshot()
+        if cgroup_path is not None:
+            cgroup_snapshot = read_cgroup_snapshot(cgroup_path)
+
+        memory_peak_bytes = (
+            cgroup_snapshot.memory_peak_bytes
+            if cgroup_snapshot.memory_peak_bytes is not None
+            else monitor.memory_peak_bytes
+        )
         if oom_killed:
             memory_limit_bytes = (
                 container.attrs.get("HostConfig", {}).get("Memory")
@@ -348,7 +364,12 @@ def execute_program(
             oom_killed=oom_killed,
             wall_time_ms=int((finished_at - start) * 1000),
             memory_peak_bytes=memory_peak_bytes,
-            pids_peak=monitor.pids_peak,
+            pids_peak=(
+                cgroup_snapshot.pids_peak
+                if cgroup_snapshot.pids_peak is not None
+                else monitor.pids_peak
+            ),
+            pids_limit_exceeded=cgroup_snapshot.pids_limit_exceeded,
         )
     except docker.errors.DockerException as exc:
         logger.error(

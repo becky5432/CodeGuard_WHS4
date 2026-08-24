@@ -52,6 +52,14 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(result.status, RunnerStatus.BLOCKED)
         self.assertEqual(result.reason_code, RunnerReasonCode.OUTPUT_LIMIT)
 
+    def test_pids_limit_event_is_blocked_pids_limit(self) -> None:
+        result = classify_execution(
+            ExecutionResult(1, "", "", pids_limit_exceeded=True),
+        )
+
+        self.assertEqual(result.status, RunnerStatus.BLOCKED)
+        self.assertEqual(result.reason_code, RunnerReasonCode.PIDS_LIMIT)
+
 
 if __name__ == "__main__":
     unittest.main()
