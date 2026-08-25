@@ -150,6 +150,10 @@ class ExecuteApiTests(unittest.TestCase):
             }.isdisjoint(Settings.model_fields),
         )
 
+    def test_settings_include_execution_cgroup_configuration(self) -> None:
+        self.assertIn("execution_cgroup_enabled", Settings.model_fields)
+        self.assertIn("execution_cgroup_root", Settings.model_fields)
+
     def test_execute_compiles_cpp_with_job_volume(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
             success=True,

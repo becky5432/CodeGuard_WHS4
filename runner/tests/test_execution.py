@@ -1,10 +1,11 @@
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import docker
 
 from runner.exceptions import ContainerExecutionError
+from runner.metrics.cgroup_scope import CgroupMetrics
 from runner.pipeline.execution import (
     create_execution_container,
     execute_program,
@@ -78,6 +79,27 @@ class ExecutionTests(unittest.TestCase):
             ["sh", "-c", "exec /workspace/main < /workspace/stdin"],
         )
 
+    def test_create_execution_container_uses_cgroup_parent(self) -> None:
+        cgroup_scope = MagicMock()
+        cgroup_scope.docker_parent = "/codeguard/execution-test"
+
+        create_execution_container(
+            client=self.client,
+            workspace=self.workspace,
+            stdin="",
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            memory_limit_mb=128,
+            cpu_limit=1.0,
+            pids_limit=10,
+            cgroup_scope=cgroup_scope,
+        )
+
+        self.assertEqual(
+            self.client.containers.create.call_args.kwargs["cgroup_parent"],
+            "/codeguard/execution-test",
+        )
+
     def test_execute_program_collects_result_without_removing_container(self) -> None:
         result = execute_program(
             container=self.container,
@@ -123,6 +145,34 @@ class ExecutionTests(unittest.TestCase):
         self.assertIsNotNone(result.system_error)
         self.assertIsNone(result.exit_code)
         self.container.remove.assert_not_called()
+
+    @patch("runner.pipeline.execution.PidsLimitMonitor")
+    @patch("runner.pipeline.execution.ResourceMonitor")
+    def test_execute_program_prefers_parent_cgroup_peak_values(
+        self,
+        resource_monitor_class,
+        pids_monitor_class,
+    ) -> None:
+        resource_monitor_class.return_value.memory_peak_bytes = 100
+        pids_monitor_class.return_value.pids_peak = 2
+        pids_monitor_class.return_value.exceeded.return_value = False
+        cgroup_scope = MagicMock()
+        cgroup_scope.snapshot.return_value = CgroupMetrics(
+            memory_peak_bytes=16 * 1024 * 1024,
+            pids_peak=18,
+        )
+
+        result = execute_program(
+            container=self.container,
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            timeout_ms=2000,
+            cgroup_scope=cgroup_scope,
+        )
+
+        self.assertEqual(result.memory_peak_bytes, 16 * 1024 * 1024)
+        self.assertEqual(result.pids_peak, 18)
+        cgroup_scope.snapshot.assert_called_once_with()
 
 
 if __name__ == "__main__":

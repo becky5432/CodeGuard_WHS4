@@ -8,6 +8,7 @@ import docker
 
 from runner.config import settings
 from runner.exceptions import ContainerExecutionError
+from runner.metrics.cgroup_scope import CgroupMetrics, ExecutionCgroupScope
 from runner.metrics.resource_monitor import ResourceMonitor
 from runner.metrics.pids_monitor import PidsLimitMonitor
 from runner.pipeline.workspace import VolumeWorkspace
@@ -89,6 +90,7 @@ def create_execution_container(
     memory_limit_mb: int,
     cpu_limit: float,
     pids_limit: int,
+    cgroup_scope: ExecutionCgroupScope | None = None,
 ):
     """Job Volume을 연결한 실행 컨테이너를 생성하고 반환한다."""
 
@@ -103,27 +105,33 @@ def create_execution_container(
     memory_limit_bytes = memory_limit_mb * 1024 * 1024
     nano_cpus_limit = int(cpu_limit * 1_000_000_000)
 
+    container_options = {
+        "image": settings.cpp_image,
+        "command": command,
+        "volumes": {
+            workspace.volume_name: {
+                "bind": "/workspace",
+                "mode": "ro",
+            }
+        },
+        "detach": True,
+        "mem_limit": memory_limit_bytes,
+        "memswap_limit": memory_limit_bytes,
+        "nano_cpus": nano_cpus_limit,
+        "pids_limit": pids_limit,
+        "labels": {
+            "codeguard.managed": "true",
+            "codeguard.job_id": str(job_id),
+            "codeguard.run_id": str(run_id),
+            "codeguard.stage": "execute",
+        },
+    }
+    if cgroup_scope is not None:
+        container_options["cgroup_parent"] = cgroup_scope.docker_parent
+
     try:
         return client.containers.create(
-            image=settings.cpp_image,
-            command=command,
-            volumes={
-                workspace.volume_name: {
-                    "bind": "/workspace",
-                    "mode": "ro",
-                }
-            },
-            detach=True,
-            mem_limit=memory_limit_bytes,
-            memswap_limit=memory_limit_bytes,
-            nano_cpus=nano_cpus_limit,
-            pids_limit=pids_limit,
-            labels={
-                "codeguard.managed": "true",
-                "codeguard.job_id": str(job_id),
-                "codeguard.run_id": str(run_id),
-                "codeguard.stage": "execute",
-            },
+            **container_options,
         )
     except docker.errors.DockerException as exc:
         raise ContainerExecutionError(
@@ -152,6 +160,7 @@ def execute_program(
     run_id: UUID,
     timeout_ms: int,
     output_limit_bytes: int = EXECUTION_OUTPUT_LIMIT_BYTES,
+    cgroup_scope: ExecutionCgroupScope | None = None,
 ) -> ExecutionResult:
     """제한을 감시하며 실행 컨테이너의 종료 정보와 출력을 수집한다."""
 
@@ -328,7 +337,34 @@ def execute_program(
                 exc,
             )
 
-        memory_peak_bytes = monitor.memory_peak_bytes
+        cgroup_metrics = CgroupMetrics()
+        if cgroup_scope is not None:
+            try:
+                cgroup_metrics = cgroup_scope.snapshot()
+            except Exception as exc:
+                logger.warning(
+                    "event=execution_cgroup_snapshot_error "
+                    "job_id=%s run_id=%s error=%s",
+                    job_id,
+                    run_id,
+                    exc,
+                )
+
+        memory_peak_bytes = (
+            cgroup_metrics.memory_peak_bytes
+            if cgroup_metrics.memory_peak_bytes is not None
+            else monitor.memory_peak_bytes
+        )
+        pids_peak = (
+            cgroup_metrics.pids_peak
+            if cgroup_metrics.pids_peak is not None
+            else pids_monitor.pids_peak
+        )
+        oom_killed = oom_killed or cgroup_metrics.oom_killed
+        pids_limit_exceeded = (
+            pids_limit_exceeded
+            or cgroup_metrics.pids_limit_exceeded
+        )
         if oom_killed:
             memory_limit_bytes = (
                 container.attrs.get("HostConfig", {}).get("Memory")
@@ -360,7 +396,7 @@ def execute_program(
             oom_killed=oom_killed,
             wall_time_ms=int((finished_at - start) * 1000),
             memory_peak_bytes=memory_peak_bytes,
-            pids_peak=pids_monitor.pids_peak,
+            pids_peak=pids_peak,
             pids_limit_exceeded=pids_limit_exceeded,
         )
     except docker.errors.DockerException as exc:
