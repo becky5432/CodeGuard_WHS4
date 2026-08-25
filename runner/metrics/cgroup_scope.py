@@ -8,10 +8,11 @@ from runner.exceptions import CgroupScopeError
 
 logger = logging.getLogger("runner")
 DEFAULT_CGROUP_MOUNT = Path("/sys/fs/cgroup")
+SUPPORTED_CGROUP_DRIVERS = {"cgroupfs", "systemd"}
 
 
-def validate_docker_cgroup_driver(client) -> None:
-    """현재 직접 경로 방식이 지원하는 Docker cgroup 드라이버인지 확인한다."""
+def validate_docker_cgroup_driver(client) -> str:
+    """지원하는 Docker cgroup 드라이버인지 확인하고 이름을 반환한다."""
     try:
         driver = client.info().get("CgroupDriver")
     except Exception as exc:
@@ -20,11 +21,13 @@ def validate_docker_cgroup_driver(client) -> None:
             details={"reason": str(exc)},
         ) from exc
 
-    if driver != "cgroupfs":
+    if driver not in SUPPORTED_CGROUP_DRIVERS:
         raise CgroupScopeError(
-            "Execution 전용 cgroup은 현재 Docker cgroupfs 드라이버만 지원합니다.",
+            "지원하지 않는 Docker cgroup 드라이버입니다.",
             details={"cgroup_driver": driver},
         )
+
+    return driver
 
 
 @dataclass(frozen=True)
@@ -39,12 +42,14 @@ class CgroupMetrics:
 class ExecutionCgroupScope:
     path: Path
     docker_parent: str
+    runner_managed: bool = True
 
     @classmethod
     def create(
         cls,
         root: Path,
         run_id: UUID,
+        driver: str = "cgroupfs",
         cgroup_mount: Path = DEFAULT_CGROUP_MOUNT,
     ) -> "ExecutionCgroupScope":
         mount = cgroup_mount.resolve()
@@ -62,6 +67,23 @@ class ExecutionCgroupScope:
             raise CgroupScopeError(
                 "cgroup v2 실행환경을 확인하지 못했습니다.",
                 details={"mount": str(mount)},
+            )
+
+        if driver == "systemd":
+            base_name = delegated_root.name
+            # systemd는 unit 이름의 '-'를 slice 계층 구분자로 사용한다.
+            # run_id 앞에는 '_'를 사용해 불필요한 중간 slice 생성을 막는다.
+            slice_name = f"{base_name}-execution_{run_id.hex}.slice"
+            return cls(
+                path=mount / f"{base_name}.slice" / slice_name,
+                docker_parent=slice_name,
+                runner_managed=False,
+            )
+
+        if driver != "cgroupfs":
+            raise CgroupScopeError(
+                "Unsupported Docker cgroup driver.",
+                details={"cgroup_driver": driver},
             )
 
         if not delegated_root.is_dir():
@@ -96,6 +118,9 @@ class ExecutionCgroupScope:
         )
 
     def remove(self) -> None:
+        if not self.runner_managed:
+            return
+
         try:
             self.path.rmdir()
         except FileNotFoundError:

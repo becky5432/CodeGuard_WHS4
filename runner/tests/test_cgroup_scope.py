@@ -12,20 +12,34 @@ from runner.metrics.cgroup_scope import (
 
 
 class ExecutionCgroupScopeTests(unittest.TestCase):
-    def test_rejects_non_cgroupfs_docker_driver(self) -> None:
+    def test_accepts_systemd_docker_driver(self) -> None:
         client = MagicMock()
         client.info.return_value = {"CgroupDriver": "systemd"}
 
-        with self.assertRaises(CgroupScopeError) as context:
-            validate_docker_cgroup_driver(client)
+        driver = validate_docker_cgroup_driver(client)
 
-        self.assertIn("cgroupfs", context.exception.message)
+        self.assertEqual(driver, "systemd")
 
     def test_accepts_cgroupfs_docker_driver(self) -> None:
         client = MagicMock()
         client.info.return_value = {"CgroupDriver": "cgroupfs"}
 
-        validate_docker_cgroup_driver(client)
+        driver = validate_docker_cgroup_driver(client)
+
+        self.assertEqual(driver, "cgroupfs")
+
+    def test_rejects_unsupported_docker_driver(self) -> None:
+        client = MagicMock()
+        client.info.return_value = {"CgroupDriver": "unknown"}
+
+        with self.assertRaises(CgroupScopeError) as context:
+            validate_docker_cgroup_driver(client)
+
+        self.assertEqual(
+            context.exception.details,
+            {"cgroup_driver": "unknown"},
+        )
+        self.assertIn("지원하지 않는", context.exception.message)
 
     def setUp(self) -> None:
         self.temp_directory = tempfile.TemporaryDirectory()
@@ -46,6 +60,7 @@ class ExecutionCgroupScopeTests(unittest.TestCase):
         scope = ExecutionCgroupScope.create(
             root=self.delegated_root,
             run_id=run_id,
+            driver="cgroupfs",
             cgroup_mount=self.cgroup_mount,
         )
 
@@ -62,6 +77,7 @@ class ExecutionCgroupScopeTests(unittest.TestCase):
         scope = ExecutionCgroupScope.create(
             root=self.delegated_root,
             run_id=uuid4(),
+            driver="cgroupfs",
             cgroup_mount=self.cgroup_mount,
         )
         (scope.path / "memory.peak").write_text("20971520\n", encoding="utf-8")
@@ -86,6 +102,7 @@ class ExecutionCgroupScopeTests(unittest.TestCase):
         scope = ExecutionCgroupScope.create(
             root=self.delegated_root,
             run_id=uuid4(),
+            driver="cgroupfs",
             cgroup_mount=self.cgroup_mount,
         )
 
@@ -95,6 +112,40 @@ class ExecutionCgroupScopeTests(unittest.TestCase):
         self.assertIsNone(metrics.pids_peak)
         self.assertFalse(metrics.oom_killed)
         self.assertFalse(metrics.pids_limit_exceeded)
+
+    def test_create_builds_systemd_slice_without_creating_directory(self) -> None:
+        run_id = uuid4()
+
+        scope = ExecutionCgroupScope.create(
+            root=self.delegated_root,
+            run_id=run_id,
+            driver="systemd",
+            cgroup_mount=self.cgroup_mount,
+        )
+
+        slice_name = f"codeguard-execution_{run_id.hex}.slice"
+        self.assertEqual(scope.docker_parent, slice_name)
+        self.assertEqual(
+            scope.path,
+            self.cgroup_mount / "codeguard.slice" / slice_name,
+        )
+        self.assertFalse(scope.path.exists())
+        self.assertFalse(scope.runner_managed)
+
+    def test_remove_does_not_delete_systemd_owned_slice(self) -> None:
+        run_id = uuid4()
+        slice_name = f"codeguard-execution_{run_id.hex}.slice"
+        slice_path = self.cgroup_mount / "codeguard.slice" / slice_name
+        slice_path.mkdir(parents=True)
+        scope = ExecutionCgroupScope(
+            path=slice_path,
+            docker_parent=slice_name,
+            runner_managed=False,
+        )
+
+        scope.remove()
+
+        self.assertTrue(slice_path.exists())
 
 
 if __name__ == "__main__":

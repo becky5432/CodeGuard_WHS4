@@ -84,6 +84,7 @@ class ExecutorTests(unittest.TestCase):
         create_scope.assert_called_once_with(
             root=delegated_root,
             run_id=response.run_id,
+            driver="cgroupfs",
         )
         self.assertIs(
             create_execution.call_args.kwargs["cgroup_scope"],

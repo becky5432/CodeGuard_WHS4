@@ -196,10 +196,11 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             current_stage = RunnerStage.EXECUTE
 
             if settings.execution_cgroup_enabled:
-                validate_docker_cgroup_driver(client)
+                cgroup_driver = validate_docker_cgroup_driver(client)
                 execution_cgroup_scope = ExecutionCgroupScope.create(
                     root=settings.execution_cgroup_root,
                     run_id=run_id,
+                    driver=cgroup_driver,
                 )
 
             create_execution_options = {
