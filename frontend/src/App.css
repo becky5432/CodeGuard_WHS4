@@ -45,6 +45,173 @@ button {
 
 /* 메인 화면 기본 레이아웃 */
 
+.editor-toolbar {
+  flex-wrap: wrap;
+}
+
+.editor-toolbar > h2 {
+  flex: 0 0 auto;
+}
+
+.editor-header-controls {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.language-selector,
+.toolbar-policy-tabs,
+.run-button,
+.toolbar-reset-button,
+.editor-fullscreen-button {
+  flex-shrink: 0;
+}
+
+.toolbar-policy-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(56px, 1fr));
+}
+
+.toolbar-policy-tab {
+  min-height: 38px;
+  padding: 8px 14px;
+  border: 1px solid var(--gray-300);
+  border-right: 0;
+  color: var(--gray-700);
+  background-color: var(--white);
+}
+
+.toolbar-policy-tab:first-child {
+  border-radius: 8px 0 0 8px;
+}
+
+.toolbar-policy-tab:last-child {
+  border-right: 1px solid var(--gray-300);
+  border-radius: 0 8px 8px 0;
+}
+
+.toolbar-policy-tab.active {
+  z-index: 1;
+  border-color: var(--blue-600);
+  color: var(--blue-600);
+  background-color: var(--blue-100);
+  font-weight: 700;
+}
+
+.toolbar-policy-tab.active + .toolbar-policy-tab {
+  border-left-color: var(--blue-600);
+}
+
+.toolbar-reset-button {
+  min-height: 38px;
+  padding: 8px 16px;
+  border: 1px solid var(--gray-300);
+  border-radius: 8px;
+  color: var(--gray-700);
+  background-color: var(--white);
+  font-weight: 700;
+}
+
+.toolbar-reset-button:hover:not(:disabled) {
+  border-color: var(--blue-600);
+  color: var(--blue-600);
+  background-color: var(--blue-100);
+}
+
+.environment-content {
+  padding: 20px;
+}
+
+.environment-content h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+}
+
+.environment-limit-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.environment-limit-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 12px;
+  border: 1px solid var(--gray-200);
+  border-radius: 9px;
+}
+
+.environment-limit-item > span {
+  color: var(--gray-600);
+  font-size: 18px;
+}
+
+.environment-limit-item div {
+  min-width: 0;
+}
+
+.environment-limit-item small,
+.environment-limit-item strong {
+  display: block;
+}
+
+.environment-limit-item small {
+  overflow: hidden;
+  color: var(--gray-600);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.environment-limit-item strong {
+  margin-top: 2px;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.planned-feature-title {
+  margin-top: 20px !important;
+}
+
+.planned-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.planned-feature-item {
+  display: grid;
+  min-height: 88px;
+  padding: 12px;
+  place-items: center;
+  border: 1px dashed var(--gray-300);
+  border-radius: 9px;
+  color: var(--gray-600);
+  text-align: center;
+}
+
+.planned-feature-item > span {
+  font-size: 18px;
+}
+
+.planned-feature-item strong {
+  font-size: 11px;
+}
+
+.planned-feature-item small {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background-color: var(--gray-100);
+  font-size: 10px;
+}
+
 .main-workspace {
   display: flex;
   flex-direction: column;
@@ -53,12 +220,12 @@ button {
 
 .main-workspace-grid {
   display: grid;
-  grid-template-columns:
-    minmax(0, 1.45fr)
-    minmax(280px, 0.85fr)
-    minmax(320px, 1fr);
+  grid-template-columns: minmax(0, 1.45fr) minmax(420px, 1fr);
+  grid-template-areas:
+    "editor settings"
+    "editor result";
   gap: 16px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .workspace-panel {
@@ -90,7 +257,21 @@ button {
 .result-section {
   display: flex;
   flex-direction: column;
-  min-height: 680px;
+}
+
+.editor-section {
+  grid-area: editor;
+  min-height: 780px;
+}
+
+.settings-section {
+  grid-area: settings;
+  min-height: 0;
+}
+
+.result-section {
+  grid-area: result;
+  min-height: 0;
 }
 
 .language-selector {
@@ -112,12 +293,6 @@ button {
   border-radius: 8px;
   color: var(--gray-950);
   background-color: var(--white);
-}
-
-.editor-header-controls {
-  display: flex;
-  align-items: center;
-  gap: 12px;
 }
 
 .editor-fullscreen-button {
@@ -713,52 +888,11 @@ button {
   text-overflow: ellipsis;
 }
 
-.service-status {
-  margin-top: auto;
-  padding: 15px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 10px;
-  background-color: var(--navy-800);
-}
-
-.service-status strong {
-  font-size: 13px;
-}
-
-.service-status p {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 0 0;
-  color: rgba(255, 255, 255, 0.84);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.collapsed-service-status {
-  display: grid;
-  width: 54px;
-  height: 42px;
-  margin-top: auto;
-  place-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 10px;
-  background-color: var(--navy-800);
-}
-
-.status-dot {
-  display: block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background-color: #ffd25a;
-}
-
 .sidebar-toggle {
   display: grid;
   width: 100%;
   min-height: 42px;
-  margin-top: 12px;
+  margin-top: auto;
   padding: 0;
   place-items: center;
   border: 0;
@@ -1108,34 +1242,59 @@ button {
 
 /* 반응형 배치 */
 
-@media (max-width: 1250px) {
+@media (max-width: 1500px) {
   .main-workspace-grid {
-    grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.9fr);
+    grid-template-columns: minmax(0, 1.3fr) minmax(360px, 0.9fr);
   }
 
-  .result-section {
-    grid-column: 1 / -1;
-    min-height: auto;
+  .workspace-panel-header.editor-toolbar {
+    align-items: flex-start;
+  }
+
+  .editor-toolbar > h2 {
+    width: 100%;
+  }
+
+  .editor-header-controls {
+    justify-content: flex-start;
+  }
+
+  .environment-limit-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1150px) {
   .main-workspace-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .result-section {
-    grid-column: auto;
-  }
-
-  .resource-card-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "editor"
+      "settings"
+      "result";
   }
 
   .editor-section,
   .settings-section,
   .result-section {
     min-height: auto;
+  }
+
+  .environment-limit-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .environment-limit-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .planned-feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .resource-card-grid {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -312,7 +312,6 @@ function MainPage() {
   });
 
   // 실행 결과 폴링
-  // 실행 결과 폴링
   const pollExecution = async (currentJobId) => {
     while (true) {
       await wait(POLLING_INTERVAL_MS);
@@ -404,6 +403,19 @@ function MainPage() {
     }
   };
 
+  const handleReset = () => {
+    setCode("");
+    setStandardInput("");
+    setExecutionState("idle");
+    setExecutionStatusText("실행 전");
+    setJobId(null);
+    setExecutionResult(null);
+    setRequestErrorCode(null);
+    setMessage("코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.");
+    setActiveIoTab("stdin");
+    setActiveOutputTab("stdout");
+  };
+
   return (
     <form className="main-workspace" onSubmit={handleSubmit}>
       <div className="main-workspace-grid">
@@ -413,8 +425,8 @@ function MainPage() {
             isEditorFullscreen ? " editor-section-fullscreen" : ""
           }`}
         >
-          <div className="workspace-panel-header">
-            <h2>코드 편집기</h2>
+          <div className="workspace-panel-header editor-toolbar">
+            <h2>코드 입력 및 실행</h2>
 
             <div className="editor-header-controls">
               <div className="language-selector">
@@ -429,6 +441,47 @@ function MainPage() {
                   <option value="CPP">C++</option>
                 </select>
               </div>
+
+              <div
+                className="toolbar-policy-tabs"
+                role="tablist"
+                aria-label="정책 프로필"
+              >
+                {Object.entries(POLICY_PROFILE_PREVIEW).map(
+                  ([profileKey, profile]) => (
+                    <button
+                      className={`toolbar-policy-tab${
+                        selectedPolicyProfile === profileKey ? " active" : ""
+                      }`}
+                      key={profileKey}
+                      type="button"
+                      role="tab"
+                      aria-selected={selectedPolicyProfile === profileKey}
+                      onClick={() => setSelectedPolicyProfile(profileKey)}
+                    >
+                      {profile.label}
+                    </button>
+                  ),
+                )}
+              </div>
+
+              <button
+                className="run-button"
+                type="submit"
+                disabled={isExecuting}
+                aria-busy={isExecuting}
+              >
+                {isExecuting ? "실행 중..." : "▶ 실행"}
+              </button>
+
+              <button
+                className="toolbar-reset-button"
+                type="button"
+                disabled={isExecuting}
+                onClick={handleReset}
+              >
+                ↻ 초기화
+              </button>
 
               <button
                 className="editor-fullscreen-button"
@@ -566,101 +619,76 @@ function MainPage() {
                 </div>
               )}
             </div>
-
-            <button
-              className="io-reset-button"
-              type="button"
-              disabled={isExecuting}
-              onClick={() => {
-                setCode("");
-                setStandardInput("");
-                setExecutionState("idle");
-                setExecutionStatusText("실행 전");
-                setJobId(null);
-                setExecutionResult(null);
-                setRequestErrorCode(null);
-                setMessage(
-                  "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
-                );
-                setActiveIoTab("stdin");
-                setActiveOutputTab("stdout");
-              }}
-            >
-              ↻ 초기화
-            </button>
           </div>
         </section>
 
         {/* 실행 설정 영역 */}
         <section className="workspace-panel settings-section">
           <div className="workspace-panel-header">
-            <h2>실행 설정</h2>
+            <h2>현재 실행 환경</h2>
           </div>
 
-          <div className="settings-content">
-            <h3>정책 프로필</h3>
+          <div className="environment-content">
+            <h3>적용 중인 제한</h3>
 
-            <div
-              className="policy-profile-tabs"
-              role="tablist"
-              aria-label="정책 프로필"
-            >
-              {Object.entries(POLICY_PROFILE_PREVIEW).map(
-                ([profileKey, profile]) => (
-                  <button
-                    className={`policy-profile-tab${
-                      selectedPolicyProfile === profileKey ? " active" : ""
-                    }`}
-                    key={profileKey}
-                    type="button"
-                    role="tab"
-                    aria-selected={selectedPolicyProfile === profileKey}
-                    onClick={() => setSelectedPolicyProfile(profileKey)}
-                  >
-                    {profile.label}
-                  </button>
-                ),
-              )}
+            <div className="environment-limit-grid">
+              <article className="environment-limit-item">
+                <span aria-hidden="true">◷</span>
+                <div>
+                  <small>시간 제한</small>
+                  <strong>
+                    {selectedPolicy.timeoutMs.toLocaleString()} ms
+                  </strong>
+                </div>
+              </article>
+
+              <article className="environment-limit-item">
+                <span aria-hidden="true">▦</span>
+                <div>
+                  <small>메모리</small>
+                  <strong>{selectedPolicy.memoryLimitMb} MB</strong>
+                </div>
+              </article>
+
+              <article className="environment-limit-item">
+                <span aria-hidden="true">♙</span>
+                <div>
+                  <small>프로세스</small>
+                  <strong>{selectedPolicy.processLimit}개</strong>
+                </div>
+              </article>
+
+              <article className="environment-limit-item">
+                <span aria-hidden="true">▣</span>
+                <div>
+                  <small>CPU</small>
+                  <strong>{selectedPolicy.cpuLimit.toFixed(1)} CPU</strong>
+                </div>
+              </article>
             </div>
 
-            <div className="policy-profile-card">
-              <div className="policy-profile-description">
-                <strong>{selectedPolicy.title}</strong>
-                <p>{selectedPolicy.description}</p>
-              </div>
+            <h3 className="planned-feature-title">추가 예정 기능</h3>
 
-              <dl className="policy-limit-list">
-                <div>
-                  <dt>실행 시간</dt>
-                  <dd>{selectedPolicy.timeoutMs.toLocaleString()} ms</dd>
-                </div>
+            <div className="planned-feature-grid">
+              <article className="planned-feature-item">
+                <span aria-hidden="true">♧</span>
+                <strong>파일 접근 제한</strong>
+                <small>준비 중</small>
+              </article>
 
-                <div>
-                  <dt>메모리</dt>
-                  <dd>{selectedPolicy.memoryLimitMb} MB</dd>
-                </div>
+              <article className="planned-feature-item">
+                <span aria-hidden="true">◎</span>
+                <strong>네트워크 차단</strong>
+                <small>준비 중</small>
+              </article>
 
-                <div>
-                  <dt>프로세스</dt>
-                  <dd>{selectedPolicy.processLimit}개</dd>
-                </div>
-
-                <div>
-                  <dt>CPU 한도</dt>
-                  <dd>{selectedPolicy.cpuLimit.toFixed(1)} CPU</dd>
-                </div>
-              </dl>
+              <article className="planned-feature-item">
+                <span aria-hidden="true">◇</span>
+                <strong>privileged 비활성화</strong>
+                <small>준비 중</small>
+              </article>
             </div>
           </div>
-
-          <button
-            className="run-button"
-            type="submit"
-            disabled={isExecuting}
-            aria-busy={isExecuting}
-          >
-            {isExecuting ? "실행 중..." : "실행"}
-          </button>
         </section>
 
         {/* 실행 결과 영역 */}
