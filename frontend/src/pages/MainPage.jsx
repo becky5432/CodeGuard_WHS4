@@ -246,7 +246,7 @@ function MainPage() {
   );
   const [activeIoTab, setActiveIoTab] = useState("stdin");
   const [activeOutputTab, setActiveOutputTab] = useState("stdout");
-  const [selectedPolicyProfile, setSelectedPolicyProfile] = useState("basic");
+  const selectedPolicyProfile = "basic";
 
   // 실행 중복 요청 방지
   const executionLockRef = useRef(false);
@@ -442,7 +442,7 @@ function MainPage() {
                 </select>
               </div>
 
-              <div
+              {/* <div
                 className="toolbar-policy-tabs"
                 role="tablist"
                 aria-label="정책 프로필"
@@ -463,7 +463,7 @@ function MainPage() {
                     </button>
                   ),
                 )}
-              </div>
+              </div> */}
 
               <button
                 className="run-button"
@@ -622,259 +622,279 @@ function MainPage() {
           </div>
         </section>
 
-        {/* 실행 설정 영역 */}
-        <section className="workspace-panel settings-section">
-          <div className="workspace-panel-header">
-            <h2>현재 실행 환경</h2>
-          </div>
-
-          <div className="environment-content">
-            <h3>적용 중인 제한</h3>
-
-            <div className="environment-limit-grid">
-              <article className="environment-limit-item">
-                <span aria-hidden="true">◷</span>
-                <div>
-                  <small>시간 제한</small>
-                  <strong>
-                    {selectedPolicy.timeoutMs.toLocaleString()} ms
-                  </strong>
-                </div>
-              </article>
-
-              <article className="environment-limit-item">
-                <span aria-hidden="true">▦</span>
-                <div>
-                  <small>메모리</small>
-                  <strong>{selectedPolicy.memoryLimitMb} MB</strong>
-                </div>
-              </article>
-
-              <article className="environment-limit-item">
-                <span aria-hidden="true">♙</span>
-                <div>
-                  <small>프로세스</small>
-                  <strong>{selectedPolicy.processLimit}개</strong>
-                </div>
-              </article>
-
-              <article className="environment-limit-item">
-                <span aria-hidden="true">▣</span>
-                <div>
-                  <small>CPU</small>
-                  <strong>{selectedPolicy.cpuLimit.toFixed(1)} CPU</strong>
-                </div>
-              </article>
+        <div className="workspace-side-column">
+          {/* 실행 설정 영역 */}
+          <section className="workspace-panel settings-section">
+            <div className="workspace-panel-header">
+              <h2>현재 실행 환경</h2>
             </div>
 
-            <h3 className="planned-feature-title">추가 예정 기능</h3>
+            <div className="environment-content">
+              <h3>적용 중인 제한</h3>
 
-            <div className="planned-feature-grid">
-              <article className="planned-feature-item">
-                <span aria-hidden="true">♧</span>
-                <strong>파일 접근 제한</strong>
-                <small>준비 중</small>
-              </article>
+              <div className="environment-limit-grid">
+                <article className="environment-limit-item">
+                  <span aria-hidden="true">◷</span>
+                  <div>
+                    <small>시간 제한</small>
+                    <strong>
+                      {selectedPolicy.timeoutMs.toLocaleString()} ms
+                    </strong>
+                  </div>
+                </article>
 
-              <article className="planned-feature-item">
-                <span aria-hidden="true">◎</span>
-                <strong>네트워크 차단</strong>
-                <small>준비 중</small>
-              </article>
+                <article className="environment-limit-item">
+                  <span aria-hidden="true">▦</span>
+                  <div>
+                    <small>메모리</small>
+                    <strong>{selectedPolicy.memoryLimitMb} MB</strong>
+                  </div>
+                </article>
 
-              <article className="planned-feature-item">
-                <span aria-hidden="true">◇</span>
-                <strong>privileged 비활성화</strong>
-                <small>준비 중</small>
-              </article>
+                <article className="environment-limit-item">
+                  <span aria-hidden="true">♙</span>
+                  <div>
+                    <small>프로세스</small>
+                    <strong>{selectedPolicy.processLimit}개</strong>
+                  </div>
+                </article>
+
+                <article className="environment-limit-item">
+                  <span aria-hidden="true">▣</span>
+                  <div>
+                    <small>CPU</small>
+                    <strong>{selectedPolicy.cpuLimit.toFixed(1)} CPU</strong>
+                  </div>
+                </article>
+              </div>
+
+              <h3 className="planned-feature-title">추가 예정 기능</h3>
+
+              <div className="planned-feature-grid">
+                <article className="planned-feature-item">
+                  <span aria-hidden="true">♧</span>
+                  <strong>파일 접근 제한</strong>
+                  <small>준비 중</small>
+                </article>
+
+                <article className="planned-feature-item">
+                  <span aria-hidden="true">◎</span>
+                  <strong>네트워크 차단</strong>
+                  <small>준비 중</small>
+                </article>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        {/* 실행 결과 영역 */}
-        <section className="workspace-panel result-section">
-          <div className="workspace-panel-header">
-            <h2>실행 결과</h2>
-          </div>
+          {/* 실행 결과 영역 */}
+          <section className="workspace-panel result-section">
+            <div className="workspace-panel-header">
+              <h2>실행 결과</h2>
+            </div>
 
-          <div className="execution-result-content">
-            <div className="execution-result-row">
-              <strong>상태</strong>
+            <div className="execution-result-content">
+              {executionState !== "idle" && (
+                <p
+                  className={`execution-message execution-message-${executionState}`}
+                >
+                  {message}
+                </p>
+              )}
 
-              <span
-                className={`execution-status-badge execution-status-${executionState}`}
-                title={jobId ? `실행 ID: ${jobId}` : undefined}
+              <div className="execution-result-overview">
+                <div className="execution-result-row">
+                  <strong>상태</strong>
+
+                  <span
+                    className={`execution-status-badge execution-status-${executionState}`}
+                    title={jobId ? `실행 ID: ${jobId}` : undefined}
+                  >
+                    {executionStatusText}
+                  </span>
+                </div>
+
+                <div className="execution-result-row">
+                  <strong>사유 코드</strong>
+                  <span>{executionReasonCode}</span>
+                </div>
+
+                <div className="execution-result-row">
+                  <strong>exit code</strong>
+                  <span>{executionExitCode}</span>
+                </div>
+              </div>
+
+              <div className="execution-stage-section">
+                <h3>단계별 결과</h3>
+
+                <div className="execution-stage-list">
+                  {executionStages.map((stage) => (
+                    <div className="execution-stage-row" key={stage.key}>
+                      <span>{stage.label}</span>
+
+                      <span className={`execution-stage-${stage.status}`}>
+                        {stage.statusLabel}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="execution-total-time">
+                <strong>총 소요 시간</strong>
+                <span>
+                  {wallTimeMs == null
+                    ? "-"
+                    : `${wallTimeMs.toLocaleString()} ms`}
+                </span>
+              </div>
+            </div>
+          </section>
+
+          {/* 자원 사용량 요약 영역 */}
+          <section className="workspace-panel resource-section">
+            <div className="resource-section-header">
+              <h2>자원 사용량 요약</h2>
+            </div>
+
+            <div className="resource-card-grid">
+              <article
+                className={`resource-usage-card resource-wall-time${
+                  isTimeLimitExceeded ? " resource-limit-exceeded" : ""
+                }`}
               >
-                {executionStatusText}
-              </span>
-            </div>
+                <div className="resource-card-main">
+                  <span className="resource-card-icon" aria-hidden="true">
+                    ◷
+                  </span>
 
-            {executionState !== "idle" && (
-              <p
-                className={`execution-message execution-message-${executionState}`}
+                  <div className="resource-card-value">
+                    <span>Wall Time</span>
+
+                    <strong>
+                      {wallTimeMs == null ? "-" : wallTimeMs.toLocaleString()}
+                      {wallTimeMs != null && <small> ms</small>}
+                    </strong>
+                  </div>
+                  {isTimeLimitExceeded && (
+                    <span className="resource-limit-badge">제한 초과</span>
+                  )}
+                </div>
+                <p>
+                  제한 {selectedPolicy.timeoutMs.toLocaleString()} ms (
+                  {wallTimePercentage}%)
+                </p>
+                <div
+                  className="resource-progress"
+                  role="progressbar"
+                  aria-label="실행 시간 사용률"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow={wallTimePercentage}
+                >
+                  <span style={{ width: `${wallTimePercentage}%` }} />
+                </div>
+              </article>
+
+              <article
+                className={`resource-usage-card resource-memory${
+                  isMemoryLimitExceeded ? " resource-limit-exceeded" : ""
+                }`}
               >
-                {message}
-              </p>
-            )}
+                <div className="resource-card-main">
+                  <span className="resource-card-icon" aria-hidden="true">
+                    ▦
+                  </span>
 
-            <div className="execution-result-row">
-              <strong>사유 코드</strong>
-              <span>{executionReasonCode}</span>
+                  <div className="resource-card-value">
+                    <span>Memory Peak</span>
+
+                    <strong>
+                      {memoryPeakMb == null ? "-" : memoryPeakMb.toFixed(1)}
+                      {memoryPeakMb != null && <small> MB</small>}
+                    </strong>
+                  </div>
+
+                  {isMemoryLimitExceeded && (
+                    <span className="resource-limit-badge">제한 초과</span>
+                  )}
+                </div>
+
+                <p>
+                  제한 {selectedPolicy.memoryLimitMb} MB ({memoryPercentage}%)
+                </p>
+
+                <div
+                  className="resource-progress"
+                  role="progressbar"
+                  aria-label="메모리 사용률"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow={memoryPercentage}
+                >
+                  <span style={{ width: `${memoryPercentage}%` }} />
+                </div>
+              </article>
+
+              <article
+                className={`resource-usage-card resource-process${
+                  isPidsLimitExceeded ? " resource-limit-exceeded" : ""
+                }`}
+              >
+                <div className="resource-card-main">
+                  <span className="resource-card-icon" aria-hidden="true">
+                    ♙
+                  </span>
+
+                  <div className="resource-card-value">
+                    <span>PIDs Peak</span>
+
+                    <strong>
+                      {pidsPeak == null ? "-" : pidsPeak.toLocaleString()}
+                      {pidsPeak != null && <small> 개</small>}
+                    </strong>
+                  </div>
+
+                  {isPidsLimitExceeded && (
+                    <span className="resource-limit-badge">제한 초과</span>
+                  )}
+                </div>
+                <p>
+                  제한 {selectedPolicy.processLimit}개 ({pidsPercentage}%)
+                </p>
+                <div
+                  className="resource-progress"
+                  role="progressbar"
+                  aria-label="프로세스 사용률"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow={pidsPercentage}
+                >
+                  <span style={{ width: `${pidsPercentage}%` }} />
+                </div>
+              </article>
+            </div>
+          </section>
+
+          {/* 결과 요약 영역 */}
+          <section className="workspace-panel result-summary-section">
+            <div className="resource-section-header">
+              <h2>결과 요약</h2>
             </div>
 
-            <div className="execution-result-row">
-              <strong>exit code</strong>
-              <span>{executionExitCode}</span>
-            </div>
-
-            <div className="execution-stage-section">
-              <h3>단계별 결과</h3>
-
+            <div className="result-summary-list">
               {executionStages.map((stage) => (
-                <div className="execution-stage-row" key={stage.key}>
-                  <span>{stage.label}</span>
-
+                <div className="result-summary-row" key={stage.key}>
                   <span className={`execution-stage-${stage.status}`}>
                     {stage.statusLabel}
                   </span>
+                  <strong>{stage.label}</strong>
                 </div>
               ))}
             </div>
-
-            <div className="execution-total-time">
-              <strong>총 소요 시간</strong>
-              <span>
-                {wallTimeMs == null ? "-" : `${wallTimeMs.toLocaleString()} ms`}
-              </span>
-            </div>
-          </div>
-        </section>
+          </section>
+        </div>
       </div>
-
-      {/* 자원 사용량 요약 영역 */}
-      <section className="workspace-panel resource-section">
-        <div className="resource-section-header">
-          <h2>자원 사용량 요약</h2>
-        </div>
-
-        <div className="resource-card-grid">
-          <article
-            className={`resource-usage-card resource-wall-time${
-              isTimeLimitExceeded ? " resource-limit-exceeded" : ""
-            }`}
-          >
-            <div className="resource-card-main">
-              <span className="resource-card-icon" aria-hidden="true">
-                ◷
-              </span>
-
-              <div className="resource-card-value">
-                <span>Wall Time</span>
-
-                <strong>
-                  {wallTimeMs == null ? "-" : wallTimeMs.toLocaleString()}
-                  {wallTimeMs != null && <small> ms</small>}
-                </strong>
-              </div>
-              {isTimeLimitExceeded && (
-                <span className="resource-limit-badge">제한 초과</span>
-              )}
-            </div>
-            <p>
-              제한 {selectedPolicy.timeoutMs.toLocaleString()} ms (
-              {wallTimePercentage}%)
-            </p>
-            <div
-              className="resource-progress"
-              role="progressbar"
-              aria-label="실행 시간 사용률"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              aria-valuenow={wallTimePercentage}
-            >
-              <span style={{ width: `${wallTimePercentage}%` }} />
-            </div>
-          </article>
-
-          <article
-            className={`resource-usage-card resource-memory${
-              isMemoryLimitExceeded ? " resource-limit-exceeded" : ""
-            }`}
-          >
-            <div className="resource-card-main">
-              <span className="resource-card-icon" aria-hidden="true">
-                ▦
-              </span>
-
-              <div className="resource-card-value">
-                <span>Memory Peak</span>
-
-                <strong>
-                  {memoryPeakMb == null ? "-" : memoryPeakMb.toFixed(1)}
-                  {memoryPeakMb != null && <small> MB</small>}
-                </strong>
-              </div>
-
-              {isMemoryLimitExceeded && (
-                <span className="resource-limit-badge">제한 초과</span>
-              )}
-            </div>
-
-            <p>
-              제한 {selectedPolicy.memoryLimitMb} MB ({memoryPercentage}%)
-            </p>
-
-            <div
-              className="resource-progress"
-              role="progressbar"
-              aria-label="메모리 사용률"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              aria-valuenow={memoryPercentage}
-            >
-              <span style={{ width: `${memoryPercentage}%` }} />
-            </div>
-          </article>
-
-          <article
-            className={`resource-usage-card resource-process${
-              isPidsLimitExceeded ? " resource-limit-exceeded" : ""
-            }`}
-          >
-            <div className="resource-card-main">
-              <span className="resource-card-icon" aria-hidden="true">
-                ♙
-              </span>
-
-              <div className="resource-card-value">
-                <span>PIDs Peak</span>
-
-                <strong>
-                  {pidsPeak == null ? "-" : pidsPeak.toLocaleString()}
-                  {pidsPeak != null && <small> 개</small>}
-                </strong>
-              </div>
-
-              {isPidsLimitExceeded && (
-                <span className="resource-limit-badge">제한 초과</span>
-              )}
-            </div>
-            <p>
-              제한 {selectedPolicy.processLimit}개 ({pidsPercentage}%)
-            </p>
-            <div
-              className="resource-progress"
-              role="progressbar"
-              aria-label="프로세스 사용률"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              aria-valuenow={pidsPercentage}
-            >
-              <span style={{ width: `${pidsPercentage}%` }} />
-            </div>
-          </article>
-        </div>
-      </section>
     </form>
   );
 }
