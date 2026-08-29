@@ -118,25 +118,6 @@ function Sidebar({ isCollapsed, onToggle }) {
         */}
       </nav>
 
-      {!isCollapsed ? (
-        <div className="service-status">
-          <strong>서비스 상태</strong>
-
-          <p>
-            <span className="status-dot" />
-            실행 환경 준비 중
-          </p>
-        </div>
-      ) : (
-        <div
-          className="collapsed-service-status"
-          title="실행 환경 준비 중"
-          aria-label="실행 환경 준비 중"
-        >
-          <span className="status-dot" />
-        </div>
-      )}
-
       <button
         className="sidebar-toggle"
         type="button"
