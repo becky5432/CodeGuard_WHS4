@@ -316,20 +316,21 @@ button {
 }
 
 .code-editor-area {
-  flex: 1;
-  min-height: 360px;
+  flex: 0 0 528px;
+  height: 528px;
+  min-height: 0;
   overflow: hidden;
   background-color: var(--white);
 }
 
 .code-editor {
   height: 100%;
-  min-height: 360px;
+  min-height: 0;
 }
 
 .code-editor .cm-editor {
   height: 100%;
-  min-height: 360px;
+  min-height: 0;
   color: var(--gray-950);
   background-color: var(--white);
   font-family: Consolas, Monaco, "Courier New", monospace;
@@ -755,15 +756,16 @@ button {
   box-shadow: 0 20px 60px rgba(16, 26, 51, 0.24);
 }
 
-.editor-section-fullscreen .code-editor-area,
-.editor-section-fullscreen .code-editor,
-.editor-section-fullscreen .cm-editor {
+.editor-section-fullscreen .code-editor-area {
+  flex: 1 1 auto;
   min-height: 0;
   height: 100%;
 }
 
-.editor-section-fullscreen .io-section {
-  display: none;
+.editor-section-fullscreen .code-editor,
+.editor-section-fullscreen .cm-editor {
+  min-height: 0;
+  height: 100%;
 }
 
 /* 왼쪽 사이드바 */
