@@ -195,44 +195,33 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             _mark_succeeded(stage_summary, RunnerStage.COMPILE)
             current_stage = RunnerStage.EXECUTE
 
-            if settings.execution_cgroup_enabled:
-                cgroup_driver = validate_docker_cgroup_driver(client)
-                execution_cgroup_scope = ExecutionCgroupScope.create(
-                    root=settings.execution_cgroup_root,
-                    run_id=run_id,
-                    driver=cgroup_driver,
-                )
-
-            create_execution_options = {
-                "client": client,
-                "workspace": workspace,
-                "stdin": job.stdin,
-                "job_id": job.job_id,
-                "run_id": run_id,
-                "memory_limit_mb": job.policy.memory_limit_mb,
-                "cpu_limit": job.policy.cpu_limit,
-                "pids_limit": job.policy.pids_limit,
-            }
-            if execution_cgroup_scope is not None:
-                create_execution_options["cgroup_scope"] = (
-                    execution_cgroup_scope
-                )
-
-            execution_container = create_execution_container(
-                **create_execution_options,
+            cgroup_driver = validate_docker_cgroup_driver(client)
+            execution_cgroup_scope = ExecutionCgroupScope.create(
+                root=settings.execution_cgroup_root,
+                run_id=run_id,
+                driver=cgroup_driver,
             )
 
-            execute_options = {
-                "container": execution_container,
-                "job_id": job.job_id,
-                "run_id": run_id,
-                "timeout_ms": job.policy.timeout_ms,
-                "output_limit_bytes": job.policy.output_limit_bytes,
-            }
-            if execution_cgroup_scope is not None:
-                execute_options["cgroup_scope"] = execution_cgroup_scope
+            execution_container = create_execution_container(
+                client=client,
+                workspace=workspace,
+                stdin=job.stdin,
+                job_id=job.job_id,
+                run_id=run_id,
+                memory_limit_mb=job.policy.memory_limit_mb,
+                cpu_limit=job.policy.cpu_limit,
+                pids_limit=job.policy.pids_limit,
+                cgroup_scope=execution_cgroup_scope,
+            )
 
-            execution_result = execute_program(**execute_options)
+            execution_result = execute_program(
+                container=execution_container,
+                job_id=job.job_id,
+                run_id=run_id,
+                timeout_ms=job.policy.timeout_ms,
+                output_limit_bytes=job.policy.output_limit_bytes,
+                cgroup_scope=execution_cgroup_scope,
+            )
 
             classification = classify_execution(execution_result)
 

@@ -1,4 +1,3 @@
-import logging
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
@@ -6,7 +5,6 @@ from uuid import UUID
 from runner.exceptions import CgroupScopeError
 
 
-logger = logging.getLogger("runner")
 DEFAULT_CGROUP_MOUNT = Path("/sys/fs/cgroup")
 SUPPORTED_CGROUP_DRIVERS = {"cgroupfs", "systemd"}
 
@@ -32,8 +30,8 @@ def validate_docker_cgroup_driver(client) -> str:
 
 @dataclass(frozen=True)
 class CgroupMetrics:
-    memory_peak_bytes: int | None = None
-    pids_peak: int | None = None
+    memory_peak_bytes: int
+    pids_peak: int
     oom_killed: bool = False
     pids_limit_exceeded: bool = False
 
@@ -110,6 +108,8 @@ class ExecutionCgroupScope:
     def snapshot(self) -> CgroupMetrics:
         memory_events = self._read_events("memory.events")
         pids_events = self._read_events("pids.events")
+        self._require_event(memory_events, "memory.events", "oom_kill")
+        self._require_event(pids_events, "pids.events", "max")
         return CgroupMetrics(
             memory_peak_bytes=self._read_int("memory.peak"),
             pids_peak=self._read_int("pids.peak"),
@@ -131,35 +131,54 @@ class ExecutionCgroupScope:
                 details={"path": str(self.path), "reason": str(exc)},
             ) from exc
 
-    def _read_int(self, filename: str) -> int | None:
+    def _read_int(self, filename: str) -> int:
+        path = self.path / filename
         try:
-            return int((self.path / filename).read_text(encoding="utf-8").strip())
+            return int(path.read_text(encoding="utf-8").strip())
         except (FileNotFoundError, OSError, ValueError) as exc:
-            logger.warning(
-                "event=cgroup_metric_read_error path=%s error=%s",
-                self.path / filename,
-                exc,
-            )
-            return None
+            raise CgroupScopeError(
+                "Execution cgroup 측정값을 읽지 못했습니다.",
+                details={"path": str(path), "reason": str(exc)},
+            ) from exc
 
     def _read_events(self, filename: str) -> dict[str, int]:
+        path = self.path / filename
         try:
-            lines = (self.path / filename).read_text(encoding="utf-8").splitlines()
+            lines = path.read_text(encoding="utf-8").splitlines()
         except (FileNotFoundError, OSError) as exc:
-            logger.warning(
-                "event=cgroup_event_read_error path=%s error=%s",
-                self.path / filename,
-                exc,
-            )
-            return {}
+            raise CgroupScopeError(
+                "Execution cgroup 이벤트를 읽지 못했습니다.",
+                details={"path": str(path), "reason": str(exc)},
+            ) from exc
 
         events: dict[str, int] = {}
         for line in lines:
             parts = line.split()
             if len(parts) != 2:
-                continue
+                raise CgroupScopeError(
+                    "Execution cgroup 이벤트 형식이 올바르지 않습니다.",
+                    details={"path": str(path), "line": line},
+                )
             try:
                 events[parts[0]] = int(parts[1])
-            except ValueError:
-                continue
+            except ValueError as exc:
+                raise CgroupScopeError(
+                    "Execution cgroup 이벤트 형식이 올바르지 않습니다.",
+                    details={"path": str(path), "line": line},
+                ) from exc
         return events
+
+    def _require_event(
+        self,
+        events: dict[str, int],
+        filename: str,
+        event: str,
+    ) -> None:
+        if event not in events:
+            raise CgroupScopeError(
+                "Execution cgroup 필수 이벤트를 찾지 못했습니다.",
+                details={
+                    "path": str(self.path / filename),
+                    "event": event,
+                },
+            )
