@@ -2,7 +2,12 @@ import logging
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from runner.config import settings
 from runner.exceptions import RunnerError, WorkspaceError
+from runner.metrics.cgroup_scope import (
+    ExecutionCgroupScope,
+    validate_docker_cgroup_driver,
+)
 from runner.models.job import RunnerRequest
 from runner.models.result import (
     RunnerReasonCode,
@@ -88,6 +93,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
     workspace = None
     compile_container = None
     execution_container = None
+    execution_cgroup_scope = None
     response = None
     compile_log = ""
     current_stage = RunnerStage.WORKSPACE
@@ -189,24 +195,44 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             _mark_succeeded(stage_summary, RunnerStage.COMPILE)
             current_stage = RunnerStage.EXECUTE
 
+            if settings.execution_cgroup_enabled:
+                cgroup_driver = validate_docker_cgroup_driver(client)
+                execution_cgroup_scope = ExecutionCgroupScope.create(
+                    root=settings.execution_cgroup_root,
+                    run_id=run_id,
+                    driver=cgroup_driver,
+                )
+
+            create_execution_options = {
+                "client": client,
+                "workspace": workspace,
+                "stdin": job.stdin,
+                "job_id": job.job_id,
+                "run_id": run_id,
+                "memory_limit_mb": job.policy.memory_limit_mb,
+                "cpu_limit": job.policy.cpu_limit,
+                "pids_limit": job.policy.pids_limit,
+            }
+            if execution_cgroup_scope is not None:
+                create_execution_options["cgroup_scope"] = (
+                    execution_cgroup_scope
+                )
+
             execution_container = create_execution_container(
-                client=client,
-                workspace=workspace,
-                stdin=job.stdin,
-                job_id=job.job_id,
-                run_id=run_id,
-                memory_limit_mb=job.policy.memory_limit_mb,
-                cpu_limit=job.policy.cpu_limit,
-                pids_limit=job.policy.pids_limit,
+                **create_execution_options,
             )
 
-            execution_result = execute_program(
-                container=execution_container,
-                job_id=job.job_id,
-                run_id=run_id,
-                timeout_ms=job.policy.timeout_ms,
-                output_limit_bytes=job.policy.output_limit_bytes,
-            )
+            execute_options = {
+                "container": execution_container,
+                "job_id": job.job_id,
+                "run_id": run_id,
+                "timeout_ms": job.policy.timeout_ms,
+                "output_limit_bytes": job.policy.output_limit_bytes,
+            }
+            if execution_cgroup_scope is not None:
+                execute_options["cgroup_scope"] = execution_cgroup_scope
+
+            execution_result = execute_program(**execute_options)
 
             classification = classify_execution(execution_result)
 
@@ -365,6 +391,28 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
 
                 logger.error(
                     "event=volume_cleanup_error "
+                    "job_id=%s run_id=%s code=%s message=%s details=%s",
+                    job.job_id,
+                    run_id,
+                    exc.error_code,
+                    exc.message,
+                    exc.details,
+                )
+
+        # Peak 회수가 끝난 Execution 전용 cgroup을 마지막으로 삭제한다.
+        if execution_cgroup_scope is not None:
+            try:
+                execution_cgroup_scope.remove()
+            except RunnerError as exc:
+                cleanup_failed = True
+                _mark_failed(
+                    stage_summary,
+                    RunnerStage.CLEANUP,
+                    RunnerReasonCode.INTERNAL_ERROR,
+                    exc.message,
+                )
+                logger.error(
+                    "event=execution_cgroup_cleanup_error "
                     "job_id=%s run_id=%s code=%s message=%s details=%s",
                     job.job_id,
                     run_id,

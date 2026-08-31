@@ -43,3 +43,10 @@ class CleanupError(RunnerError):
 
     error_code = "CLEANUP_ERROR"
     status_code = 500
+
+
+class CgroupScopeError(RunnerError):
+    """Execution 전용 cgroup의 생성 또는 정리에 실패한 경우."""
+
+    error_code = "CGROUP_SCOPE_ERROR"
+    status_code = 500
