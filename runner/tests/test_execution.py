@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import docker
 
-from runner.exceptions import ContainerExecutionError
+from runner.exceptions import CgroupScopeError, ContainerExecutionError
 from runner.metrics.cgroup_scope import CgroupMetrics
 from runner.pipeline.execution import (
     create_execution_container,
@@ -20,6 +20,12 @@ class ExecutionTests(unittest.TestCase):
         self.client.containers.create.return_value = self.container
         self.container.wait.return_value = {"StatusCode": 0}
         self.container.attach.return_value = [(b"Hello\n", None)]
+        self.cgroup_scope = MagicMock()
+        self.cgroup_scope.docker_parent = "/codeguard/execution-test"
+        self.cgroup_scope.snapshot.return_value = CgroupMetrics(
+            memory_peak_bytes=1024,
+            pids_peak=1,
+        )
         self.workspace = VolumeWorkspace(
             job_id=uuid4(),
             volume_name="codeguard-job-test",
@@ -36,6 +42,7 @@ class ExecutionTests(unittest.TestCase):
             memory_limit_mb=128,
             cpu_limit=1.0,
             pids_limit=10,
+            cgroup_scope=self.cgroup_scope,
         )
 
         self.assertIs(result, self.container)
@@ -53,6 +60,7 @@ class ExecutionTests(unittest.TestCase):
             memswap_limit=128 * 1024 * 1024,
             nano_cpus=1_000_000_000,
             pids_limit=10,
+            cgroup_parent="/codeguard/execution-test",
             labels={
                 "codeguard.managed": "true",
                 "codeguard.job_id": str(self.workspace.job_id),
@@ -71,6 +79,7 @@ class ExecutionTests(unittest.TestCase):
             memory_limit_mb=128,
             cpu_limit=1.0,
             pids_limit=10,
+            cgroup_scope=self.cgroup_scope,
         )
 
         command = self.client.containers.create.call_args.kwargs["command"]
@@ -106,6 +115,7 @@ class ExecutionTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=self.run_id,
             timeout_ms=2000,
+            cgroup_scope=self.cgroup_scope,
         )
 
         self.assertEqual(result.exit_code, 0)
@@ -130,6 +140,7 @@ class ExecutionTests(unittest.TestCase):
                 memory_limit_mb=128,
                 cpu_limit=1.0,
                 pids_limit=10,
+                cgroup_scope=self.cgroup_scope,
             )
 
     def test_execute_program_returns_system_error_without_removing_container(self) -> None:
@@ -140,6 +151,7 @@ class ExecutionTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=self.run_id,
             timeout_ms=2000,
+            cgroup_scope=self.cgroup_scope,
         )
 
         self.assertIsNotNone(result.system_error)
@@ -147,14 +159,10 @@ class ExecutionTests(unittest.TestCase):
         self.container.remove.assert_not_called()
 
     @patch("runner.pipeline.execution.PidsLimitMonitor")
-    @patch("runner.pipeline.execution.ResourceMonitor")
-    def test_execute_program_prefers_parent_cgroup_peak_values(
+    def test_execute_program_uses_parent_cgroup_metrics_only(
         self,
-        resource_monitor_class,
         pids_monitor_class,
     ) -> None:
-        resource_monitor_class.return_value.memory_peak_bytes = 100
-        pids_monitor_class.return_value.pids_peak = 2
         pids_monitor_class.return_value.exceeded.return_value = False
         cgroup_scope = MagicMock()
         cgroup_scope.snapshot.return_value = CgroupMetrics(
@@ -173,6 +181,26 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.memory_peak_bytes, 16 * 1024 * 1024)
         self.assertEqual(result.pids_peak, 18)
         cgroup_scope.snapshot.assert_called_once_with()
+        self.container.stats.assert_not_called()
+
+    @patch("runner.pipeline.execution.PidsLimitMonitor")
+    def test_execute_program_propagates_cgroup_snapshot_error(
+        self,
+        pids_monitor_class,
+    ) -> None:
+        pids_monitor_class.return_value.exceeded.return_value = False
+        self.cgroup_scope.snapshot.side_effect = CgroupScopeError(
+            "Execution cgroup 측정값을 읽지 못했습니다.",
+        )
+
+        with self.assertRaises(CgroupScopeError):
+            execute_program(
+                container=self.container,
+                job_id=self.workspace.job_id,
+                run_id=self.run_id,
+                timeout_ms=2000,
+                cgroup_scope=self.cgroup_scope,
+            )
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 from runner.config import settings
+from runner.exceptions import CgroupScopeError
 from runner.models.job import PolicyLimits, RunnerLanguage, RunnerRequest
 from runner.models.result import RunnerReasonCode, RunnerStage, RunnerStatus
 from runner.pipeline.compiler import CompileResult
@@ -14,7 +15,7 @@ from runner.pipeline.workspace import VolumeWorkspace
 
 
 class ExecutorTests(unittest.TestCase):
-    def test_enabled_cgroup_scope_is_passed_and_removed(self) -> None:
+    def test_cgroup_scope_is_always_passed_and_removed(self) -> None:
         job_id = uuid4()
         client = MagicMock()
         client.info.return_value = {"CgroupDriver": "cgroupfs"}
@@ -37,7 +38,6 @@ class ExecutorTests(unittest.TestCase):
         )
 
         with (
-            patch.object(settings, "execution_cgroup_enabled", True),
             patch.object(settings, "execution_cgroup_root", delegated_root),
             patch(
                 "runner.metrics.cgroup_scope.ExecutionCgroupScope.create",
@@ -95,6 +95,154 @@ class ExecutorTests(unittest.TestCase):
             cgroup_scope,
         )
         cgroup_scope.remove.assert_called_once_with()
+
+    def test_cgroup_snapshot_failure_returns_internal_error_and_cleans_resources(
+        self,
+    ) -> None:
+        job_id = uuid4()
+        client = MagicMock()
+        client.info.return_value = {"CgroupDriver": "cgroupfs"}
+        compile_container = MagicMock()
+        execution_container = MagicMock()
+        cgroup_scope = MagicMock()
+        workspace = VolumeWorkspace(job_id, "codeguard-job-test")
+        delegated_root = Path("/sys/fs/cgroup/codeguard")
+        job = RunnerRequest(
+            job_id=job_id,
+            language=RunnerLanguage.CPP,
+            code="int main() { return 0; }",
+            policy=PolicyLimits(
+                timeout_ms=1000,
+                memory_limit_mb=64,
+                pids_limit=8,
+                cpu_limit=1.0,
+            ),
+            created_at=datetime.now(timezone.utc),
+        )
+
+        with (
+            patch.object(settings, "execution_cgroup_root", delegated_root),
+            patch(
+                "runner.metrics.cgroup_scope.ExecutionCgroupScope.create",
+                return_value=cgroup_scope,
+            ),
+            patch(
+                "runner.pipeline.executor.get_docker_client",
+                return_value=client,
+            ),
+            patch(
+                "runner.pipeline.executor.create_workspace",
+                return_value=workspace,
+            ),
+            patch(
+                "runner.pipeline.executor.create_compile_container",
+                return_value=compile_container,
+            ),
+            patch(
+                "runner.pipeline.executor.compile_source",
+                return_value=CompileResult(
+                    success=True,
+                    stdout="",
+                    stderr="",
+                    exit_code=0,
+                    artifact_ready=True,
+                ),
+            ),
+            patch(
+                "runner.pipeline.executor.create_execution_container",
+                return_value=execution_container,
+            ),
+            patch(
+                "runner.pipeline.executor.execute_program",
+                side_effect=CgroupScopeError(
+                    "Execution cgroup 측정값을 읽지 못했습니다.",
+                ),
+            ),
+            patch(
+                "runner.pipeline.executor.remove_workspace",
+            ) as remove_workspace,
+        ):
+            response = execute_job(job)
+
+        self.assertEqual(response.status, RunnerStatus.ERROR)
+        self.assertEqual(
+            response.reason_code,
+            RunnerReasonCode.INTERNAL_ERROR,
+        )
+        self.assertEqual(response.stage_summary.failed, [RunnerStage.EXECUTE])
+        self.assertIn(RunnerStage.CLEANUP, response.stage_summary.succeeded)
+        execution_container.remove.assert_called_once_with(force=True)
+        compile_container.remove.assert_called_once_with(force=True)
+        remove_workspace.assert_called_once_with(client, workspace)
+        cgroup_scope.remove.assert_called_once_with()
+
+    def test_cgroup_creation_failure_returns_internal_error_and_cleans_resources(
+        self,
+    ) -> None:
+        job_id = uuid4()
+        client = MagicMock()
+        client.info.return_value = {"CgroupDriver": "cgroupfs"}
+        compile_container = MagicMock()
+        workspace = VolumeWorkspace(job_id, "codeguard-job-test")
+        job = RunnerRequest(
+            job_id=job_id,
+            language=RunnerLanguage.CPP,
+            code="int main() { return 0; }",
+            policy=PolicyLimits(
+                timeout_ms=1000,
+                memory_limit_mb=64,
+                pids_limit=8,
+                cpu_limit=1.0,
+            ),
+            created_at=datetime.now(timezone.utc),
+        )
+
+        with (
+            patch(
+                "runner.metrics.cgroup_scope.ExecutionCgroupScope.create",
+                side_effect=CgroupScopeError(
+                    "Execution 전용 cgroup 생성에 실패했습니다.",
+                ),
+            ),
+            patch(
+                "runner.pipeline.executor.get_docker_client",
+                return_value=client,
+            ),
+            patch(
+                "runner.pipeline.executor.create_workspace",
+                return_value=workspace,
+            ),
+            patch(
+                "runner.pipeline.executor.create_compile_container",
+                return_value=compile_container,
+            ),
+            patch(
+                "runner.pipeline.executor.compile_source",
+                return_value=CompileResult(
+                    success=True,
+                    stdout="",
+                    stderr="",
+                    exit_code=0,
+                    artifact_ready=True,
+                ),
+            ),
+            patch(
+                "runner.pipeline.executor.create_execution_container",
+            ) as create_execution_container,
+            patch(
+                "runner.pipeline.executor.remove_workspace",
+            ) as remove_workspace,
+        ):
+            response = execute_job(job)
+
+        self.assertEqual(response.status, RunnerStatus.ERROR)
+        self.assertEqual(
+            response.reason_code,
+            RunnerReasonCode.INTERNAL_ERROR,
+        )
+        create_execution_container.assert_not_called()
+        compile_container.remove.assert_called_once_with(force=True)
+        remove_workspace.assert_called_once_with(client, workspace)
 
     @patch("runner.pipeline.executor.remove_workspace")
     @patch("runner.pipeline.executor.create_execution_container")

@@ -8,8 +8,7 @@ import docker
 
 from runner.config import settings
 from runner.exceptions import ContainerExecutionError
-from runner.metrics.cgroup_scope import CgroupMetrics, ExecutionCgroupScope
-from runner.metrics.resource_monitor import ResourceMonitor
+from runner.metrics.cgroup_scope import ExecutionCgroupScope
 from runner.metrics.pids_monitor import PidsLimitMonitor
 from runner.pipeline.workspace import VolumeWorkspace
 from runner.policies import EXECUTION_OUTPUT_LIMIT_BYTES
@@ -90,7 +89,7 @@ def create_execution_container(
     memory_limit_mb: int,
     cpu_limit: float,
     pids_limit: int,
-    cgroup_scope: ExecutionCgroupScope | None = None,
+    cgroup_scope: ExecutionCgroupScope,
 ):
     """Job Volume을 연결한 실행 컨테이너를 생성하고 반환한다."""
 
@@ -126,8 +125,7 @@ def create_execution_container(
             "codeguard.stage": "execute",
         },
     }
-    if cgroup_scope is not None:
-        container_options["cgroup_parent"] = cgroup_scope.docker_parent
+    container_options["cgroup_parent"] = cgroup_scope.docker_parent
 
     try:
         return client.containers.create(
@@ -159,14 +157,13 @@ def execute_program(
     job_id: UUID,
     run_id: UUID,
     timeout_ms: int,
+    cgroup_scope: ExecutionCgroupScope,
     output_limit_bytes: int = EXECUTION_OUTPUT_LIMIT_BYTES,
-    cgroup_scope: ExecutionCgroupScope | None = None,
 ) -> ExecutionResult:
     """제한을 감시하며 실행 컨테이너의 종료 정보와 출력을 수집한다."""
 
     start = time.monotonic()
     output = _BoundedOutput(output_limit_bytes)
-    monitor = ResourceMonitor(container)
     pids_monitor = PidsLimitMonitor(container)
     wait_done = threading.Event()
     wait_state: dict[str, object] = {}
@@ -175,7 +172,6 @@ def execute_program(
     pids_limit_exceeded = False
     system_error = None
     output_thread = None
-    monitor_started = False
     output_thread_stopped = True
 
     def wait_for_container() -> None:
@@ -220,9 +216,6 @@ def execute_program(
                 daemon=True,
             )
             wait_thread.start()
-
-            monitor_started = True
-            monitor.start()
 
             timeout_seconds = timeout_ms / 1000
             while not wait_done.is_set():
@@ -270,17 +263,6 @@ def execute_program(
                 frames,
                 output_thread,
             )
-            if monitor_started:
-                try:
-                    monitor.stop()
-                except Exception as exc:
-                    logger.warning(
-                        "event=resource_monitor_cleanup_error "
-                        "job_id=%s run_id=%s error=%s",
-                        job_id,
-                        run_id,
-                        exc,
-                    )
             pids_monitor.sample()
 
         final_policy_kill = timed_out or output.exceeded.is_set() or pids_limit_exceeded
@@ -320,64 +302,14 @@ def execute_program(
         if isinstance(wait_result, dict):
             exit_code = int(wait_result["StatusCode"])
 
-        oom_killed = False
-        try:
-            container.reload()
-            oom_killed = (
-                container.attrs.get("State", {}).get("OOMKilled", False)
-                is True
-            )
-        except docker.errors.DockerException as exc:
-            system_error = "실행 컨테이너 상태 확인에 실패했습니다."
-            logger.error(
-                "event=execution_container_reload_error "
-                "job_id=%s run_id=%s error=%s",
-                job_id,
-                run_id,
-                exc,
-            )
-
-        cgroup_metrics = CgroupMetrics()
-        if cgroup_scope is not None:
-            try:
-                cgroup_metrics = cgroup_scope.snapshot()
-            except Exception as exc:
-                logger.warning(
-                    "event=execution_cgroup_snapshot_error "
-                    "job_id=%s run_id=%s error=%s",
-                    job_id,
-                    run_id,
-                    exc,
-                )
-
-        memory_peak_bytes = (
-            cgroup_metrics.memory_peak_bytes
-            if cgroup_metrics.memory_peak_bytes is not None
-            else monitor.memory_peak_bytes
-        )
-        pids_peak = (
-            cgroup_metrics.pids_peak
-            if cgroup_metrics.pids_peak is not None
-            else pids_monitor.pids_peak
-        )
-        oom_killed = oom_killed or cgroup_metrics.oom_killed
+        cgroup_metrics = cgroup_scope.snapshot()
+        memory_peak_bytes = cgroup_metrics.memory_peak_bytes
+        pids_peak = cgroup_metrics.pids_peak
+        oom_killed = cgroup_metrics.oom_killed
         pids_limit_exceeded = (
             pids_limit_exceeded
             or cgroup_metrics.pids_limit_exceeded
         )
-        if oom_killed:
-            memory_limit_bytes = (
-                container.attrs.get("HostConfig", {}).get("Memory")
-            )
-            if (
-                isinstance(memory_limit_bytes, int)
-                and memory_limit_bytes > 0
-                and (
-                    memory_peak_bytes is None
-                    or memory_peak_bytes < memory_limit_bytes
-                )
-            ):
-                memory_peak_bytes = memory_limit_bytes
 
         if output_thread_stopped:
             stdout, stderr = output.decode()
@@ -412,6 +344,4 @@ def execute_program(
             stderr="",
             system_error="실행 컨테이너 처리에 실패했습니다.",
             wall_time_ms=int((time.monotonic() - start) * 1000),
-            memory_peak_bytes=monitor.memory_peak_bytes,
-            pids_peak=pids_monitor.pids_peak,
         )

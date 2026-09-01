@@ -36,8 +36,10 @@ class ExecuteApiTests(unittest.TestCase):
         self.client = TestClient(app)
 
         self.docker_client = MagicMock()
+        self.docker_client.info.return_value = {"CgroupDriver": "cgroupfs"}
         self.compile_container = MagicMock()
         self.execution_container = MagicMock()
+        self.execution_cgroup_scope = MagicMock()
 
         self.workspace = VolumeWorkspace(
             job_id=uuid4(),
@@ -76,6 +78,11 @@ class ExecuteApiTests(unittest.TestCase):
             "runner.pipeline.executor.execute_program",
         )
 
+        self.create_cgroup_scope_patcher = patch(
+            "runner.metrics.cgroup_scope.ExecutionCgroupScope.create",
+            return_value=self.execution_cgroup_scope,
+        )
+
         self.get_client_mock = self.get_client_patcher.start()
         self.create_workspace_mock = self.create_workspace_patcher.start()
         self.remove_workspace_mock = self.remove_workspace_patcher.start()
@@ -90,6 +97,7 @@ class ExecuteApiTests(unittest.TestCase):
         )
 
         self.execute_program_mock = self.execute_program_patcher.start()
+        self.create_cgroup_scope_mock = self.create_cgroup_scope_patcher.start()
 
     def tearDown(self) -> None:
         patch.stopall()
@@ -151,7 +159,7 @@ class ExecuteApiTests(unittest.TestCase):
         )
 
     def test_settings_include_execution_cgroup_configuration(self) -> None:
-        self.assertIn("execution_cgroup_enabled", Settings.model_fields)
+        self.assertNotIn("execution_cgroup_enabled", Settings.model_fields)
         self.assertIn("execution_cgroup_root", Settings.model_fields)
 
     def test_execute_compiles_cpp_with_job_volume(self) -> None:
@@ -233,6 +241,7 @@ class ExecuteApiTests(unittest.TestCase):
             memory_limit_mb=body["policy"]["memory_limit_mb"],
             cpu_limit=body["policy"]["cpu_limit"],
             pids_limit=body["policy"]["pids_limit"],
+            cgroup_scope=self.execution_cgroup_scope,
         )
 
         self.remove_workspace_mock.assert_called_once_with(
@@ -246,6 +255,7 @@ class ExecuteApiTests(unittest.TestCase):
             run_id=ANY,
             timeout_ms=body["policy"]["timeout_ms"],
             output_limit_bytes=EXECUTION_OUTPUT_LIMIT_BYTES,
+            cgroup_scope=self.execution_cgroup_scope,
         )
 
         self.execution_container.remove.assert_called_once_with(
