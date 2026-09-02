@@ -14,16 +14,16 @@ int main() {
 const DISPLAYED_EXECUTION_STAGES = [
   {
     key: "COMPILE",
-    label: "compile",
+    label: "컴파일",
   },
   {
     key: "EXECUTE",
-    label: "execute",
+    label: "실행",
   },
-  {
-    key: "CLEANUP",
-    label: "cleanup",
-  },
+  // {
+  //   key: "CLEANUP",
+  //   label: "정상 종료",
+  // },
 ];
 
 const ACTIVE_POLICY = {
@@ -906,7 +906,7 @@ function MainPage() {
                   isPidsLimitExceeded ? " resource-limit-exceeded" : ""
                 }`}
               >
-                <span>최대 프로세스</span>
+                <span>최대 PID 개수</span>
                 <strong>
                   {pidsPeak == null
                     ? "-"
