@@ -14,46 +14,23 @@ int main() {
 const DISPLAYED_EXECUTION_STAGES = [
   {
     key: "COMPILE",
-    label: "compile",
+    label: "컴파일",
   },
   {
     key: "EXECUTE",
-    label: "execute",
+    label: "실행",
   },
-  {
-    key: "CLEANUP",
-    label: "cleanup",
-  },
+  // {
+  //   key: "CLEANUP",
+  //   label: "정상 종료",
+  // },
 ];
 
-const POLICY_PROFILE_PREVIEW = {
-  basic: {
-    label: "기본",
-    title: "기본 정책 프로필",
-    description: "일반적인 코드 실행을 위한 기본 안전 프로필",
-    timeoutMs: 1000,
-    memoryLimitMb: 64,
-    processLimit: 32,
-    cpuLimit: 1.0,
-  },
-  strict: {
-    label: "엄격",
-    title: "엄격 정책 프로필",
-    description: "더 제한된 자원으로 코드를 검사하는 강화 프로필",
-    timeoutMs: 500,
-    memoryLimitMb: 32,
-    processLimit: 8,
-    cpuLimit: 0.5,
-  },
-  relaxed: {
-    label: "완화",
-    title: "완화 정책 프로필",
-    description: "자원 사용 범위를 확대한 테스트용 프로필",
-    timeoutMs: 3000,
-    memoryLimitMb: 256,
-    processLimit: 64,
-    cpuLimit: 2.0,
-  },
+const ACTIVE_POLICY = {
+  timeoutMs: 1000,
+  memoryLimitMb: 64,
+  processLimit: 32,
+  cpuLimit: 1.0,
 };
 
 const POLLING_INTERVAL_MS = 1000;
@@ -92,6 +69,175 @@ const EXECUTION_RESULT_PRESENTATION = {
 };
 
 const wait = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
+
+function MetricIcon({ type }) {
+  const iconPaths = {
+    time: (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7v5l3.8 2.3" />
+      </>
+    ),
+    memory: (
+      <>
+        <rect x="5" y="6" width="14" height="12" rx="1.5" />
+        <path d="M8 9h8M8 12h8M8 15h5M8 3v3M12 3v3M16 3v3M8 18v3M12 18v3M16 18v3" />
+      </>
+    ),
+    process: (
+      <>
+        <circle cx="8.5" cy="8" r="3.2" />
+        <circle cx="16.5" cy="9" r="2.7" />
+        <path d="M3.5 19c.5-3 2.2-4.7 5-4.7s4.6 1.7 5.2 4.7M14.2 14.8c2.8-.6 5.4.7 6.2 3.8" />
+      </>
+    ),
+    cpu: (
+      <>
+        <rect x="6" y="6" width="12" height="12" rx="1.5" />
+        <rect x="9.5" y="9.5" width="5" height="5" rx="0.5" />
+        <path d="M9 3v3M12 3v3M15 3v3M9 18v3M12 18v3M15 18v3M3 9h3M3 12h3M3 15h3M18 9h3M18 12h3M18 15h3" />
+      </>
+    ),
+    file: (
+      <>
+        <path d="M6 3.5h7l5 5V20.5H6z" />
+        <path d="M13 3.5v5h5M9 13h6M9 16h6" />
+      </>
+    ),
+    network: (
+      <>
+        <circle cx="12" cy="12" r="8.5" />
+        <path d="M3.8 12h16.4M12 3.5c2.1 2.3 3.2 5.1 3.2 8.5s-1.1 6.2-3.2 8.5c-2.1-2.3-3.2-5.1-3.2-8.5S9.9 5.8 12 3.5z" />
+      </>
+    ),
+    permission: (
+      <>
+        <rect x="5.5" y="10" width="13" height="10" rx="2" />
+        <path d="M8.5 10V7.5a3.5 3.5 0 0 1 7 0V10M12 14v2.5" />
+      </>
+    ),
+    output: (
+      <>
+        <path d="M7 9V4h10v5" />
+        <path d="M6 9h12a2 2 0 0 1 2 2v5H4v-5a2 2 0 0 1 2-2Z" />
+        <path d="M7 16h10v4H7z" />
+        <path d="M16 12h.01" />
+      </>
+    ),
+  };
+
+  return (
+    <svg
+      className="metric-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {iconPaths[type]}
+    </svg>
+  );
+}
+
+function StatusGlyph({ status }) {
+  if (status === "success") {
+    return (
+      <svg
+        className="status-glyph"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="m5 12 4.2 4.2L19 6.5" />
+      </svg>
+    );
+  }
+
+  if (status === "failed") {
+    return (
+      <svg
+        className="status-glyph"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        aria-hidden="true"
+      >
+        <path d="m8 8 8 8M16 8l-8 8" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg
+      className="status-glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="7" />
+      <path d="M9.5 12h5" />
+    </svg>
+  );
+}
+
+function ResultMessageIcon({ status }) {
+  const isSuccess = status === "success";
+  const isFailure = status === "error" || status === "blocked";
+
+  return (
+    <svg
+      className="alert-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="9" fill="currentColor" stroke="none" />
+      {isSuccess && (
+        <path d="m7.2 12.2 3.1 3.1 6.5-6.7" stroke="#fff" strokeWidth="2.4" />
+      )}
+      {isFailure && (
+        <path d="m8.5 8.5 7 7M15.5 8.5l-7 7" stroke="#fff" strokeWidth="2.4" />
+      )}
+      {!isSuccess && !isFailure && (
+        <path d="M12 7.8v5.3M12 16.4h.01" stroke="#fff" strokeWidth="2.4" />
+      )}
+    </svg>
+  );
+}
+
+function ArrowIcon() {
+  return (
+    <svg
+      className="stage-arrow-icon"
+      viewBox="0 0 42 28"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="3.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 14h31" />
+      <path d="m26 7 7 7-7 7" />
+    </svg>
+  );
+}
 
 function calculateUsagePercentage(value, limit) {
   if (!value || !limit) {
@@ -244,7 +390,6 @@ function MainPage() {
   const [message, setMessage] = useState(
     "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
   );
-  const [activeIoTab, setActiveIoTab] = useState("stdin");
   const [activeOutputTab, setActiveOutputTab] = useState("stdout");
   const selectedPolicyProfile = "basic";
 
@@ -253,7 +398,7 @@ function MainPage() {
 
   // 선택값 및 실행 상태 파생 데이터
   const isExecuting = executionState === "loading";
-  const selectedPolicy = POLICY_PROFILE_PREVIEW[selectedPolicyProfile];
+  const selectedPolicy = ACTIVE_POLICY;
 
   const outputByTab = {
     stdout: executionResult?.stdout,
@@ -297,7 +442,13 @@ function MainPage() {
     selectedPolicy.processLimit,
   );
 
-  // WORKSPACE를 제외하고 화면에 표시할 실행 단계
+  const cpuTimeMs = resourceUsage?.cpu_time_ms;
+  const cpuUsagePercentage =
+    cpuTimeMs != null && wallTimeMs != null
+      ? calculateUsagePercentage(cpuTimeMs, wallTimeMs)
+      : null;
+
+  // 화면에 표시할 실행 단계
   const executionStages = DISPLAYED_EXECUTION_STAGES.map((stage) => {
     const status = getExecutionStageStatus(
       stage.key,
@@ -337,7 +488,6 @@ function MainPage() {
         setExecutionState(presentation.state);
         setExecutionStatusText(presentation.label);
         setMessage(presentation.message);
-        setActiveIoTab("output");
         setActiveOutputTab(getPreferredOutputTab(result));
         return;
       }
@@ -425,7 +575,7 @@ function MainPage() {
             isEditorFullscreen ? " editor-section-fullscreen" : ""
           }`}
         >
-          <div className="workspace-panel-header editor-toolbar">
+          <div className="workspace-panel-header editor-panel-header">
             <h2>코드 입력 및 실행</h2>
 
             <div className="editor-header-controls">
@@ -442,47 +592,6 @@ function MainPage() {
                 </select>
               </div>
 
-              {/* <div
-                className="toolbar-policy-tabs"
-                role="tablist"
-                aria-label="정책 프로필"
-              >
-                {Object.entries(POLICY_PROFILE_PREVIEW).map(
-                  ([profileKey, profile]) => (
-                    <button
-                      className={`toolbar-policy-tab${
-                        selectedPolicyProfile === profileKey ? " active" : ""
-                      }`}
-                      key={profileKey}
-                      type="button"
-                      role="tab"
-                      aria-selected={selectedPolicyProfile === profileKey}
-                      onClick={() => setSelectedPolicyProfile(profileKey)}
-                    >
-                      {profile.label}
-                    </button>
-                  ),
-                )}
-              </div> */}
-
-              <button
-                className="run-button"
-                type="submit"
-                disabled={isExecuting}
-                aria-busy={isExecuting}
-              >
-                {isExecuting ? "실행 중..." : "▶ 실행"}
-              </button>
-
-              <button
-                className="toolbar-reset-button"
-                type="button"
-                disabled={isExecuting}
-                onClick={handleReset}
-              >
-                ↻ 초기화
-              </button>
-
               <button
                 className="editor-fullscreen-button"
                 type="button"
@@ -496,6 +605,26 @@ function MainPage() {
               >
                 {isEditorFullscreen ? "×" : "⛶"}
               </button>
+
+              <div className="editor-action-buttons">
+                <button
+                  className="run-button"
+                  type="submit"
+                  disabled={isExecuting}
+                  aria-busy={isExecuting}
+                >
+                  {isExecuting ? "실행 중..." : "▶ 실행"}
+                </button>
+
+                <button
+                  className="io-reset-button"
+                  type="button"
+                  disabled={isExecuting}
+                  onClick={handleReset}
+                >
+                  ↻ 초기화
+                </button>
+              </div>
             </div>
           </div>
 
@@ -534,153 +663,155 @@ function MainPage() {
           </div>
 
           <div className="io-section">
-            <div
-              className="io-main-tabs"
-              role="tablist"
-              aria-label="입출력 영역"
-            >
-              <button
-                className={`io-main-tab${activeIoTab === "stdin" ? " active" : ""}`}
-                type="button"
-                role="tab"
-                aria-selected={activeIoTab === "stdin"}
-                onClick={() => setActiveIoTab("stdin")}
-              >
-                표준 입력(stdin)
-              </button>
+            <div className="io-input-panel">
+              <label htmlFor="standard-input">표준 입력 (stdin)</label>
 
-              <button
-                className={`io-main-tab${activeIoTab === "output" ? " active" : ""}`}
-                type="button"
-                role="tab"
-                aria-selected={activeIoTab === "output"}
-                onClick={() => setActiveIoTab("output")}
-              >
-                출력 결과
-              </button>
+              <textarea
+                id="standard-input"
+                className="standard-input"
+                value={standardInput}
+                onChange={(event) => setStandardInput(event.target.value)}
+                rows={4}
+                placeholder="프로그램에 전달할 입력값이 있다면 작성하세요..."
+                aria-label="표준 입력"
+              />
             </div>
 
-            <div className="io-content">
-              {activeIoTab === "stdin" ? (
-                <textarea
-                  id="standard-input"
-                  className="standard-input"
-                  value={standardInput}
-                  onChange={(event) => setStandardInput(event.target.value)}
-                  rows="4"
-                  placeholder="프로그램에 전달할 입력값이 있다면 작성하세요."
-                  aria-label="표준 입력"
-                />
-              ) : (
-                <div className="output-content">
-                  <div
-                    className="output-tabs"
-                    role="tablist"
-                    aria-label="출력 결과 종류"
-                  >
-                    <button
-                      className={`output-tab${
-                        activeOutputTab === "stdout" ? " active" : ""
-                      }`}
-                      type="button"
-                      role="tab"
-                      aria-selected={activeOutputTab === "stdout"}
-                      onClick={() => setActiveOutputTab("stdout")}
-                    >
-                      stdout
-                    </button>
+            <div className="io-output-panel">
+              <div
+                className="output-tabs"
+                role="tablist"
+                aria-label="출력 결과 종류"
+              >
+                <button
+                  className={`output-tab${
+                    activeOutputTab === "stdout" ? " active" : ""
+                  }`}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeOutputTab === "stdout"}
+                  onClick={() => setActiveOutputTab("stdout")}
+                >
+                  stdout
+                </button>
 
-                    <button
-                      className={`output-tab${
-                        activeOutputTab === "stderr" ? " active" : ""
-                      }`}
-                      type="button"
-                      role="tab"
-                      aria-selected={activeOutputTab === "stderr"}
-                      onClick={() => setActiveOutputTab("stderr")}
-                    >
-                      stderr
-                    </button>
+                <button
+                  className={`output-tab${
+                    activeOutputTab === "stderr" ? " active" : ""
+                  }`}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeOutputTab === "stderr"}
+                  onClick={() => setActiveOutputTab("stderr")}
+                >
+                  stderr
+                </button>
 
-                    <button
-                      className={`output-tab${
-                        activeOutputTab === "compileLog" ? " active" : ""
-                      }`}
-                      type="button"
-                      role="tab"
-                      aria-selected={activeOutputTab === "compileLog"}
-                      onClick={() => setActiveOutputTab("compileLog")}
-                    >
-                      컴파일 로그
-                    </button>
-                  </div>
+                <button
+                  className={`output-tab${
+                    activeOutputTab === "compileLog" ? " active" : ""
+                  }`}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeOutputTab === "compileLog"}
+                  onClick={() => setActiveOutputTab("compileLog")}
+                >
+                  컴파일 로그
+                </button>
+              </div>
 
-                  <pre className="io-result-output">{resultOutput}</pre>
-                </div>
-              )}
+              <pre className="io-result-output" aria-label="출력 결과">
+                {resultOutput}
+              </pre>
             </div>
           </div>
         </section>
 
-        <div className="workspace-side-column">
+        <div className="execution-overview-column">
           {/* 실행 설정 영역 */}
           <section className="workspace-panel settings-section">
             <div className="workspace-panel-header">
               <h2>현재 실행 환경</h2>
             </div>
 
-            <div className="environment-content">
+            <div className="settings-content">
               <h3>적용 중인 제한</h3>
 
               <div className="environment-limit-grid">
-                <article className="environment-limit-item">
-                  <span aria-hidden="true">◷</span>
+                <div className="environment-limit-card">
+                  <span className="environment-limit-icon metric-time">
+                    <MetricIcon type="time" />
+                  </span>
                   <div>
                     <small>시간 제한</small>
-                    <strong>
-                      {selectedPolicy.timeoutMs.toLocaleString()} ms
-                    </strong>
+                    <strong>{selectedPolicy.timeoutMs / 1000} sec</strong>
                   </div>
-                </article>
+                </div>
 
-                <article className="environment-limit-item">
-                  <span aria-hidden="true">▦</span>
+                <div className="environment-limit-card">
+                  <span className="environment-limit-icon metric-memory">
+                    <MetricIcon type="memory" />
+                  </span>
                   <div>
                     <small>메모리</small>
                     <strong>{selectedPolicy.memoryLimitMb} MB</strong>
                   </div>
-                </article>
+                </div>
 
-                <article className="environment-limit-item">
-                  <span aria-hidden="true">♙</span>
+                <div className="environment-limit-card">
+                  <span className="environment-limit-icon metric-process">
+                    <MetricIcon type="process" />
+                  </span>
                   <div>
-                    <small>프로세스</small>
+                    <small>PID</small>
                     <strong>{selectedPolicy.processLimit}개</strong>
                   </div>
-                </article>
+                </div>
 
-                <article className="environment-limit-item">
-                  <span aria-hidden="true">▣</span>
+                <div className="environment-limit-card">
+                  <span className="environment-limit-icon metric-cpu">
+                    <MetricIcon type="cpu" />
+                  </span>
                   <div>
                     <small>CPU</small>
                     <strong>{selectedPolicy.cpuLimit.toFixed(1)} CPU</strong>
                   </div>
-                </article>
+                </div>
               </div>
 
               <h3 className="planned-feature-title">추가 예정 기능</h3>
 
               <div className="planned-feature-grid">
                 <article className="planned-feature-item">
-                  <span aria-hidden="true">♧</span>
+                  <span className="planned-feature-icon planned-file-icon">
+                    <MetricIcon type="file" />
+                  </span>
                   <strong>파일 접근 제한</strong>
-                  <small>준비 중</small>
+                  <small>추가 예정</small>
                 </article>
 
                 <article className="planned-feature-item">
-                  <span aria-hidden="true">◎</span>
+                  <span className="planned-feature-icon planned-network-icon">
+                    <MetricIcon type="network" />
+                  </span>
                   <strong>네트워크 차단</strong>
-                  <small>준비 중</small>
+                  <small>추가 예정</small>
+                </article>
+
+                <article className="planned-feature-item">
+                  <span className="planned-feature-icon planned-permission-icon">
+                    <MetricIcon type="permission" />
+                  </span>
+                  <strong>권한 제한</strong>
+                  <small>추가 예정</small>
+                </article>
+
+                <article className="planned-feature-item">
+                  <span className="planned-feature-icon planned-output-icon">
+                    <MetricIcon type="output" />
+                  </span>
+                  <strong>출력 제한</strong>
+                  <small>추가 예정</small>
                 </article>
               </div>
             </div>
@@ -697,56 +828,48 @@ function MainPage() {
                 <p
                   className={`execution-message execution-message-${executionState}`}
                 >
+                  <span>
+                    <ResultMessageIcon status={executionState} />
+                  </span>{" "}
                   {message}
                 </p>
               )}
 
-              <div className="execution-result-overview">
-                <div className="execution-result-row">
-                  <strong>상태</strong>
-
-                  <span
+              <div className="execution-result-meta">
+                <div>
+                  <span>상태</span>
+                  <strong
                     className={`execution-status-badge execution-status-${executionState}`}
                     title={jobId ? `실행 ID: ${jobId}` : undefined}
                   >
                     {executionStatusText}
-                  </span>
+                  </strong>
                 </div>
-
-                <div className="execution-result-row">
-                  <strong>사유 코드</strong>
-                  <span>{executionReasonCode}</span>
+                <div>
+                  <span>종료 코드</span>
+                  <strong>{executionExitCode}</strong>
                 </div>
-
-                <div className="execution-result-row">
-                  <strong>exit code</strong>
-                  <span>{executionExitCode}</span>
+                <div>
+                  <span>종료 사유</span>
+                  <strong>{executionReasonCode}</strong>
                 </div>
               </div>
 
-              <div className="execution-stage-section">
-                <h3>단계별 결과</h3>
-
-                <div className="execution-stage-list">
-                  {executionStages.map((stage) => (
-                    <div className="execution-stage-row" key={stage.key}>
-                      <span>{stage.label}</span>
-
-                      <span className={`execution-stage-${stage.status}`}>
-                        {stage.statusLabel}
-                      </span>
+              <div className="execution-stage-flow" aria-label="단계별 결과">
+                {executionStages.map((stage, index) => (
+                  <div className="execution-stage-item" key={stage.key}>
+                    <div className={`stage-indicator stage-${stage.status}`}>
+                      <StatusGlyph status={stage.status} />
                     </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="execution-total-time">
-                <strong>총 소요 시간</strong>
-                <span>
-                  {wallTimeMs == null
-                    ? "-"
-                    : `${wallTimeMs.toLocaleString()} ms`}
-                </span>
+                    <strong>{stage.label}</strong>
+                    <span>{stage.statusLabel.replace(/^[^ ]+ /, "")}</span>
+                    {index < executionStages.length - 1 && (
+                      <span className="stage-arrow" aria-hidden="true">
+                        <ArrowIcon />
+                      </span>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           </section>
@@ -754,7 +877,7 @@ function MainPage() {
           {/* 자원 사용량 요약 영역 */}
           <section className="workspace-panel resource-section">
             <div className="resource-section-header">
-              <h2>자원 사용량 요약</h2>
+              <h2>자원 사용량</h2>
             </div>
 
             <div className="resource-card-grid">
@@ -763,37 +886,17 @@ function MainPage() {
                   isTimeLimitExceeded ? " resource-limit-exceeded" : ""
                 }`}
               >
-                <div className="resource-card-main">
-                  <span className="resource-card-icon" aria-hidden="true">
-                    ◷
-                  </span>
-
-                  <div className="resource-card-value">
-                    <span>Wall Time</span>
-
-                    <strong>
-                      {wallTimeMs == null ? "-" : wallTimeMs.toLocaleString()}
-                      {wallTimeMs != null && <small> ms</small>}
-                    </strong>
-                  </div>
-                  {isTimeLimitExceeded && (
-                    <span className="resource-limit-badge">제한 초과</span>
-                  )}
-                </div>
-                <p>
-                  제한 {selectedPolicy.timeoutMs.toLocaleString()} ms (
-                  {wallTimePercentage}%)
-                </p>
-                <div
-                  className="resource-progress"
-                  role="progressbar"
-                  aria-label="실행 시간 사용률"
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                  aria-valuenow={wallTimePercentage}
-                >
+                <span>실행 시간</span>
+                <strong>
+                  {wallTimeMs == null
+                    ? "-"
+                    : `${(wallTimeMs / 1000).toFixed(3)} / ${(selectedPolicy.timeoutMs / 1000).toFixed(0)}`}
+                  <small> sec</small>
+                </strong>
+                <div className="resource-progress">
                   <span style={{ width: `${wallTimePercentage}%` }} />
                 </div>
+                <em>{wallTimeMs == null ? "-" : `${wallTimePercentage}%`}</em>
               </article>
 
               <article
@@ -801,39 +904,17 @@ function MainPage() {
                   isMemoryLimitExceeded ? " resource-limit-exceeded" : ""
                 }`}
               >
-                <div className="resource-card-main">
-                  <span className="resource-card-icon" aria-hidden="true">
-                    ▦
-                  </span>
-
-                  <div className="resource-card-value">
-                    <span>Memory Peak</span>
-
-                    <strong>
-                      {memoryPeakMb == null ? "-" : memoryPeakMb.toFixed(1)}
-                      {memoryPeakMb != null && <small> MB</small>}
-                    </strong>
-                  </div>
-
-                  {isMemoryLimitExceeded && (
-                    <span className="resource-limit-badge">제한 초과</span>
-                  )}
-                </div>
-
-                <p>
-                  제한 {selectedPolicy.memoryLimitMb} MB ({memoryPercentage}%)
-                </p>
-
-                <div
-                  className="resource-progress"
-                  role="progressbar"
-                  aria-label="메모리 사용률"
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                  aria-valuenow={memoryPercentage}
-                >
+                <span>최대 메모리</span>
+                <strong>
+                  {memoryPeakMb == null
+                    ? "-"
+                    : `${memoryPeakMb.toFixed(1)} / ${selectedPolicy.memoryLimitMb}`}
+                  <small> MB</small>
+                </strong>
+                <div className="resource-progress">
                   <span style={{ width: `${memoryPercentage}%` }} />
                 </div>
+                <em>{memoryPeakMb == null ? "-" : `${memoryPercentage}%`}</em>
               </article>
 
               <article
@@ -841,58 +922,70 @@ function MainPage() {
                   isPidsLimitExceeded ? " resource-limit-exceeded" : ""
                 }`}
               >
-                <div className="resource-card-main">
-                  <span className="resource-card-icon" aria-hidden="true">
-                    ♙
-                  </span>
-
-                  <div className="resource-card-value">
-                    <span>PIDs Peak</span>
-
-                    <strong>
-                      {pidsPeak == null ? "-" : pidsPeak.toLocaleString()}
-                      {pidsPeak != null && <small> 개</small>}
-                    </strong>
-                  </div>
-
-                  {isPidsLimitExceeded && (
-                    <span className="resource-limit-badge">제한 초과</span>
-                  )}
-                </div>
-                <p>
-                  제한 {selectedPolicy.processLimit}개 ({pidsPercentage}%)
-                </p>
-                <div
-                  className="resource-progress"
-                  role="progressbar"
-                  aria-label="프로세스 사용률"
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                  aria-valuenow={pidsPercentage}
-                >
+                <span>최대 PID 개수</span>
+                <strong>
+                  {pidsPeak == null
+                    ? "-"
+                    : `${pidsPeak} / ${selectedPolicy.processLimit}`}
+                  <small> 개</small>
+                </strong>
+                <div className="resource-progress">
                   <span style={{ width: `${pidsPercentage}%` }} />
                 </div>
+                <em>{pidsPeak == null ? "-" : `${pidsPercentage}%`}</em>
+              </article>
+
+              <article
+                className={`resource-usage-card resource-cpu${
+                  cpuTimeMs == null ? " resource-disabled" : ""
+                }`}
+              >
+                <span>CPU 사용률</span>
+                <strong>
+                  {cpuUsagePercentage == null
+                    ? "미측정"
+                    : `${cpuUsagePercentage}`}
+                  {cpuUsagePercentage != null && <small>%</small>}
+                </strong>
+                <div className="resource-progress">
+                  <span style={{ width: `${cpuUsagePercentage ?? 0}%` }} />
+                </div>
+                <em>
+                  {cpuTimeMs == null
+                    ? "측정 예정"
+                    : `${cpuTimeMs.toLocaleString()} ms`}
+                </em>
               </article>
             </div>
           </section>
 
-          {/* 결과 요약 영역 */}
-          <section className="workspace-panel result-summary-section">
-            <div className="resource-section-header">
+          {/* <section className="workspace-panel summary-section">
+            <div className="workspace-panel-header">
               <h2>결과 요약</h2>
             </div>
 
-            <div className="result-summary-list">
+            <div className="summary-list">
               {executionStages.map((stage) => (
-                <div className="result-summary-row" key={stage.key}>
-                  <span className={`execution-stage-${stage.status}`}>
-                    {stage.statusLabel}
+                <div
+                  className={`summary-item summary-${stage.status}`}
+                  key={stage.key}
+                >
+                  <span className="summary-indicator" aria-hidden="true">
+                    <StatusGlyph status={stage.status} />
                   </span>
-                  <strong>{stage.label}</strong>
+                  <span>
+                    {stage.key === "COMPILE"
+                      ? "정상 컴파일 완료"
+                      : stage.key === "EXECUTE"
+                        ? executionState === "blocked"
+                          ? "실행 차단됨"
+                          : "실행 완료"
+                        : "정리 완료"}
+                  </span>
                 </div>
               ))}
             </div>
-          </section>
+          </section> */}
         </div>
       </div>
     </form>
