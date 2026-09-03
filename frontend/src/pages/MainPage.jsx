@@ -116,6 +116,14 @@ function MetricIcon({ type }) {
         <path d="M8.5 10V7.5a3.5 3.5 0 0 1 7 0V10M12 14v2.5" />
       </>
     ),
+    output: (
+      <>
+        <path d="M7 9V4h10v5" />
+        <path d="M6 9h12a2 2 0 0 1 2 2v5H4v-5a2 2 0 0 1 2-2Z" />
+        <path d="M7 16h10v4H7z" />
+        <path d="M16 12h.01" />
+      </>
+    ),
   };
 
   return (
@@ -755,7 +763,7 @@ function MainPage() {
                     <MetricIcon type="process" />
                   </span>
                   <div>
-                    <small>프로세스</small>
+                    <small>PID</small>
                     <strong>{selectedPolicy.processLimit}개</strong>
                   </div>
                 </div>
@@ -795,6 +803,14 @@ function MainPage() {
                     <MetricIcon type="permission" />
                   </span>
                   <strong>권한 제한</strong>
+                  <small>추가 예정</small>
+                </article>
+
+                <article className="planned-feature-item">
+                  <span className="planned-feature-icon planned-output-icon">
+                    <MetricIcon type="output" />
+                  </span>
+                  <strong>출력 제한</strong>
                   <small>추가 예정</small>
                 </article>
               </div>
