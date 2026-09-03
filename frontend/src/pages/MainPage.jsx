@@ -959,7 +959,7 @@ function MainPage() {
             </div>
           </section>
 
-          <section className="workspace-panel summary-section">
+          {/* <section className="workspace-panel summary-section">
             <div className="workspace-panel-header">
               <h2>결과 요약</h2>
             </div>
@@ -985,7 +985,7 @@ function MainPage() {
                 </div>
               ))}
             </div>
-          </section>
+          </section> */}
         </div>
       </div>
     </form>
