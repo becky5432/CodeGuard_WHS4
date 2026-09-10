@@ -115,6 +115,9 @@ def create_execution_container(
             }
         },
         "detach": True,
+        "user": "10001:10001",
+        "cap_drop": ["ALL"],
+        "security_opt": ["no-new-privileges=true"],
         "mem_limit": memory_limit_bytes,
         "memswap_limit": memory_limit_bytes,
         "nano_cpus": nano_cpus_limit,
