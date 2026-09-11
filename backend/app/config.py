@@ -17,7 +17,6 @@ class Settings(BaseSettings):
 settings = Settings()
 
  
-# 기본 정책 설정 (임시값이고 구체적인 값은 안 정해짐)
 DEFAULT_POLICY = {
     "timeout_ms": 2000,
     "memory_limit_mb": 128,

@@ -12,7 +12,6 @@ def create_execution(
     language: str,
     code: str,
     stdin: str,
-    policy_profile: str,
     limits: dict,
 ) -> Execution:
     """실행 요청을 PENDING 상태로 저장"""
@@ -22,11 +21,11 @@ def create_execution(
         code=code,
         stdin=stdin,
         status="PENDING",
-        policy_profile=policy_profile,
         timeout_ms=limits["timeout_ms"],
         memory_limit_mb=limits["memory_limit_mb"],
         pids_limit=limits["pids_limit"],
         cpu_limit=limits["cpu_limit"],
+        output_limit_bytes=limits["output_limit_bytes"],
     )
 
     db.add(execution)
@@ -83,6 +82,7 @@ def save_result(
     cpu_time_ms: int | None = None,
     memory_peak_bytes: int | None = None,
     pids_peak: int | None = None,
+    output_bytes: int | None = None,
     finished_at: datetime | None = None,
 ) -> Execution | None:
     """Runner 결과를 실행 기록에 반영하고 최종 상태로 갱신
@@ -111,6 +111,7 @@ def save_result(
     execution.cpu_time_ms = cpu_time_ms
     execution.memory_peak_bytes = memory_peak_bytes
     execution.pids_peak = pids_peak
+    execution.output_bytes = output_bytes
 
     db.commit()
     db.refresh(execution)
