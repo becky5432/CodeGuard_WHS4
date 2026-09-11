@@ -21,7 +21,6 @@ class Execution(Base):
     )
 
     # --- 적용 정책 (실행 시점 스냅샷) ---
-    policy_profile = Column(String(16), default="basic")       # basic / strict / relaxed
     timeout_ms = Column(Integer)                               # 최대 실행 시간(ms)
     memory_limit_mb = Column(Integer)                          # 최대 메모리(MB)
     pids_limit = Column(Integer)                               # 최대 프로세스·스레드 수
