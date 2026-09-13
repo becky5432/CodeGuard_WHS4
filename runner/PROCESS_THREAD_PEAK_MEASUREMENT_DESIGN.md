@@ -85,7 +85,7 @@ cgroup v2 pids.max
 
 ## 6. eBPF 측정 구조
 
-호스트의 eBPF Controller가 사용자 실행파일의 Root Task와 자손을 이벤트 단위로 추적한다. Execution Container 내부에는 BPF 권한을 부여하지 않는다.
+호스트의 eBPF Controller가 사용자 실행파일의 Root Task와 자손을 이벤트 단위로 추적한다. Execution Container 내부에는 BPF 권한을 부여하지 않는다. eBPF는 제한이나 종료를 수행하지 않고, 프로세스·스레드 측정값만 갱신한다.
 
 ```text
 Runner
@@ -114,7 +114,27 @@ Runner
 
 실행 제한 시간은 추적 등록을 마치고 사용자 실행파일을 시작하는 시점부터 계산한다.
 
-### 6.2 이벤트 처리
+### 6.2 집계할 값과 계산식
+
+eBPF는 다음 세 개의 현재값을 실행별로 관리한다.
+
+```text
+process_current = 현재 생존한 TGID의 개수
+task_current    = 현재 추적 중인 TID의 개수
+thread_current  = task_current - process_current
+```
+
+Peak는 현재값이 증가할 때마다 다음과 같이 갱신한다.
+
+```text
+process_peak = max(process_peak, process_current)
+thread_peak  = max(thread_peak, thread_current)
+task_peak    = max(task_peak, task_current)
+```
+
+여기서 `thread_current`와 `thread_peak`는 각 프로세스의 메인 스레드를 제외한 추가 스레드 수다. 종료 순서에 따른 계산 오류를 줄이기 위해 종료 시 `thread_current`를 별도로 추정하지 않고 `task_current - process_current`로 다시 계산한다.
+
+### 6.3 이벤트 처리
 
 BTF/CO-RE 기반 eBPF 프로그램으로 다음 이벤트를 관찰한다.
 
@@ -130,16 +150,58 @@ TID != TGID → 기존 프로세스의 추가 스레드
 
 단순히 `TID == TGID`만 확인하지 않고 TGID별 생존 Task 수를 참조 카운트로 관리한다. 메인 스레드가 다른 스레드보다 먼저 종료되는 경우에도 같은 TGID의 마지막 Task가 종료될 때까지 프로세스가 존재하는 것으로 계산하기 위해서다.
 
-### 6.3 BPF Map
+### 6.4 생성 이벤트 처리
+
+`sched_process_fork` 이벤트가 발생하면 다음 순서로 처리한다.
+
+1. 부모 TID가 `tracked_tasks`에 등록되어 있는지 확인한다.
+2. 등록된 부모의 자식이면 자식 TID에 동일한 `run_id`를 기록한다.
+3. 자식의 `TID == TGID`이면 새 프로세스로 분류하고 `process_current`를 1 증가시킨다.
+4. 자식의 `TID != TGID`이면 기존 프로세스의 추가 스레드로 분류한다.
+5. 모든 성공한 생성 이벤트에서 `task_current`를 1 증가시킨다.
+6. `thread_current = task_current - process_current`를 계산한다.
+7. 세 현재값으로 `process_peak`, `thread_peak`, `task_peak`를 갱신한다.
+
+생성에 실패한 `fork`, `clone`, `clone3`, `pthread_create`는 성공한 `sched_process_fork` 이벤트가 발생하지 않으므로 Peak에 포함하지 않는다.
+
+### 6.5 종료 이벤트 처리
+
+`sched_process_exit` 이벤트가 발생하면 다음 순서로 처리한다.
+
+1. 종료 TID가 `tracked_tasks`에 등록되어 있는지 확인한다.
+2. 등록된 TID를 `tracked_tasks`에서 제거하고 해당 TGID의 생존 Task 참조 카운트를 1 감소시킨다.
+3. `task_current`를 1 감소시킨다.
+4. 해당 TGID의 생존 Task 수가 0이면 프로세스가 완전히 종료된 것이므로 `process_current`를 1 감소시킨다.
+5. `thread_current = task_current - process_current`를 다시 계산한다.
+
+따라서 메인 스레드가 먼저 종료되더라도 같은 TGID의 작업 스레드가 남아 있으면 프로세스 1개가 유지된다. 반대로 마지막 Task가 종료될 때만 프로세스 수를 감소시킨다.
+
+### 6.6 순간적인 Peak 처리
+
+생성 이벤트가 발생한 시점에 BPF Map의 현재값과 Peak를 커널에서 즉시 갱신한다. Runner가 일정 주기로 `/proc`나 cgroup 파일을 읽어 나중에 계산하지 않는다.
+
+```text
+스레드 31개 생성
+  → fork 이벤트 31회 발생
+  → thread_current가 1씩 증가
+  → thread_peak=31 기록
+  → Barrier 해제
+  → 스레드가 즉시 종료
+  → 현재값은 감소하지만 thread_peak=31은 유지
+```
+
+따라서 스레드가 Runner의 다음 폴링 시점 전에 모두 종료되어도 Peak를 회수할 수 있다. 최종 Peak의 근거는 Ring Buffer에서 전달된 이벤트를 사용자 공간에서 다시 합산한 값이 아니라, eBPF가 이벤트마다 갱신한 `run_metrics` Map이다.
+
+### 6.7 BPF Map
 
 | Map | Key | Value | 목적 |
 | --- | --- | --- | --- |
 | `tracked_roots` | Root TID | `run_id` | 사용자 코드 추적 시작점 |
 | `tracked_tasks` | TID | `run_id`, TGID | 실행별 추적 대상 식별 |
 | `process_tasks` | `run_id`, TGID | 생존 Task 수 | 프로세스 생존 여부와 추가 스레드 수 계산 |
-| `run_metrics` | `run_id` | 현재값과 세 Peak | 프로세스·추가 스레드·전체 Task 집계 |
+| `run_metrics` | `run_id` | `process_current`, `thread_current`, `task_current`, 세 Peak | 프로세스·추가 스레드·전체 Task 집계 |
 
-카운터와 Peak 갱신은 BPF Map 내부에서 원자적으로 처리한다. Ring Buffer는 필요할 경우 진단 이벤트 전달에만 사용하며 최종 Peak를 사용자 공간에서 다시 계산하는 근거로 사용하지 않는다.
+카운터와 Peak 갱신은 실행별 상태의 BPF Map 안에서 원자적으로 처리한다. 여러 Task가 동시에 생성·종료되는 경우에도 한 실행의 현재값과 Peak 갱신이 서로 덮어쓰이지 않도록 BPF spin lock 또는 동등한 원자적 갱신 방식을 사용한다. Ring Buffer는 필요할 경우 진단 이벤트 전달에만 사용하며 최종 Peak를 사용자 공간에서 다시 계산하는 근거로 사용하지 않는다.
 
 ## 7. API 변경
 
