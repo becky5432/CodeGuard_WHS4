@@ -24,14 +24,16 @@ Linux 커널은 프로세스와 스레드를 모두 Task로 관리한다. cgroup
 | --- | --- |
 | 프로세스 | 동일한 TGID를 공유하는 Task 그룹 |
 | 메인 스레드 | `TID == TGID`인 Task |
-| 추가 스레드 | `TID != TGID`인 Task |
-| 전체 Task | 프로세스별 메인 스레드와 추가 스레드의 합계 |
+| 추가 스레드 | 생존한 각 프로세스에 기본 Task 1개를 배정한 뒤 남는 Task |
+| 전체 Task | 현재 추적 중인 모든 TID |
 
 실행 중 현재값은 다음 관계를 갖는다.
 
 ```text
 current_task_count = current_process_count + current_additional_thread_count
 ```
+
+따라서 현재 추가 스레드 수는 `전체 생존 Task 수 - 생존 TGID 수`로 정의한다. 일반적인 실행에서는 `TID != TGID`인 Task 수와 같지만, 메인 스레드가 먼저 종료되고 다른 스레드가 계속 실행되는 경우에는 남은 Task 중 하나를 해당 프로세스의 기본 Task로 간주한다. 이 정의를 사용해야 현재값의 합계가 항상 전체 Task 수와 일치한다.
 
 반면 각 Peak는 서로 다른 시점에 발생할 수 있으므로 다음 식은 항상 성립하지 않는다.
 
@@ -82,6 +84,14 @@ cgroup v2 pids.max
 | `task_peak` | 사용자 실행파일과 그 자손의 전체 Task | 사용자 코드 기준 합산 Peak 표시 |
 
 `pids_peak`와 `task_peak`는 서로 다른 범위를 측정하므로 값이 다를 수 있다. 제한 집행과 `PIDS_LIMIT` 판정에는 `pids.max`, `pids.events`, `pids_peak`를 사용하고, 프로세스·스레드 구분은 표시와 분석에만 사용한다.
+
+실제 커널의 `pids.peak`를 읽었고 사용자 Root Task가 측정 시작부터 같은 Execution cgroup에 속했다면 다음 관계를 교차검증 조건으로 사용한다.
+
+```text
+pids_peak >= task_peak
+```
+
+`pids_peak < task_peak`이면 eBPF 집계 범위, cgroup 연결 또는 지표 회수 과정에 오류가 있는 것으로 처리한다. 다만 `pids.peak`를 지원하지 않아 폴링한 `pids.current`의 최댓값으로 대체한 경우에는 순간적인 Task를 놓칠 수 있으므로 이 비교를 적용하지 않는다.
 
 ## 6. eBPF 측정 구조
 
@@ -141,14 +151,14 @@ BTF/CO-RE 기반 eBPF 프로그램으로 다음 이벤트를 관찰한다.
 - `sched_process_fork`: 새 Task를 추적 대상에 등록한다.
 - `sched_process_exit`: 종료된 Task를 추적 대상에서 제거한다.
 
-새 Task의 `TID`와 `TGID`를 확인하여 다음과 같이 분류한다.
+새 Task의 `TID`와 `TGID`를 확인하여 생성 종류를 다음과 같이 분류한다.
 
 ```text
 TID == TGID → 새 프로세스의 메인 스레드
 TID != TGID → 기존 프로세스의 추가 스레드
 ```
 
-단순히 `TID == TGID`만 확인하지 않고 TGID별 생존 Task 수를 참조 카운트로 관리한다. 메인 스레드가 다른 스레드보다 먼저 종료되는 경우에도 같은 TGID의 마지막 Task가 종료될 때까지 프로세스가 존재하는 것으로 계산하기 위해서다.
+이 비교는 생성 이벤트의 종류를 판별할 때 사용한다. 현재 추가 스레드 수는 개별 TID의 종류를 세는 대신 `task_current - process_current`로 계산한다. 또한 TGID별 생존 Task 수를 참조 카운트로 관리하여 메인 스레드가 먼저 종료되더라도 같은 TGID의 마지막 Task가 종료될 때까지 프로세스가 존재하는 것으로 계산한다.
 
 ### 6.4 생성 이벤트 처리
 
@@ -171,10 +181,11 @@ TID != TGID → 기존 프로세스의 추가 스레드
 1. 종료 TID가 `tracked_tasks`에 등록되어 있는지 확인한다.
 2. 등록된 TID를 `tracked_tasks`에서 제거하고 해당 TGID의 생존 Task 참조 카운트를 1 감소시킨다.
 3. `task_current`를 1 감소시킨다.
-4. 해당 TGID의 생존 Task 수가 0이면 프로세스가 완전히 종료된 것이므로 `process_current`를 1 감소시킨다.
-5. `thread_current = task_current - process_current`를 다시 계산한다.
+4. Tracepoint의 `group_dead`가 참이면 해당 thread group의 마지막 Task가 종료된 것이므로 `process_current`를 1 감소시킨다.
+5. 자체 관리하는 TGID 참조 카운트가 0인지 확인하여 `group_dead`와 교차검증한다.
+6. `thread_current = task_current - process_current`를 다시 계산한다.
 
-따라서 메인 스레드가 먼저 종료되더라도 같은 TGID의 작업 스레드가 남아 있으면 프로세스 1개가 유지된다. 반대로 마지막 Task가 종료될 때만 프로세스 수를 감소시킨다.
+따라서 메인 스레드가 먼저 종료되더라도 같은 TGID의 작업 스레드가 남아 있으면 프로세스 1개가 유지된다. 반대로 `group_dead`가 참인 마지막 Task의 종료에서만 프로세스 수를 감소시킨다. `group_dead`와 참조 카운트 결과가 다르면 해당 실행의 분리 측정값을 유효하지 않은 것으로 표시한다.
 
 ### 6.6 순간적인 Peak 처리
 
@@ -200,8 +211,23 @@ TID != TGID → 기존 프로세스의 추가 스레드
 | `tracked_tasks` | TID | `run_id`, TGID | 실행별 추적 대상 식별 |
 | `process_tasks` | `run_id`, TGID | 생존 Task 수 | 프로세스 생존 여부와 추가 스레드 수 계산 |
 | `run_metrics` | `run_id` | `process_current`, `thread_current`, `task_current`, 세 Peak | 프로세스·추가 스레드·전체 Task 집계 |
+| `measurement_status` | `run_id` | 오류 비트와 최초 오류 코드 | Map 갱신 실패·카운터 불일치 기록 |
 
-카운터와 Peak 갱신은 실행별 상태의 BPF Map 안에서 원자적으로 처리한다. 여러 Task가 동시에 생성·종료되는 경우에도 한 실행의 현재값과 Peak 갱신이 서로 덮어쓰이지 않도록 BPF spin lock 또는 동등한 원자적 갱신 방식을 사용한다. Ring Buffer는 필요할 경우 진단 이벤트 전달에만 사용하며 최종 Peak를 사용자 공간에서 다시 계산하는 근거로 사용하지 않는다.
+카운터와 Peak 갱신은 실행별 상태의 BPF Map 안에서 원자적으로 처리한다. 여러 Task가 동시에 생성·종료되는 경우에도 한 실행의 현재값과 Peak 갱신이 서로 덮어쓰이지 않도록 BPF spin lock 또는 동등한 원자적 갱신 방식을 사용한다. `tracked_tasks` 또는 `process_tasks` Map 삽입·삭제가 실패하면 `measurement_status`에 오류를 기록하고 해당 실행의 세 분리 Peak를 폐기한다. Ring Buffer는 필요할 경우 진단 이벤트 전달에만 사용하며 최종 Peak를 사용자 공간에서 다시 계산하는 근거로 사용하지 않는다.
+
+### 6.8 시작 동기화가 필요한 이유
+
+eBPF 프로그램은 Runner 시작 시 호스트에 미리 연결해 두지만, 어떤 Root Task가 어느 `run_id`에 속하는지는 컨테이너가 시작된 뒤 등록해야 한다. 현재처럼 컨테이너 시작과 동시에 `/workspace/main`을 실행하면 매우 짧은 프로그램이 Root TID 등록 전에 종료될 수 있다.
+
+따라서 다음 조건을 구현의 필수 전제로 둔다.
+
+1. Execution Container의 최초 명령은 사용자 프로그램이 아니라 `codeguard-init`이다.
+2. `codeguard-init`은 시작 신호를 받을 때까지 대기한다.
+3. Runner가 컨테이너의 호스트 Root TID와 `run_id`를 BPF Map에 먼저 등록한다.
+4. 등록 성공 후에만 시작 신호를 전달한다.
+5. `codeguard-init`은 자식 프로세스를 만들지 않고 같은 PID에서 `/workspace/main`으로 `execve()`한다.
+
+이 순서를 지키면 사용자 코드가 실행되기 전에 추적 준비가 끝나므로 짧은 실행도 시작부터 집계할 수 있다. 현재 Runner에는 `codeguard-init`과 eBPF Controller가 구현되어 있지 않으며, 이 문서는 해당 구성요소를 추가하기 위한 설계 문서다.
 
 ## 7. API 변경
 
@@ -258,8 +284,9 @@ TID != TGID → 기존 프로세스의 추가 스레드
 ## 9. 오류 처리 원칙
 
 - eBPF Controller가 준비되지 않아도 cgroup `pids.max`를 통한 안전 제한은 유지한다.
-- 분리 측정 등록이나 회수에 실패하면 해당 지표를 `null`로 반환하고 오류 원인을 로그에 기록한다.
+- 분리 측정 등록·회수, BPF Map 갱신 또는 카운터 교차검증에 실패하면 세 분리 지표를 모두 `null`로 반환하고 오류 원인을 로그에 기록한다.
 - 분리 측정 실패를 정상적인 `0`개로 처리하지 않는다.
+- `pids.peak`가 실제 커널 파일에서 회수된 경우에만 `pids_peak >= task_peak`를 검사한다. `pids.current` 폴링 대체값에는 적용하지 않는다.
 - 최종 제한 위반 판정은 `pids.events`를 근거로 `PIDS_LIMIT` 하나만 사용한다.
 - Cleanup에서는 `run_id`에 연결된 모든 BPF Map 항목을 제거한다.
 - 컨테이너나 Runner가 비정상 종료되더라도 오래된 추적 상태를 제거할 수 있도록 만료 시각과 주기적 정리 절차를 둔다.
@@ -273,11 +300,15 @@ TID != TGID → 기존 프로세스의 추가 스레드
 | 부모 1개가 자식 프로세스 31개를 동시에 유지 | `32`, `0`, `32` |
 | 여러 프로세스가 각각 스레드를 생성 | 세 Peak를 각각 독립적으로 갱신 |
 | 생성 직후 종료되는 Task 반복 | 폴링 간격과 관계없이 성공한 생성 이벤트 반영 |
-| 메인 스레드가 작업 스레드보다 먼저 종료 | 같은 TGID의 마지막 Task 종료 전까지 프로세스 유지 |
+| 메인 스레드가 작업 스레드보다 먼저 종료 | 같은 TGID의 마지막 Task 종료 전까지 프로세스 유지, `thread_current=task_current-process_current` 유지 |
 | `fork` 또는 `pthread_create` 실패 | 생성되지 않은 Task는 Peak에 포함하지 않음 |
 | `pids_limit=32`에서 전체 Task 생성 시도 | cgroup이 합산 제한하고 `PIDS_LIMIT` 판정 |
 | 같은 코드를 여러 번 실행 | 사용자 코드 기준 세 Peak가 반복 실행마다 동일 |
 | 컨테이너 시작 Task 수가 실행마다 변동 | `pids_peak`는 달라질 수 있으나 사용자 지표에는 미포함 |
+| 실제 `pids.peak`와 eBPF `task_peak` 비교 | 항상 `pids_peak >= task_peak`, 위반 시 측정 오류 |
+| `pids.current` 폴링 대체값 사용 | `task_peak`와의 대소 관계를 정확성 판정에 사용하지 않음 |
+| `group_dead`와 TGID 참조 카운트 불일치 | 세 분리 지표를 `null`로 처리하고 진단 로그 기록 |
+| BPF Map 용량 초과 또는 갱신 실패 | 세 분리 지표를 `null`로 처리하고 cgroup 제한은 유지 |
 | 여러 작업 동시 실행 | `run_id`별 측정값이 서로 섞이지 않음 |
 | 분리 측정 실패 | 분리 지표는 `null`, cgroup 제한과 실행 결과는 유지 |
 
