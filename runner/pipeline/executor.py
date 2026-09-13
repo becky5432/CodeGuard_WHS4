@@ -13,6 +13,7 @@ from runner.models.result import (
     RunnerReasonCode,
     RunnerResponse,
     ResourceUsage,
+    SecurityContext,
     RunnerStage,
     RunnerStatus,
     StageError,
@@ -25,6 +26,10 @@ from runner.pipeline.compiler import (
     get_docker_client,
 )
 from runner.pipeline.execution import (
+    EXECUTION_CAP_DROP,
+    EXECUTION_GID,
+    EXECUTION_NO_NEW_PRIVILEGES,
+    EXECUTION_UID,
     create_execution_container,
     execute_program,
 )
@@ -270,6 +275,17 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                         execution_result.memory_peak_bytes
                     ),
                     pids_peak=execution_result.pids_peak,
+                    output_bytes=(
+                        len(execution_result.stdout.encode("utf-8"))
+                        + len(execution_result.stderr.encode("utf-8"))
+                    ),
+                ),
+                security_context=SecurityContext(
+                    non_root=EXECUTION_UID != 0,
+                    uid=EXECUTION_UID,
+                    gid=EXECUTION_GID,
+                    cap_drop=list(EXECUTION_CAP_DROP),
+                    no_new_privileges=EXECUTION_NO_NEW_PRIVILEGES,
                 ),
             )
 
