@@ -215,7 +215,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 "job_id": job.job_id,
                 "run_id": run_id,
                 "memory_limit_mb": job.policy.memory_limit_mb,
-                "cpu_limit": job.policy.cpu_limit,
+                "cpu_bandwidth": job.policy.cpu_bandwidth,
                 "pids_limit": job.policy.pids_limit,
             }
             if execution_cgroup_scope is not None:
