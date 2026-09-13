@@ -115,6 +115,7 @@ def create_execution_container(
             }
         },
         "detach": True,
+        "network_mode": "none",
         "user": "10001:10001",
         "cap_drop": ["ALL"],
         "security_opt": ["no-new-privileges=true"],
