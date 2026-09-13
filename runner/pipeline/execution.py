@@ -120,11 +120,18 @@ def create_execution_container(
             }
         },
         "detach": True,
+      
+        "network_mode": "none",
         "user": f"{EXECUTION_UID}:{EXECUTION_GID}",
         "cap_drop": list(EXECUTION_CAP_DROP),
         "security_opt": [
             f"no-new-privileges={str(EXECUTION_NO_NEW_PRIVILEGES).lower()}"
         ],
+      
+        "mem_limit": memory_limit_bytes,
+        "memswap_limit": memory_limit_bytes,
+        "nano_cpus": nano_cpus_limit,
+        "pids_limit": pids_limit,
         "mem_limit": memory_limit_bytes,
         "memswap_limit": memory_limit_bytes,
         "nano_cpus": nano_cpus_limit,
