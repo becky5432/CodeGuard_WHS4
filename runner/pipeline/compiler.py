@@ -109,6 +109,7 @@ def create_compile_container(
                 }
             },
             detach=True,
+            network_mode = "none",
             labels={
                 "codeguard.managed": "true",
                 "codeguard.job_id": str(workspace.job_id),

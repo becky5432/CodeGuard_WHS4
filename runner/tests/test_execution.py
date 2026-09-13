@@ -49,6 +49,10 @@ class ExecutionTests(unittest.TestCase):
                 }
             },
             detach=True,
+            network_mode="none",
+            user="10001:10001",
+            cap_drop=["ALL"],
+            security_opt=["no-new-privileges=true"],
             mem_limit=128 * 1024 * 1024,
             memswap_limit=128 * 1024 * 1024,
             nano_cpus=1_000_000_000,
