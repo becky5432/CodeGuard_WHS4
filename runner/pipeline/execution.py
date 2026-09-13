@@ -127,11 +127,6 @@ def create_execution_container(
         "security_opt": [
             f"no-new-privileges={str(EXECUTION_NO_NEW_PRIVILEGES).lower()}"
         ],
-      
-        "mem_limit": memory_limit_bytes,
-        "memswap_limit": memory_limit_bytes,
-        "nano_cpus": nano_cpus_limit,
-        "pids_limit": pids_limit,
         "mem_limit": memory_limit_bytes,
         "memswap_limit": memory_limit_bytes,
         "nano_cpus": nano_cpus_limit,
