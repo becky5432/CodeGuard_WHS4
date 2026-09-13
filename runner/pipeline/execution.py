@@ -93,7 +93,7 @@ def create_execution_container(
     job_id: UUID,
     run_id: UUID,
     memory_limit_mb: int,
-    cpu_limit: float,
+    cpu_bandwidth: float,
     pids_limit: int,
     cgroup_scope: ExecutionCgroupScope | None = None,
 ):
@@ -108,7 +108,7 @@ def create_execution_container(
         ]
 
     memory_limit_bytes = memory_limit_mb * 1024 * 1024
-    nano_cpus_limit = int(cpu_limit * 1_000_000_000)
+    nano_cpus_limit = int(cpu_bandwidth * 1_000_000_000)
 
     container_options = {
         "image": settings.cpp_image,
