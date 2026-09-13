@@ -39,6 +39,7 @@ class MockRunnerClient:
                 cpu_time_ms=120,
                 memory_peak_bytes=44040192,
                 pids_peak=2,
+                output_bytes=23,
             ),
         )
 
