@@ -28,6 +28,7 @@ class ExecuteApiTests(unittest.TestCase):
         "stderr",
         "compile_log",
         "resource_usage",
+        "security_context",
         "finished_at",
         "stage_summary",
     }
@@ -193,6 +194,17 @@ class ExecuteApiTests(unittest.TestCase):
                 "cpu_time_ms": None,
                 "memory_peak_bytes": None,
                 "pids_peak": None,
+                "output_bytes": 6,
+            },
+        )
+        self.assertEqual(
+            payload["security_context"],
+            {
+                "non_root": True,
+                "uid": 10001,
+                "gid": 10001,
+                "cap_drop": ["ALL"],
+                "no_new_privileges": True,
             },
         )
         self.assertEqual(
@@ -310,6 +322,7 @@ class ExecuteApiTests(unittest.TestCase):
         )
         self.assertEqual(payload["stage_summary"]["failed"], ["COMPILE"])
         self.assertEqual(payload["stage_summary"]["skipped"], ["EXECUTE"])
+        self.assertIsNone(payload["security_context"])
         self.assertEqual(
             payload["stage_summary"]["errors"]["COMPILE"][0],
             {
@@ -363,8 +376,8 @@ class ExecuteApiTests(unittest.TestCase):
         )
         self.execute_program_mock.return_value = ExecutionResult(
             exit_code=0,
-            stdout="",
-            stderr="",
+            stdout="한글",
+            stderr="error",
             wall_time_ms=25,
             memory_peak_bytes=200,
             pids_peak=5,
@@ -382,6 +395,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "cpu_time_ms": None,
                 "memory_peak_bytes": 200,
                 "pids_peak": 5,
+                "output_bytes": 11,
             },
         )
 
