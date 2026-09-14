@@ -31,7 +31,7 @@ class ExecutorTests(unittest.TestCase):
                 timeout_ms=1000,
                 memory_limit_mb=64,
                 pids_limit=8,
-                cpu_limit=1.0,
+                cpu_bandwidth=1.0,
             ),
             created_at=datetime.now(timezone.utc),
         )
@@ -133,7 +133,7 @@ class ExecutorTests(unittest.TestCase):
                 timeout_ms=1000,
                 memory_limit_mb=64,
                 pids_limit=8,
-                cpu_limit=1.0,
+                cpu_bandwidth=1.0,
             ),
             created_at=datetime.now(timezone.utc),
         )
