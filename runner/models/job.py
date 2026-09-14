@@ -17,6 +17,7 @@ class PolicyLimits(BaseModel):
     memory_limit_mb: int = Field(gt=0)
     pids_limit: int = Field(gt=0)
     cpu_bandwidth: float = Field(gt=0)
+    logical_cpu_count: int = Field(gt=0)
     output_limit_bytes: int = Field(
         default=EXECUTION_OUTPUT_LIMIT_BYTES,
         gt=0,
