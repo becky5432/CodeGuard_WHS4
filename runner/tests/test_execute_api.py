@@ -105,7 +105,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "timeout_ms": 2000,
                 "memory_limit_mb": 128,
                 "pids_limit": 10,
-                "cpu_limit": 1.0,
+                "cpu_bandwidth": 1.0,
             },
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -119,7 +119,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "timeout_ms",
                 "memory_limit_mb",
                 "pids_limit",
-                "cpu_limit",
+                "cpu_bandwidth",
                 "output_limit_bytes",
             },
         )
@@ -243,7 +243,7 @@ class ExecuteApiTests(unittest.TestCase):
             job_id=UUID(body["job_id"]),
             run_id=ANY,
             memory_limit_mb=body["policy"]["memory_limit_mb"],
-            cpu_limit=body["policy"]["cpu_limit"],
+            cpu_bandwidth=body["policy"]["cpu_bandwidth"],
             pids_limit=body["policy"]["pids_limit"],
         )
 
