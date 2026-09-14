@@ -106,6 +106,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "memory_limit_mb": 128,
                 "pids_limit": 10,
                 "cpu_bandwidth": 1.0,
+                "logical_cpu_count": 1,
             },
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -120,6 +121,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "memory_limit_mb",
                 "pids_limit",
                 "cpu_bandwidth",
+                "logical_cpu_count",
                 "output_limit_bytes",
             },
         )
@@ -244,6 +246,7 @@ class ExecuteApiTests(unittest.TestCase):
             run_id=ANY,
             memory_limit_mb=body["policy"]["memory_limit_mb"],
             cpu_bandwidth=body["policy"]["cpu_bandwidth"],
+            logical_cpu_count=body["policy"]["logical_cpu_count"],
             pids_limit=body["policy"]["pids_limit"],
         )
 
