@@ -34,7 +34,7 @@ class ExecutionTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=self.run_id,
             memory_limit_mb=128,
-            cpu_limit=1.0,
+            cpu_bandwidth=1.0,
             pids_limit=10,
         )
 
@@ -73,7 +73,7 @@ class ExecutionTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=self.run_id,
             memory_limit_mb=128,
-            cpu_limit=1.0,
+            cpu_bandwidth=1.0,
             pids_limit=10,
         )
 
@@ -94,7 +94,7 @@ class ExecutionTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=self.run_id,
             memory_limit_mb=128,
-            cpu_limit=1.0,
+            cpu_bandwidth=1.0,
             pids_limit=10,
             cgroup_scope=cgroup_scope,
         )
@@ -132,7 +132,7 @@ class ExecutionTests(unittest.TestCase):
                 job_id=self.workspace.job_id,
                 run_id=self.run_id,
                 memory_limit_mb=128,
-                cpu_limit=1.0,
+                cpu_bandwidth=1.0,
                 pids_limit=10,
             )
 
