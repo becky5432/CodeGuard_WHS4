@@ -32,6 +32,7 @@ class ExecutorTests(unittest.TestCase):
                 memory_limit_mb=64,
                 pids_limit=8,
                 cpu_bandwidth=1.0,
+                logical_cpu_count=1,
             ),
             created_at=datetime.now(timezone.utc),
         )
@@ -90,6 +91,14 @@ class ExecutorTests(unittest.TestCase):
             create_execution.call_args.kwargs["cgroup_scope"],
             cgroup_scope,
         )
+        self.assertEqual(
+            create_execution.call_args.kwargs["cpu_bandwidth"],
+            1.0,
+        )
+        self.assertEqual(
+            create_execution.call_args.kwargs["logical_cpu_count"],
+            1,
+        )
         self.assertIs(
             execute_program.call_args.kwargs["cgroup_scope"],
             cgroup_scope,
@@ -134,6 +143,7 @@ class ExecutorTests(unittest.TestCase):
                 memory_limit_mb=64,
                 pids_limit=8,
                 cpu_bandwidth=1.0,
+                logical_cpu_count=1,
             ),
             created_at=datetime.now(timezone.utc),
         )
