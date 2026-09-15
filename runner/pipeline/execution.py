@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -85,6 +86,20 @@ def _stop_output_thread(frames, output_thread) -> bool:
         output_thread.join(timeout=1.0)
     return not output_thread.is_alive()
 
+def _resolve_cpuset(logical_cpu_count: int) -> str:
+    available_cpus = sorted(os.sched_getaffinity(0))
+
+    if logical_cpu_count > len(available_cpus):
+        raise ContainerExecutionError(
+            "요청한 논리 CPU 수가 사용 가능한 CPU 수보다 큽니다.",
+            details={
+                "requested": logical_cpu_count,
+                "available": len(available_cpus),
+            },
+        )
+
+    selected_cpus = available_cpus[:logical_cpu_count]
+    return ",".join(str(cpu) for cpu in selected_cpus)
 
 def create_execution_container(
     client,
