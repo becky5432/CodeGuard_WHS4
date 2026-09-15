@@ -98,20 +98,99 @@ class ExecutionCgroupScopeTests(unittest.TestCase):
         self.assertTrue(metrics.oom_killed)
         self.assertTrue(metrics.pids_limit_exceeded)
 
-    def test_snapshot_returns_none_when_peak_files_are_missing(self) -> None:
+    def test_snapshot_raises_when_required_files_are_missing(self) -> None:
+        for filename in (
+            "memory.peak",
+            "pids.peak",
+            "memory.events",
+            "pids.events",
+        ):
+            with self.subTest(filename=filename):
+                scope = ExecutionCgroupScope.create(
+                    root=self.delegated_root,
+                    run_id=uuid4(),
+                    driver="cgroupfs",
+                    cgroup_mount=self.cgroup_mount,
+                )
+                (scope.path / "memory.peak").write_text(
+                    "1024\n",
+                    encoding="utf-8",
+                )
+                (scope.path / "pids.peak").write_text(
+                    "8\n",
+                    encoding="utf-8",
+                )
+                (scope.path / "memory.events").write_text(
+                    "oom_kill 0\n",
+                    encoding="utf-8",
+                )
+                (scope.path / "pids.events").write_text(
+                    "max 0\n",
+                    encoding="utf-8",
+                )
+                (scope.path / filename).unlink()
+
+                with self.assertRaises(CgroupScopeError) as context:
+                    scope.snapshot()
+
+                self.assertIn(filename, context.exception.details["path"])
+
+    def test_snapshot_raises_when_peak_is_not_an_integer(self) -> None:
         scope = ExecutionCgroupScope.create(
             root=self.delegated_root,
             run_id=uuid4(),
             driver="cgroupfs",
             cgroup_mount=self.cgroup_mount,
         )
+        (scope.path / "memory.peak").write_text("invalid\n", encoding="utf-8")
+        (scope.path / "pids.peak").write_text("8\n", encoding="utf-8")
+        (scope.path / "memory.events").write_text(
+            "oom_kill 0\n",
+            encoding="utf-8",
+        )
+        (scope.path / "pids.events").write_text("max 0\n", encoding="utf-8")
 
-        metrics = scope.snapshot()
+        with self.assertRaises(CgroupScopeError) as context:
+            scope.snapshot()
 
-        self.assertIsNone(metrics.memory_peak_bytes)
-        self.assertIsNone(metrics.pids_peak)
-        self.assertFalse(metrics.oom_killed)
-        self.assertFalse(metrics.pids_limit_exceeded)
+        self.assertIn("memory.peak", context.exception.details["path"])
+
+    def test_snapshot_raises_when_events_have_invalid_format(self) -> None:
+        scope = ExecutionCgroupScope.create(
+            root=self.delegated_root,
+            run_id=uuid4(),
+            driver="cgroupfs",
+            cgroup_mount=self.cgroup_mount,
+        )
+        (scope.path / "memory.peak").write_text("1024\n", encoding="utf-8")
+        (scope.path / "pids.peak").write_text("8\n", encoding="utf-8")
+        (scope.path / "memory.events").write_text(
+            "oom_kill invalid\n",
+            encoding="utf-8",
+        )
+        (scope.path / "pids.events").write_text("max 0\n", encoding="utf-8")
+
+        with self.assertRaises(CgroupScopeError) as context:
+            scope.snapshot()
+
+        self.assertIn("memory.events", context.exception.details["path"])
+
+    def test_snapshot_raises_when_required_event_is_missing(self) -> None:
+        scope = ExecutionCgroupScope.create(
+            root=self.delegated_root,
+            run_id=uuid4(),
+            driver="cgroupfs",
+            cgroup_mount=self.cgroup_mount,
+        )
+        (scope.path / "memory.peak").write_text("1024\n", encoding="utf-8")
+        (scope.path / "pids.peak").write_text("8\n", encoding="utf-8")
+        (scope.path / "memory.events").write_text("max 0\n", encoding="utf-8")
+        (scope.path / "pids.events").write_text("max 0\n", encoding="utf-8")
+
+        with self.assertRaises(CgroupScopeError) as context:
+            scope.snapshot()
+
+        self.assertEqual(context.exception.details["event"], "oom_kill")
 
     def test_create_builds_systemd_slice_without_creating_directory(self) -> None:
         run_id = uuid4()
