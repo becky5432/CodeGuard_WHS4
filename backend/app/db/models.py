@@ -25,7 +25,7 @@ class Execution(Base):
     timeout_ms = Column(Integer)                               # 최대 실행 시간(ms)
     memory_limit_mb = Column(Integer)                          # 최대 메모리(MB)
     pids_limit = Column(Integer)                               # 최대 프로세스·스레드 수
-    cpu_limit = Column(Float)                                  # CPU 코어 수
+    cpu_limit = Column(Float)                                  # CPU 자원 할당 한도
 
     # --- Runner 결과 수신 후 갱신 ---
     run_id = Column(String(36))                                # Runner 발급 실행 ID

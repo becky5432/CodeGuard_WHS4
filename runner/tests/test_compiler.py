@@ -60,6 +60,7 @@ class CompilerTests(unittest.TestCase):
                 }
             },
             detach=True,
+            network_mode="none",
             labels={
                 "codeguard.managed": "true",
                 "codeguard.job_id": str(self.workspace.job_id),
