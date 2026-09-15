@@ -109,6 +109,7 @@ def create_execution_container(
     run_id: UUID,
     memory_limit_mb: int,
     cpu_bandwidth: float,
+    logical_cpu_count: int,
     pids_limit: int,
     cgroup_scope: ExecutionCgroupScope | None = None,
 ):
@@ -124,6 +125,7 @@ def create_execution_container(
 
     memory_limit_bytes = memory_limit_mb * 1024 * 1024
     nano_cpus_limit = int(cpu_bandwidth * 1_000_000_000)
+    cpuset_cpus = _resolve_cpuset(logical_cpu_count)
 
     container_options = {
         "image": settings.cpp_image,
@@ -145,6 +147,7 @@ def create_execution_container(
         "mem_limit": memory_limit_bytes,
         "memswap_limit": memory_limit_bytes,
         "nano_cpus": nano_cpus_limit,
+        "cpuset_cpus": cpuset_cpus,
         "pids_limit": pids_limit,
         "labels": {
             "codeguard.managed": "true",
