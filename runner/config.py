@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     volume_name_prefix: str = "codeguard-job-"
     cpp_image: str = "codeguard-cpp:dev"
-    execution_cgroup_enabled: bool = False
+    execution_cgroup_enabled: bool = True
     execution_cgroup_root: Path = Path("/sys/fs/cgroup/codeguard")
 
     model_config = SettingsConfigDict(  # Pydantic 설정
