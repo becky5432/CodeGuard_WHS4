@@ -21,11 +21,11 @@ class Execution(Base):
     )
 
     # --- 적용 정책 (실행 시점 스냅샷) ---
-    policy_profile = Column(String(16), default="basic")       # basic / strict / relaxed
     timeout_ms = Column(Integer)                               # 최대 실행 시간(ms)
     memory_limit_mb = Column(Integer)                          # 최대 메모리(MB)
     pids_limit = Column(Integer)                               # 최대 프로세스·스레드 수
     cpu_limit = Column(Float)                                  # CPU 자원 할당 한도
+    output_limit_bytes= Column(Integer)                        # 최대 출력 크기(bytes)
 
     # --- Runner 결과 수신 후 갱신 ---
     run_id = Column(String(36))                                # Runner 발급 실행 ID
@@ -43,3 +43,4 @@ class Execution(Base):
     cpu_time_ms = Column(Integer)                              # CPU 누적 사용 시간 (제한 없음, 참고 지표)
     memory_peak_bytes = Column(Integer)                        # 최대 메모리 ↔ memory_limit_mb
     pids_peak = Column(Integer)                                # 최대 프로세스·스레드 수 ↔ pids_limit
+    output_bytes = Column(Integer)                             # 출력 크기 ↔ output_limit_bytes
