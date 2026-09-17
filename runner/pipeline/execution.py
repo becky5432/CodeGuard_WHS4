@@ -183,7 +183,8 @@ def execute_program(
     wait_done = threading.Event()
     wait_state: dict[str, object] = {}
     output_state: dict[str, Exception | None] = {}
-    timed_out = False
+    timeout_reached = False
+    timeout_kill_requested = False
     pids_limit_exceeded = False
     system_error = None
     output_thread = None
@@ -248,22 +249,16 @@ def execute_program(
 
                 remaining = timeout_seconds - (time.monotonic() - start)
                 if remaining <= 0:
-                    timed_out = True
+                    timeout_reached = True
                     break
                 wait_done.wait(timeout=min(remaining, 0.01))
 
-            finished_at = wait_state.get("finished_at")
-            if (
-                not timed_out
-                and isinstance(finished_at, float)
-                and finished_at - start > timeout_seconds
-            ):
-                timed_out = True
-
-            policy_kill = timed_out or output.exceeded.is_set() or pids_limit_exceeded
+            policy_kill = timeout_reached or output.exceeded.is_set() or pids_limit_exceeded
             if policy_kill and not wait_done.is_set():
                 try:
                     container.kill()
+                    if timeout_reached:
+                        timeout_kill_requested = True
                 except docker.errors.DockerException as exc:
                     logger.warning(
                         "event=execution_container_kill_error "
@@ -295,7 +290,7 @@ def execute_program(
                     )
             pids_monitor.sample()
 
-        final_policy_kill = timed_out or output.exceeded.is_set() or pids_limit_exceeded
+        final_policy_kill = timeout_reached or output.exceeded.is_set() or pids_limit_exceeded
         if not output_thread_stopped:
             system_error = "실행 출력 수집기를 종료하지 못했습니다."
             logger.error(
@@ -331,6 +326,10 @@ def execute_program(
         wait_result = wait_state.get("result")
         if isinstance(wait_result, dict):
             exit_code = int(wait_result["StatusCode"])
+
+        # Reaching the deadline does not prove timeout caused the exit: a natural
+        # exit (e.g. SIGSEGV/139) can win the race with a successful kill request.
+        timed_out = timeout_kill_requested and exit_code == 137
 
         oom_killed = False
         try:
