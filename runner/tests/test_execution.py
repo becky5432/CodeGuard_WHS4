@@ -1,3 +1,4 @@
+import threading
 import unittest
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -5,6 +6,8 @@ from uuid import uuid4
 import docker
 
 from runner.exceptions import ContainerExecutionError
+from runner.models.result import RunnerReasonCode, RunnerStatus
+from runner.pipeline.classifier import classify_execution
 from runner.metrics.cgroup_scope import CgroupMetrics
 from runner.pipeline.execution import (
     create_execution_container,
@@ -177,6 +180,193 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.memory_peak_bytes, 16 * 1024 * 1024)
         self.assertEqual(result.pids_peak, 18)
         cgroup_scope.snapshot.assert_called_once_with()
+
+
+class ExecutionTimeoutRaceTests(unittest.TestCase):
+    def run_execution(
+        self,
+        exit_code,
+        *,
+        timeout_reached=False,
+        finished_at=0.1,
+        kill_error=None,
+        oom_killed=False,
+        cgroup_metrics=None,
+        output=None,
+        pids_exceeded=False,
+    ):
+        """Use real worker threads and barriers, without timing-sensitive sleeps."""
+        container = MagicMock()
+        container.attrs = {"State": {"OOMKilled": oom_killed}}
+        container.attach.return_value = output or [(b"ok", None)]
+        release_wait = threading.Event()
+        clock = [0.0]
+        workers = {}
+        real_thread = threading.Thread
+
+        def make_thread(*args, **kwargs):
+            worker = real_thread(*args, **kwargs)
+            workers[kwargs["name"]] = worker
+            return worker
+
+        def wait_for_exit():
+            if not release_wait.wait(timeout=2.0):
+                raise AssertionError("test did not release container.wait()")
+            return {"StatusCode": exit_code}
+
+        def finish_wait():
+            clock[0] = finished_at
+            release_wait.set()
+            worker = workers["runner-container-wait"]
+            worker.join(timeout=1.0)
+            self.assertFalse(worker.is_alive())
+
+        def start_monitor():
+            workers["runner-output-monitor"].join(timeout=1.0)
+            if timeout_reached:
+                clock[0] = 1.001
+            elif output is None and not pids_exceeded:
+                finish_wait()
+
+        def kill():
+            finish_wait()
+            if kill_error is not None:
+                raise kill_error
+
+        container.wait.side_effect = wait_for_exit
+        container.kill.side_effect = kill
+        cgroup_scope = None
+        if cgroup_metrics is not None:
+            cgroup_scope = MagicMock()
+            cgroup_scope.snapshot.return_value = cgroup_metrics
+
+        with (
+            patch("runner.pipeline.execution.ResourceMonitor") as resource_class,
+            patch("runner.pipeline.execution.PidsLimitMonitor") as pids_class,
+            patch("runner.pipeline.execution.threading.Thread", side_effect=make_thread),
+            patch("runner.pipeline.execution.time.monotonic", side_effect=lambda: clock[0]),
+        ):
+            resource_class.return_value.start.side_effect = start_monitor
+            resource_class.return_value.memory_peak_bytes = None
+            pids_class.return_value.exceeded.return_value = pids_exceeded
+            pids_class.return_value.pids_peak = None
+            try:
+                result = execute_program(
+                    container, uuid4(), uuid4(), timeout_ms=1000,
+                    output_limit_bytes=16, cgroup_scope=cgroup_scope,
+                )
+            finally:
+                release_wait.set()
+                for worker in workers.values():
+                    worker.join(timeout=1.0)
+        self.assertIsNone(result.system_error)
+        self.assertEqual(result.exit_code, exit_code)
+        return result, container
+
+    def assert_classification(self, result, reason, status):
+        classification = classify_execution(result)
+        self.assertEqual(classification.reason_code, reason)
+        self.assertEqual(classification.status, status)
+        self.assertFalse(
+            result.exit_code == 139
+            and classification.reason_code == RunnerReasonCode.TIME_LIMIT,
+        )
+
+    def test_sigsegv_before_timeout_is_runtime_error(self):
+        result, container = self.run_execution(139)
+        self.assertFalse(result.timed_out)
+        container.kill.assert_not_called()
+        self.assert_classification(result, RunnerReasonCode.RUNTIME_ERROR, RunnerStatus.ERROR)
+
+    def test_timeout_kill_exit_137_is_time_limit(self):
+        result, container = self.run_execution(137, timeout_reached=True, finished_at=1.1)
+        self.assertTrue(result.timed_out)
+        container.kill.assert_called_once_with()
+        self.assert_classification(result, RunnerReasonCode.TIME_LIMIT, RunnerStatus.BLOCKED)
+
+    def test_sigsegv_wins_race_with_successful_timeout_kill_request(self):
+        result, container = self.run_execution(139, timeout_reached=True, finished_at=1.1)
+        self.assertFalse(result.timed_out)
+        container.kill.assert_called_once_with()
+        self.assert_classification(result, RunnerReasonCode.RUNTIME_ERROR, RunnerStatus.ERROR)
+
+    def test_timeout_kill_of_already_stopped_sigsegv_is_runtime_error(self):
+        from requests import Response
+
+        response = Response()
+        response.status_code = 409
+        error = docker.errors.APIError(
+            "409 Conflict", response=response, explanation="container already stopped",
+        )
+        result, container = self.run_execution(
+            139, timeout_reached=True, finished_at=1.1, kill_error=error,
+        )
+        self.assertFalse(result.timed_out)
+        container.kill.assert_called_once_with()
+        self.assert_classification(result, RunnerReasonCode.RUNTIME_ERROR, RunnerStatus.ERROR)
+
+    def test_delayed_sigsegv_result_exceeding_wall_timeout_is_runtime_error(self):
+        result, container = self.run_execution(139, finished_at=1.5)
+        self.assertGreater(result.wall_time_ms, 1000)
+        self.assertFalse(result.timed_out)
+        container.kill.assert_not_called()
+        self.assert_classification(result, RunnerReasonCode.RUNTIME_ERROR, RunnerStatus.ERROR)
+
+    def test_delayed_success_result_exceeding_wall_timeout_is_success(self):
+        result, container = self.run_execution(0, finished_at=1.5)
+        self.assertGreater(result.wall_time_ms, 1000)
+        self.assertFalse(result.timed_out)
+        container.kill.assert_not_called()
+        self.assert_classification(result, None, RunnerStatus.SUCCESS)
+
+    def test_exit_137_without_timeout_kill_is_runtime_error(self):
+        result, container = self.run_execution(137, finished_at=1.5)
+        self.assertFalse(result.timed_out)
+        container.kill.assert_not_called()
+        self.assert_classification(result, RunnerReasonCode.RUNTIME_ERROR, RunnerStatus.ERROR)
+
+    def test_failed_timeout_kill_does_not_claim_exit_137(self):
+        result, container = self.run_execution(
+            137, timeout_reached=True, finished_at=1.1,
+            kill_error=docker.errors.APIError("kill failed"),
+        )
+        self.assertFalse(result.timed_out)
+        container.kill.assert_called_once_with()
+        self.assert_classification(result, RunnerReasonCode.RUNTIME_ERROR, RunnerStatus.ERROR)
+
+    def test_oom_evidence_keeps_priority_over_timeout(self):
+        for evidence in (
+            {"oom_killed": True},
+            {"cgroup_metrics": CgroupMetrics(oom_killed=True)},
+        ):
+            with self.subTest(evidence=evidence):
+                result, _ = self.run_execution(
+                    137, timeout_reached=True, finished_at=1.1, **evidence,
+                )
+                self.assertTrue(result.timed_out)
+                self.assert_classification(result, RunnerReasonCode.MEMORY_LIMIT, RunnerStatus.BLOCKED)
+
+    def test_cgroup_pids_evidence_keeps_priority_over_timeout(self):
+        result, _ = self.run_execution(
+            137, timeout_reached=True, finished_at=1.1,
+            cgroup_metrics=CgroupMetrics(pids_limit_exceeded=True),
+        )
+        self.assertTrue(result.timed_out)
+        self.assert_classification(result, RunnerReasonCode.PIDS_LIMIT, RunnerStatus.BLOCKED)
+
+    def test_output_kill_exit_137_is_output_limit(self):
+        result, container = self.run_execution(137, output=[(b"x" * 17, None)])
+        self.assertFalse(result.timed_out)
+        container.kill.assert_called_once_with()
+        self.assertTrue(result.output_limit_exceeded)
+        self.assert_classification(result, RunnerReasonCode.OUTPUT_LIMIT, RunnerStatus.BLOCKED)
+
+    def test_pids_kill_exit_137_is_pids_limit(self):
+        result, container = self.run_execution(137, pids_exceeded=True)
+        self.assertFalse(result.timed_out)
+        container.kill.assert_called_once_with()
+        self.assertTrue(result.pids_limit_exceeded)
+        self.assert_classification(result, RunnerReasonCode.PIDS_LIMIT, RunnerStatus.BLOCKED)
 
 
 if __name__ == "__main__":

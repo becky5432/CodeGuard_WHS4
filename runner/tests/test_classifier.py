@@ -53,5 +53,29 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(result.reason_code, RunnerReasonCode.OUTPUT_LIMIT)
 
 
+    def test_sigsegv_exit_139_is_runtime_error(self) -> None:
+        result = classify_execution(ExecutionResult(139, "", ""))
+        self.assertEqual(result.status, RunnerStatus.ERROR)
+        self.assertEqual(result.reason_code, RunnerReasonCode.RUNTIME_ERROR)
+
+    def test_limit_priority_with_timeout_kill_exit_137(self) -> None:
+        cases = (
+            ({"system_error": "docker failed", "oom_killed": True, "pids_limit_exceeded": True},
+             RunnerStatus.ERROR, RunnerReasonCode.INTERNAL_ERROR),
+            ({"oom_killed": True, "pids_limit_exceeded": True},
+             RunnerStatus.BLOCKED, RunnerReasonCode.MEMORY_LIMIT),
+            ({"pids_limit_exceeded": True},
+             RunnerStatus.BLOCKED, RunnerReasonCode.PIDS_LIMIT),
+            ({}, RunnerStatus.BLOCKED, RunnerReasonCode.TIME_LIMIT),
+        )
+        for evidence, status, reason in cases:
+            with self.subTest(reason=reason):
+                result = classify_execution(ExecutionResult(
+                    137, "", "", timed_out=True, output_limit_exceeded=True, **evidence,
+                ))
+                self.assertEqual(result.status, status)
+                self.assertEqual(result.reason_code, reason)
+
+
 if __name__ == "__main__":
     unittest.main()
