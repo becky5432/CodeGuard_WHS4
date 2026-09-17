@@ -49,6 +49,7 @@ class ExecutionTests(unittest.TestCase):
                 }
             },
             detach=True,
+            read_only=True,
             network_mode="none",
             user="10001:10001",
             cap_drop=["ALL"],
