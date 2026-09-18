@@ -52,6 +52,7 @@ struct cg_process_key {
 };
 
 struct cg_process_value {
+    struct bpf_spin_lock lock;
     __u32 live_tasks;
 };
 

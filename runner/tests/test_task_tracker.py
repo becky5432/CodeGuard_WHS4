@@ -163,6 +163,22 @@ class TaskTrackerClientTests(unittest.TestCase):
         self.assertIn("codeguard-task-tracker", makefile)
         self.assertIn("codeguard-init", makefile)
 
+    def test_bpf_process_reference_count_uses_verifier_safe_locking(self) -> None:
+        native_dir = (
+            Path(__file__).resolve().parents[1] / "native" / "task_tracker"
+        )
+        header = (native_dir / "task_tracker_shared.h").read_text(
+            encoding="utf-8"
+        )
+        source = (native_dir / "task_tracker.bpf.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("struct bpf_spin_lock lock;", header)
+        self.assertIn("bpf_spin_lock(&process_value->lock);", source)
+        self.assertIn("bpf_spin_unlock(&process_value->lock);", source)
+        self.assertNotIn("__sync_fetch_and_sub", source)
+
     def test_native_controller_exposes_all_protocol_operations(self) -> None:
         native_dir = (
             Path(__file__).resolve().parents[1] / "native" / "task_tracker"

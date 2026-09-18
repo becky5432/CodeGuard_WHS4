@@ -142,7 +142,9 @@ int BPF_PROG(
         }
 
         if (user_child && process_value) {
-            __sync_fetch_and_add(&process_value->live_tasks, 1);
+            bpf_spin_lock(&process_value->lock);
+            process_value->live_tasks += 1;
+            bpf_spin_unlock(&process_value->lock);
         }
     }
 
@@ -199,15 +201,15 @@ int BPF_PROG(handle_sched_process_exit, struct task_struct *task)
         if (!process_value) {
             set_error(metrics, CG_ERR_PROCESS_MAP);
         } else {
-            previous_live_tasks = __sync_fetch_and_sub(
-                &process_value->live_tasks,
-                1
-            );
+            bpf_spin_lock(&process_value->lock);
+            previous_live_tasks = process_value->live_tasks;
             if (previous_live_tasks == 0) {
                 process_counter_error = true;
             } else {
+                process_value->live_tasks = previous_live_tasks - 1;
                 last_process_task = previous_live_tasks == 1;
             }
+            bpf_spin_unlock(&process_value->lock);
         }
 
         bpf_map_delete_elem(&tracked_tasks, &task_key);
