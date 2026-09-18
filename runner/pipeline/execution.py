@@ -7,10 +7,15 @@ from uuid import UUID
 import docker
 
 from runner.config import settings
-from runner.exceptions import ContainerExecutionError
+from runner.exceptions import ContainerExecutionError, TaskTrackingError
 from runner.metrics.cgroup_scope import CgroupMetrics, ExecutionCgroupScope
 from runner.metrics.resource_monitor import ResourceMonitor
 from runner.metrics.pids_monitor import PidsLimitMonitor
+from runner.metrics.task_tracker import (
+    PidsPeakSnapshot,
+    TaskTrackerClient,
+    resolve_execution_cgroup,
+)
 from runner.pipeline.workspace import VolumeWorkspace
 from runner.policies import EXECUTION_OUTPUT_LIMIT_BYTES
 
@@ -35,6 +40,9 @@ class ExecutionResult:
     wall_time_ms: int | None = None
     memory_peak_bytes: int | None = None
     pids_peak: int | None = None
+    user_task_peak: int | None = None
+    process_at_user_task_peak: int | None = None
+    thread_at_user_task_peak: int | None = None
     pids_limit_exceeded: bool = False
 
 
@@ -99,13 +107,10 @@ def create_execution_container(
 ):
     """Job Volume을 연결한 실행 컨테이너를 생성하고 반환한다."""
 
-    command = ["/workspace/main"]
+    command = ["/usr/local/bin/codeguard-init"]
     if stdin:
-        command = [
-            "sh",
-            "-c",
-            "exec /workspace/main < /workspace/stdin",
-        ]
+        command.extend(["--stdin", "/workspace/stdin"])
+    command.extend(["--", "/workspace/main"])
 
     memory_limit_bytes = memory_limit_mb * 1024 * 1024
     nano_cpus_limit = int(cpu_limit * 1_000_000_000)
@@ -173,6 +178,7 @@ def execute_program(
     timeout_ms: int,
     output_limit_bytes: int = EXECUTION_OUTPUT_LIMIT_BYTES,
     cgroup_scope: ExecutionCgroupScope | None = None,
+    task_tracker: TaskTrackerClient | None = None,
 ) -> ExecutionResult:
     """제한을 감시하며 실행 컨테이너의 종료 정보와 출력을 수집한다."""
 
@@ -189,6 +195,9 @@ def execute_program(
     output_thread = None
     monitor_started = False
     output_thread_stopped = True
+    cgroup_registered = False
+    root_registered = False
+    task_metrics: PidsPeakSnapshot | None = None
 
     def wait_for_container() -> None:
         try:
@@ -213,8 +222,41 @@ def execute_program(
             demux=True,
         )
         try:
-            start = time.monotonic()
             container.start()
+
+            if task_tracker is not None:
+                try:
+                    container.reload()
+                    root_tid = container.attrs.get("State", {}).get("Pid")
+                    if not isinstance(root_tid, int) or root_tid <= 0:
+                        raise TaskTrackingError(
+                            "Execution Container의 Root TID가 없습니다."
+                        )
+                    identity = resolve_execution_cgroup(root_tid)
+                    task_tracker.register_cgroup(
+                        run_id,
+                        identity.cgroup_id,
+                        identity.pids_current,
+                    )
+                    cgroup_registered = True
+                    task_tracker.register_root(run_id, root_tid)
+                    root_registered = True
+                except (
+                    TaskTrackingError,
+                    docker.errors.DockerException,
+                ) as exc:
+                    logger.warning(
+                        "event=task_tracker_registration_error "
+                        "job_id=%s run_id=%s error=%s",
+                        job_id,
+                        run_id,
+                        exc,
+                    )
+
+            # codeguard-init은 SIGUSR1을 받을 때까지 사용자 코드를
+            # 실행하지 않는다. Tracker 실패 여부와 무관하게 실행은 계속한다.
+            container.kill(signal="SIGUSR1")
+            start = time.monotonic()
 
             pids_monitor.start()
 
@@ -377,6 +419,30 @@ def execute_program(
             pids_limit_exceeded
             or cgroup_metrics.pids_limit_exceeded
         )
+
+        if task_tracker is not None and cgroup_registered and root_registered:
+            try:
+                task_metrics = task_tracker.snapshot(run_id)
+            except TaskTrackingError as exc:
+                logger.warning(
+                    "event=task_tracker_snapshot_error "
+                    "job_id=%s run_id=%s error=%s",
+                    job_id,
+                    run_id,
+                    exc,
+                )
+
+        user_task_peak = None
+        process_at_user_task_peak = None
+        thread_at_user_task_peak = None
+        if task_metrics is not None:
+            user_task_peak = task_metrics.user_task_peak
+            process_at_user_task_peak = (
+                task_metrics.process_at_user_task_peak
+            )
+            thread_at_user_task_peak = (
+                task_metrics.thread_at_user_task_peak
+            )
         if oom_killed:
             memory_limit_bytes = (
                 container.attrs.get("HostConfig", {}).get("Memory")
@@ -409,6 +475,9 @@ def execute_program(
             wall_time_ms=int((finished_at - start) * 1000),
             memory_peak_bytes=memory_peak_bytes,
             pids_peak=pids_peak,
+            user_task_peak=user_task_peak,
+            process_at_user_task_peak=process_at_user_task_peak,
+            thread_at_user_task_peak=thread_at_user_task_peak,
             pids_limit_exceeded=pids_limit_exceeded,
         )
     except docker.errors.DockerException as exc:
@@ -427,3 +496,15 @@ def execute_program(
             memory_peak_bytes=monitor.memory_peak_bytes,
             pids_peak=pids_monitor.pids_peak,
         )
+    finally:
+        if task_tracker is not None:
+            try:
+                task_tracker.remove(run_id)
+            except TaskTrackingError as exc:
+                logger.warning(
+                    "event=task_tracker_cleanup_error "
+                    "job_id=%s run_id=%s error=%s",
+                    job_id,
+                    run_id,
+                    exc,
+                )

@@ -4,8 +4,12 @@ from uuid import uuid4
 
 import docker
 
-from runner.exceptions import ContainerExecutionError
+from runner.exceptions import ContainerExecutionError, TaskTrackingError
 from runner.metrics.cgroup_scope import CgroupMetrics
+from runner.metrics.task_tracker import (
+    ExecutionCgroupIdentity,
+    PidsPeakSnapshot,
+)
 from runner.pipeline.execution import (
     create_execution_container,
     execute_program,
@@ -41,7 +45,11 @@ class ExecutionTests(unittest.TestCase):
         self.assertIs(result, self.container)
         self.client.containers.create.assert_called_once_with(
             image="codeguard-cpp:dev",
-            command=["/workspace/main"],
+            command=[
+                "/usr/local/bin/codeguard-init",
+                "--",
+                "/workspace/main",
+            ],
             volumes={
                 self.workspace.volume_name: {
                     "bind": "/workspace",
@@ -80,7 +88,13 @@ class ExecutionTests(unittest.TestCase):
         command = self.client.containers.create.call_args.kwargs["command"]
         self.assertEqual(
             command,
-            ["sh", "-c", "exec /workspace/main < /workspace/stdin"],
+            [
+                "/usr/local/bin/codeguard-init",
+                "--stdin",
+                "/workspace/stdin",
+                "--",
+                "/workspace/main",
+            ],
         )
 
     def test_create_execution_container_uses_cgroup_parent(self) -> None:
@@ -116,6 +130,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.stdout, "Hello\n")
         self.assertEqual(result.stderr, "")
         self.container.start.assert_called_once_with()
+        self.container.kill.assert_called_once_with(signal="SIGUSR1")
         self.container.wait.assert_called_once_with()
         self.container.remove.assert_not_called()
 
@@ -177,6 +192,138 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.memory_peak_bytes, 16 * 1024 * 1024)
         self.assertEqual(result.pids_peak, 18)
         cgroup_scope.snapshot.assert_called_once_with()
+
+    @patch("runner.pipeline.execution.resolve_execution_cgroup")
+    def test_execute_program_returns_user_task_peak_snapshot(
+        self,
+        resolve_cgroup,
+    ) -> None:
+        self.container.attrs = {
+            "State": {"Pid": 321, "OOMKilled": False},
+            "HostConfig": {"Memory": 128 * 1024 * 1024},
+        }
+        resolve_cgroup.return_value = ExecutionCgroupIdentity(
+            cgroup_id=999,
+            pids_current=1,
+        )
+        tracker = MagicMock()
+        tracker.snapshot.return_value = PidsPeakSnapshot(
+            user_task_peak=15,
+            process_at_user_task_peak=3,
+            thread_at_user_task_peak=12,
+        )
+        cgroup_scope = MagicMock()
+        cgroup_scope.snapshot.return_value = CgroupMetrics(pids_peak=18)
+
+        result = execute_program(
+            container=self.container,
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            timeout_ms=2000,
+            cgroup_scope=cgroup_scope,
+            task_tracker=tracker,
+        )
+
+        tracker.register_cgroup.assert_called_once_with(self.run_id, 999, 1)
+        tracker.register_root.assert_called_once_with(self.run_id, 321)
+        tracker.snapshot.assert_called_once_with(self.run_id)
+        tracker.remove.assert_called_once_with(self.run_id)
+        self.container.kill.assert_called_once_with(signal="SIGUSR1")
+        self.assertEqual(result.pids_peak, 18)
+        self.assertEqual(result.user_task_peak, 15)
+        self.assertEqual(result.process_at_user_task_peak, 3)
+        self.assertEqual(result.thread_at_user_task_peak, 12)
+
+    @patch("runner.pipeline.execution.resolve_execution_cgroup")
+    def test_execute_program_keeps_user_snapshot_when_cgroup_peak_differs(
+        self,
+        resolve_cgroup,
+    ) -> None:
+        self.container.attrs = {
+            "State": {"Pid": 321, "OOMKilled": False},
+            "HostConfig": {},
+        }
+        resolve_cgroup.return_value = ExecutionCgroupIdentity(999, 1)
+        tracker = MagicMock()
+        tracker.snapshot.return_value = PidsPeakSnapshot(
+            user_task_peak=1,
+            process_at_user_task_peak=1,
+            thread_at_user_task_peak=0,
+        )
+        cgroup_scope = MagicMock()
+        cgroup_scope.snapshot.return_value = CgroupMetrics(pids_peak=18)
+
+        result = execute_program(
+            container=self.container,
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            timeout_ms=2000,
+            cgroup_scope=cgroup_scope,
+            task_tracker=tracker,
+        )
+
+        self.assertEqual(result.pids_peak, 18)
+        self.assertEqual(result.user_task_peak, 1)
+        self.assertEqual(result.process_at_user_task_peak, 1)
+        self.assertEqual(result.thread_at_user_task_peak, 0)
+        tracker.remove.assert_called_once_with(self.run_id)
+
+    @patch("runner.pipeline.execution.resolve_execution_cgroup")
+    def test_tracker_registration_failure_does_not_block_execution(
+        self,
+        resolve_cgroup,
+    ) -> None:
+        self.container.attrs = {
+            "State": {"Pid": 321, "OOMKilled": False},
+            "HostConfig": {},
+        }
+        resolve_cgroup.return_value = ExecutionCgroupIdentity(999, 1)
+        tracker = MagicMock()
+        tracker.register_cgroup.side_effect = TaskTrackingError("offline")
+
+        result = execute_program(
+            container=self.container,
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            timeout_ms=2000,
+            task_tracker=tracker,
+        )
+
+        self.assertEqual(result.exit_code, 0)
+        self.container.kill.assert_called_once_with(signal="SIGUSR1")
+        tracker.register_root.assert_not_called()
+        tracker.snapshot.assert_not_called()
+        tracker.remove.assert_called_once_with(self.run_id)
+
+    @patch("runner.pipeline.execution.resolve_execution_cgroup")
+    def test_tracker_pid_reload_failure_does_not_block_execution(
+        self,
+        resolve_cgroup,
+    ) -> None:
+        self.container.reload.side_effect = [
+            docker.errors.APIError("tracking reload failed"),
+            None,
+            None,
+        ]
+        self.container.attrs = {
+            "State": {"Pid": 321, "OOMKilled": False},
+            "HostConfig": {},
+        }
+        tracker = MagicMock()
+
+        result = execute_program(
+            container=self.container,
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            timeout_ms=2000,
+            task_tracker=tracker,
+        )
+
+        self.assertEqual(result.exit_code, 0)
+        self.container.kill.assert_called_once_with(signal="SIGUSR1")
+        resolve_cgroup.assert_not_called()
+        tracker.register_cgroup.assert_not_called()
+        tracker.remove.assert_called_once_with(self.run_id)
 
 
 if __name__ == "__main__":

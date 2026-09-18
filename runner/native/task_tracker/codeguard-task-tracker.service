@@ -1,0 +1,19 @@
+[Unit]
+Description=CodeGuard eBPF Task Tracker
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/codeguard-task-tracker --socket /run/codeguard/task-tracker.sock
+Restart=on-failure
+RuntimeDirectory=codeguard
+RuntimeDirectoryMode=0750
+User=root
+Group=codeguard
+AmbientCapabilities=CAP_BPF CAP_PERFMON
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON
+NoNewPrivileges=true
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target
