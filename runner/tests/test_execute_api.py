@@ -139,6 +139,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "MEMORY_LIMIT",
                 "PIDS_LIMIT",
                 "OUTPUT_LIMIT",
+                "FILESYSTEM_LIMIT",
                 "NETWORK_BLOCKED",
                 "COMPILE_ERROR",
                 "COMPILE_TIMEOUT",
@@ -268,7 +269,7 @@ class ExecuteApiTests(unittest.TestCase):
         )
 
         self.execution_container.remove.assert_called_once_with(
-            force=True,
+            force=True, v=True,
         )
 
         self.compile_container.remove.assert_called_once_with(
@@ -308,6 +309,19 @@ class ExecuteApiTests(unittest.TestCase):
             code=body["code"],
             stdin="",
         )
+
+    def test_execute_returns_filesystem_limit_and_backend_accepts_response(self) -> None:
+        from app.schemas.runner_schema import RunnerResponse as BackendRunnerResponse
+        self.compile_source_mock.return_value = CompileResult(success=True, stdout="", stderr="", exit_code=0, artifact_ready=True)
+        self.execute_program_mock.return_value = ExecutionResult(0, "user output", "", filesystem_limit_exceeded=True)
+        response = self.client.post("/execute", json=self.make_request_body())
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "BLOCKED")
+        self.assertEqual(payload["reason_code"], "FILESYSTEM_LIMIT")
+        self.assertEqual(payload["stdout"], "user output")
+        self.assertEqual(payload["stage_summary"]["failed"], ["EXECUTE"])
+        BackendRunnerResponse.model_validate(payload)
 
     def test_execute_returns_compile_error(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
