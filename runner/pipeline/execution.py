@@ -13,6 +13,10 @@ from runner.metrics.resource_monitor import ResourceMonitor
 from runner.metrics.pids_monitor import PidsLimitMonitor
 from runner.pipeline.workspace import VolumeWorkspace
 from runner.policies import EXECUTION_OUTPUT_LIMIT_BYTES
+from runner.security.filesystem_trace import (
+    TRACE_DIRECTORY, TRACE_PATH, TRACE_SYSCALLS, RAW_WRITE_SYSCALLS,
+    FilesystemViolation, collect_filesystem_trace,
+)
 
 
 logger = logging.getLogger("runner")
@@ -21,6 +25,7 @@ EXECUTION_UID = 10001
 EXECUTION_GID = 10001
 EXECUTION_CAP_DROP = ("ALL",)
 EXECUTION_NO_NEW_PRIVILEGES = True
+TRACER_CAP_ADD = ("SYS_PTRACE", "SETUID", "SETGID")
 
 
 @dataclass
@@ -36,6 +41,9 @@ class ExecutionResult:
     memory_peak_bytes: int | None = None
     pids_peak: int | None = None
     pids_limit_exceeded: bool = False
+    filesystem_limit_exceeded: bool = False
+    filesystem_violation_syscall: str | None = None
+    filesystem_violation_path: str | None = None
 
 
 class _BoundedOutput:
@@ -99,13 +107,17 @@ def create_execution_container(
 ):
     """Job Volume을 연결한 실행 컨테이너를 생성하고 반환한다."""
 
-    command = ["/workspace/main"]
+    # A persistent anonymous evidence volume survives container exit, unlike tmpfs.
+    # Only the root tracer can traverse the evidence directory. strace -u drops
+    # the tracee's UID/GID and supplementary groups before executing user code.
+    trace_command = (
+        f"umask 077; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard "
+        f"-o {TRACE_PATH} -e trace={TRACE_SYSCALLS} "
+        f"-e raw={RAW_WRITE_SYSCALLS} /workspace/main"
+    )
     if stdin:
-        command = [
-            "sh",
-            "-c",
-            "exec /workspace/main < /workspace/stdin",
-        ]
+        trace_command += " < /workspace/stdin"
+    command = ["sh", "-c", trace_command]
 
     memory_limit_bytes = memory_limit_mb * 1024 * 1024
     nano_cpus_limit = int(cpu_limit * 1_000_000_000)
@@ -113,6 +125,8 @@ def create_execution_container(
     container_options = {
         "image": settings.cpp_image,
         "command": command,
+        "read_only": True,
+        "mounts": [docker.types.Mount(target=TRACE_DIRECTORY, source="", type="volume")],
         "volumes": {
             workspace.volume_name: {
                 "bind": "/workspace",
@@ -122,8 +136,9 @@ def create_execution_container(
         "detach": True,
       
         "network_mode": "none",
-        "user": f"{EXECUTION_UID}:{EXECUTION_GID}",
+        "user": "0:0",
         "cap_drop": list(EXECUTION_CAP_DROP),
+        "cap_add": list(TRACER_CAP_ADD),
         "security_opt": [
             f"no-new-privileges={str(EXECUTION_NO_NEW_PRIVILEGES).lower()}"
         ],
@@ -183,7 +198,8 @@ def execute_program(
     wait_done = threading.Event()
     wait_state: dict[str, object] = {}
     output_state: dict[str, Exception | None] = {}
-    timed_out = False
+    timeout_reached = False
+    timeout_kill_requested = False
     pids_limit_exceeded = False
     system_error = None
     output_thread = None
@@ -248,22 +264,16 @@ def execute_program(
 
                 remaining = timeout_seconds - (time.monotonic() - start)
                 if remaining <= 0:
-                    timed_out = True
+                    timeout_reached = True
                     break
                 wait_done.wait(timeout=min(remaining, 0.01))
 
-            finished_at = wait_state.get("finished_at")
-            if (
-                not timed_out
-                and isinstance(finished_at, float)
-                and finished_at - start > timeout_seconds
-            ):
-                timed_out = True
-
-            policy_kill = timed_out or output.exceeded.is_set() or pids_limit_exceeded
+            policy_kill = timeout_reached or output.exceeded.is_set() or pids_limit_exceeded
             if policy_kill and not wait_done.is_set():
                 try:
                     container.kill()
+                    if timeout_reached:
+                        timeout_kill_requested = True
                 except docker.errors.DockerException as exc:
                     logger.warning(
                         "event=execution_container_kill_error "
@@ -295,7 +305,7 @@ def execute_program(
                     )
             pids_monitor.sample()
 
-        final_policy_kill = timed_out or output.exceeded.is_set() or pids_limit_exceeded
+        final_policy_kill = timeout_reached or output.exceeded.is_set() or pids_limit_exceeded
         if not output_thread_stopped:
             system_error = "실행 출력 수집기를 종료하지 못했습니다."
             logger.error(
@@ -331,6 +341,9 @@ def execute_program(
         wait_result = wait_state.get("result")
         if isinstance(wait_result, dict):
             exit_code = int(wait_result["StatusCode"])
+
+        # A natural exit can win the race with a timeout kill request.
+        timed_out = timeout_kill_requested and exit_code == 137
 
         oom_killed = False
         try:
@@ -398,6 +411,19 @@ def execute_program(
         finished_at = wait_state.get("finished_at")
         if not isinstance(finished_at, float):
             finished_at = time.monotonic()
+        filesystem_violation = FilesystemViolation()
+        if system_error is None:
+            try:
+                filesystem_violation = collect_filesystem_trace(
+                    container,
+                    interrupted=final_policy_kill or oom_killed or pids_limit_exceeded,
+                )
+            except Exception as exc:
+                system_error = "파일시스템 추적 증거 수집 또는 분석에 실패했습니다."
+                logger.error(
+                    "event=filesystem_trace_error job_id=%s run_id=%s error=%s",
+                    job_id, run_id, exc,
+                )
         return ExecutionResult(
             exit_code=exit_code,
             stdout=stdout,
@@ -410,6 +436,9 @@ def execute_program(
             memory_peak_bytes=memory_peak_bytes,
             pids_peak=pids_peak,
             pids_limit_exceeded=pids_limit_exceeded,
+            filesystem_limit_exceeded=filesystem_violation.detected,
+            filesystem_violation_syscall=filesystem_violation.syscall,
+            filesystem_violation_path=filesystem_violation.path,
         )
     except docker.errors.DockerException as exc:
         logger.error(

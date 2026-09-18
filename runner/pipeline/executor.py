@@ -76,7 +76,10 @@ def _remove_container(container, stage: str, job_id, run_id) -> bool:
         return True
 
     try:
-        container.remove(force=True)
+        if stage == "execute":
+            container.remove(force=True, v=True)
+        else:
+            container.remove(force=True)
         return True
     except Exception as exc:
         logger.error(
@@ -280,6 +283,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                         + len(execution_result.stderr.encode("utf-8"))
                     ),
                 ),
+                # User-program credentials; the protected tracing supervisor is separate.
                 security_context=SecurityContext(
                     non_root=EXECUTION_UID != 0,
                     uid=EXECUTION_UID,
