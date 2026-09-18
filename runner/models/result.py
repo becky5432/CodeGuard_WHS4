@@ -20,6 +20,7 @@ class RunnerStage(str, Enum):
 
 class RunnerReasonCode(str, Enum):
     TIME_LIMIT = "TIME_LIMIT"
+    CPU_TIME_LIMIT = "CPU_TIME_LIMIT"
     MEMORY_LIMIT = "MEMORY_LIMIT"
     PIDS_LIMIT = "PIDS_LIMIT"
     OUTPUT_LIMIT = "OUTPUT_LIMIT"
