@@ -1,0 +1,5 @@
+vmlinux.h
+task_tracker.bpf.o
+task_tracker.skel.h
+codeguard-task-tracker
+codeguard-init

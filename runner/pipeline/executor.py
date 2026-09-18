@@ -8,6 +8,7 @@ from runner.metrics.cgroup_scope import (
     ExecutionCgroupScope,
     validate_docker_cgroup_driver,
 )
+from runner.metrics.task_tracker import TaskTrackerClient
 from runner.models.job import RunnerRequest
 from runner.models.result import (
     RunnerReasonCode,
@@ -104,6 +105,11 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
     current_stage = RunnerStage.WORKSPACE
     stage_summary = StageSummary()
     cleanup_failed = False
+    task_tracker = (
+        TaskTrackerClient.from_settings(settings)
+        if settings.task_tracker_enabled
+        else None
+    )
 
     try:
         client = get_docker_client()
@@ -236,6 +242,8 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             }
             if execution_cgroup_scope is not None:
                 execute_options["cgroup_scope"] = execution_cgroup_scope
+            if task_tracker is not None:
+                execute_options["task_tracker"] = task_tracker
 
             execution_result = execute_program(**execute_options)
 
@@ -278,6 +286,12 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                     output_bytes=(
                         len(execution_result.stdout.encode("utf-8"))
                         + len(execution_result.stderr.encode("utf-8"))
+                    ),
+                    process_at_pids_peak=(
+                        execution_result.process_at_pids_peak
+                    ),
+                    thread_at_pids_peak=(
+                        execution_result.thread_at_pids_peak
                     ),
                 ),
                 security_context=SecurityContext(

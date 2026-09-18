@@ -50,3 +50,7 @@ class CgroupScopeError(RunnerError):
 
     error_code = "CGROUP_SCOPE_ERROR"
     status_code = 500
+
+
+class TaskTrackingError(Exception):
+    """사용자 Task 분리 측정의 등록·조회·정리 실패."""

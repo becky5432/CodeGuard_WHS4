@@ -20,6 +20,7 @@ class ExecutorTests(unittest.TestCase):
         client.info.return_value = {"CgroupDriver": "cgroupfs"}
         compile_container = MagicMock()
         execution_container = MagicMock()
+        task_tracker = MagicMock()
         cgroup_scope = MagicMock()
         workspace = VolumeWorkspace(job_id, "codeguard-job-test")
         delegated_root = Path("/sys/fs/cgroup/codeguard")
@@ -38,7 +39,12 @@ class ExecutorTests(unittest.TestCase):
 
         with (
             patch.object(settings, "execution_cgroup_enabled", True),
+            patch.object(settings, "task_tracker_enabled", True),
             patch.object(settings, "execution_cgroup_root", delegated_root),
+            patch(
+                "runner.pipeline.executor.TaskTrackerClient.from_settings",
+                return_value=task_tracker,
+            ),
             patch(
                 "runner.metrics.cgroup_scope.ExecutionCgroupScope.create",
                 return_value=cgroup_scope,
@@ -75,6 +81,9 @@ class ExecutorTests(unittest.TestCase):
                     exit_code=0,
                     stdout="",
                     stderr="",
+                    pids_peak=18,
+                    process_at_pids_peak=3,
+                    thread_at_pids_peak=12,
                 ),
             ) as execute_program,
             patch("runner.pipeline.executor.remove_workspace"),
@@ -94,6 +103,13 @@ class ExecutorTests(unittest.TestCase):
             execute_program.call_args.kwargs["cgroup_scope"],
             cgroup_scope,
         )
+        self.assertIs(
+            execute_program.call_args.kwargs["task_tracker"],
+            task_tracker,
+        )
+        self.assertEqual(response.resource_usage.pids_peak, 18)
+        self.assertEqual(response.resource_usage.process_at_pids_peak, 3)
+        self.assertEqual(response.resource_usage.thread_at_pids_peak, 12)
         cgroup_scope.remove.assert_called_once_with()
 
     @patch("runner.pipeline.executor.remove_workspace")
