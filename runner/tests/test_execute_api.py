@@ -77,6 +77,11 @@ class ExecuteApiTests(unittest.TestCase):
             "runner.pipeline.executor.execute_program",
         )
 
+        self.execution_cgroup_enabled_patcher = patch(
+            "runner.pipeline.executor.settings.execution_cgroup_enabled",
+            False,
+        )
+
         self.get_client_mock = self.get_client_patcher.start()
         self.create_workspace_mock = self.create_workspace_patcher.start()
         self.remove_workspace_mock = self.remove_workspace_patcher.start()
@@ -91,6 +96,7 @@ class ExecuteApiTests(unittest.TestCase):
         )
 
         self.execute_program_mock = self.execute_program_patcher.start()
+        self.execution_cgroup_enabled_patcher.start()
 
     def tearDown(self) -> None:
         patch.stopall()
@@ -156,6 +162,7 @@ class ExecuteApiTests(unittest.TestCase):
     def test_settings_include_execution_cgroup_configuration(self) -> None:
         self.assertIn("execution_cgroup_enabled", Settings.model_fields)
         self.assertIn("execution_cgroup_root", Settings.model_fields)
+        self.assertTrue(Settings().execution_cgroup_enabled)
 
     def test_execute_compiles_cpp_with_job_volume(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
