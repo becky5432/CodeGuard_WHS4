@@ -2,7 +2,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
-from app.config import POLICY_PRESETS
+from app.config import DEFAULT_POLICY
 
 from app.db import repository
 from app.db.database import SessionLocal
@@ -11,11 +11,10 @@ from app.schemas.execution_schema import (
     ExecutionCreateResponse,
     ExecutionReasonCode,
     ExecutionResultResponse,
-    ExecutionStage,
     ExecutionStatus,
     PolicyLimits,
     ResourceUsage,
-    StageError,
+
     StageSummary as ExecutionStageSummary,
 )
 from app.schemas.runner_schema import (
@@ -39,22 +38,15 @@ class ExecutionService:
             summary.model_dump(mode="json")
         )
 
-    # 정책 프리셋 설정파일에서 제한값 가져옴
+    # 정책 기본값 설정을 가져옴
     def resolve_policy(
         self,
         request: ExecutionCreateRequest,
     ) -> PolicyLimits:
-        policy_values = POLICY_PRESETS.get(
-            request.policy_profile.value
-        )
+        if request.policy is not None:
+            return request.policy
 
-        if policy_values is None:
-            raise ValueError(
-                f"지원하지 않는 정책 프로파일입니다: "
-                f"{request.policy_profile.value}"
-            )
-
-        return PolicyLimits.model_validate(policy_values)     
+        return PolicyLimits.model_validate(DEFAULT_POLICY)
 
     # 프론트의 실행 요청 접수
     def submit(
@@ -74,7 +66,6 @@ class ExecutionService:
                 language=request.language.value,
                 code=request.code,
                 stdin=request.stdin,
-                policy_profile=request.policy_profile.value,
                 limits=limits,
             )
         except Exception:
@@ -190,6 +181,11 @@ class ExecutionService:
                     if usage
                     else None
                 ),
+                output_bytes=(
+                    usage.output_bytes
+                    if usage
+                    else None
+                ),
             )
 
         # DB 오류, 응답 변환 오류 등 Backend 내부 오류
@@ -231,6 +227,7 @@ class ExecutionService:
             execution.cpu_time_ms,
             execution.memory_peak_bytes,
             execution.pids_peak,
+            execution.output_bytes,
         )
 
         resource_usage = (
@@ -239,6 +236,7 @@ class ExecutionService:
                 cpu_time_ms=execution.cpu_time_ms,
                 memory_peak_bytes=execution.memory_peak_bytes,
                 pids_peak=execution.pids_peak,
+                output_bytes=execution.output_bytes,
             )
             if any(value is not None for value in metric_values)
             else None

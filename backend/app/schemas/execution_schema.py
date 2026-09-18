@@ -10,20 +10,13 @@ class Language(str, Enum):
     CPP = "CPP"
 
 
-class PolicyProfile(str, Enum):
-    BASIC = "basic"
-    STRICT = "strict"
-    RELAXED = "relaxed"
-    # CUSTOM = "custom"   # 사용자 설정 적용
-
-
 class PolicyLimits(BaseModel):
     # TODO: Runner와 실제 필드/단위/상한 확정 후 범위 검증 추가
     timeout_ms: int = Field(gt=0)
     memory_limit_mb: int = Field(gt=0)
     pids_limit: int = Field(gt=0)     # 프로세스 및 스레드 수 함께 제한
     cpu_limit: float = Field(gt=0)    # cpu_limit: CPU 할당 한도 (quota 제한)
-    # output_limit_bytes: int = Field(gt=0) 출력값 제한은 후순위로 설정
+    output_limit_bytes: int = Field(gt=0)   # 실행 단계 stdout·stderr 합산 출력 제한
 
 
 class ExecutionStatus(str, Enum):
@@ -59,6 +52,7 @@ class ResourceUsage(BaseModel):
     cpu_time_ms: int | None = None        # 해당 실행 동안의 누적 CPU 사용 시간(ms)
     memory_peak_bytes: int | None = None  # 최대 메모리 (bytes 단위 주의)
     pids_peak: int | None = None          # 최대 프로세스 및 스레드 수 
+    output_bytes: int | None = None       # stdout·stderr 합산 출력 크기
     
     
 class StageError(BaseModel):
@@ -80,8 +74,7 @@ class ExecutionCreateRequest(BaseModel):
     language: Language
     code: str = Field(min_length=1)
     stdin: str = ""
-    policy_profile: PolicyProfile
-    policy: PolicyLimits | None = None    # 프리셋 선택할 경우 필수 X
+    policy: PolicyLimits | None = None  # 없으면 Backend 기본 정책 적용
 
 
 class ExecutionCreateResponse(BaseModel): # 실행 요청 직후 응답

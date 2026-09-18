@@ -113,17 +113,17 @@ Backend에서는 `stage_summary`와 `finished_at`이 필수다. 현재 Runner는
 
 ### 3.6 SecurityContext
 
-신뢰된 tracer는 UID/GID 0 및 SYS_PTRACE/SETUID/SETGID로 실행되며, `strace -u codeguard`가 사용자 프로그램을 UID/GID 10001 및 capability 없이 실행한다. 두 프로세스 모두 no-new-privileges를 유지한다.
+신뢰된 filesystem tracing supervisor는 UID/GID 0:0 및 SYS_PTRACE/SETUID/SETGID로 실행된다. `strace -u codeguard`가 사용자 프로그램을 UID/GID 10001:10001 및 capability 없이 실행한다. 두 프로세스 모두 no-new-privileges를 유지한다.
 
-`security_context`는 해당 실행에서 사용자 프로그램에 적용하도록 Runner가 구성한 권한 제한 설정값의 스냅샷이다. 신뢰된 strace supervisor의 컨테이너 권한을 나타내지 않는다.
+`security_context`는 해당 실행의 사용자 프로그램에 적용된 실행 권한 및 보안 설정의 스냅샷이다. 컨테이너 전체 또는 별도의 root tracer 권한을 나타내지 않는다.
 
-이 값은 컨테이너 내부에서 `getuid()`, `CapEff`, `NoNewPrivs` 등을 직접 읽어 생성한 실측값이 아니다. Runner가 사용자 프로그램에 적용하도록 구성한 설정값을 `RunnerResponse`에 담아 반환하며, 권한 제한의 실제 동작 여부는 별도의 실행 검증을 통해 확인한다.
+이 값은 컨테이너 내부에서 `getuid()`, `CapEff`, `NoNewPrivs` 등을 직접 읽어 생성한 실측값이 아니다. Runner가 Execution Container 생성 시 사용자 프로그램에 적용하도록 구성한 설정값을 `RunnerResponse`에 담아 반환하며, 권한 제한의 실제 동작 여부는 별도의 실행 검증을 통해 확인한다.
 
 | 필드 | 타입 | 설명 |
 | --- | --- | --- |
-| `non_root` | `boolean` | root가 아닌 사용자로 실행하도록 설정했는지 여부 |
-| `uid` | `integer` | 사용자 프로그램에 설정한 UID |
-| `gid` | `integer` | 사용자 프로그램에 설정한 GID |
+| `non_root` | `boolean` | 사용자 프로그램을 root가 아닌 사용자로 실행하도록 설정했는지 여부 |
+| `uid` | `integer` | 사용자 프로그램에 설정한 UID (현재 10001) |
+| `gid` | `integer` | 사용자 프로그램에 설정한 GID (현재 10001) |
 | `cap_drop` | `string[]` | 사용자 프로그램에서 제거하도록 설정한 Linux Capability 목록 |
 | `no_new_privileges` | `boolean` | 추가 권한 획득 방지 설정 여부 |
 
