@@ -25,9 +25,9 @@ class FakeTransport:
         self,
         *,
         status: int = 0,
-        container_task_peak: int = 0,
-        process_at_pids_peak: int = 0,
-        thread_at_pids_peak: int = 0,
+        user_task_peak: int = 0,
+        process_at_user_task_peak: int = 0,
+        thread_at_user_task_peak: int = 0,
         error_flags: int = 0,
         magic: int = CG_TRACKER_MAGIC,
         version: int = CG_TRACKER_VERSION,
@@ -38,9 +38,9 @@ class FakeTransport:
             version,
             0,
             status,
-            container_task_peak,
-            process_at_pids_peak,
-            thread_at_pids_peak,
+            user_task_peak,
+            process_at_user_task_peak,
+            thread_at_user_task_peak,
             error_flags,
         )
 
@@ -52,20 +52,20 @@ class FakeTransport:
 
 
 class TaskTrackerClientTests(unittest.TestCase):
-    def test_snapshot_returns_same_peak_snapshot(self) -> None:
+    def test_snapshot_returns_user_task_peak_snapshot(self) -> None:
         transport = FakeTransport(
-            container_task_peak=15,
-            process_at_pids_peak=3,
-            thread_at_pids_peak=12,
+            user_task_peak=15,
+            process_at_user_task_peak=3,
+            thread_at_user_task_peak=12,
         )
         client = TaskTrackerClient(transport=transport)
         run_id = uuid4()
 
         result = client.snapshot(run_id)
 
-        self.assertEqual(result.container_task_peak, 15)
-        self.assertEqual(result.process_at_pids_peak, 3)
-        self.assertEqual(result.thread_at_pids_peak, 12)
+        self.assertEqual(result.user_task_peak, 15)
+        self.assertEqual(result.process_at_user_task_peak, 3)
+        self.assertEqual(result.thread_at_user_task_peak, 12)
         request = REQUEST_STRUCT.unpack(transport.requests[0])
         self.assertEqual(request[2], CG_OP_SNAPSHOT)
         self.assertEqual(UUID(bytes=request[3]), run_id)
@@ -130,8 +130,10 @@ class TaskTrackerClientTests(unittest.TestCase):
         for field in (
             "initial_task_count",
             "container_task_peak",
-            "process_at_pids_peak",
-            "thread_at_pids_peak",
+            "user_task_current",
+            "user_task_peak",
+            "process_at_user_task_peak",
+            "thread_at_user_task_peak",
             "error_flags",
         ):
             self.assertIn(field, header)
@@ -153,8 +155,8 @@ class TaskTrackerClientTests(unittest.TestCase):
             "tracked_tasks SEC(\".maps\")",
             "process_tasks SEC(\".maps\")",
             "run_metrics SEC(\".maps\")",
-            "process_at_pids_peak = metrics->process_current",
-            "thread_at_pids_peak = metrics->thread_current",
+            "process_at_user_task_peak = metrics->process_current",
+            "thread_at_user_task_peak = metrics->thread_current",
         ):
             self.assertIn(token, source)
 

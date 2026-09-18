@@ -40,8 +40,9 @@ class ExecutionResult:
     wall_time_ms: int | None = None
     memory_peak_bytes: int | None = None
     pids_peak: int | None = None
-    process_at_pids_peak: int | None = None
-    thread_at_pids_peak: int | None = None
+    user_task_peak: int | None = None
+    process_at_user_task_peak: int | None = None
+    thread_at_user_task_peak: int | None = None
     pids_limit_exceeded: bool = False
 
 
@@ -431,21 +432,16 @@ def execute_program(
                     exc,
                 )
 
-        process_at_pids_peak = None
-        thread_at_pids_peak = None
-        if task_metrics is not None and (
-            pids_peak == task_metrics.container_task_peak
-        ):
-            process_at_pids_peak = task_metrics.process_at_pids_peak
-            thread_at_pids_peak = task_metrics.thread_at_pids_peak
-        elif task_metrics is not None:
-            logger.warning(
-                "event=pids_peak_snapshot_mismatch "
-                "job_id=%s run_id=%s pids_peak=%s container_task_peak=%s",
-                job_id,
-                run_id,
-                pids_peak,
-                task_metrics.container_task_peak,
+        user_task_peak = None
+        process_at_user_task_peak = None
+        thread_at_user_task_peak = None
+        if task_metrics is not None:
+            user_task_peak = task_metrics.user_task_peak
+            process_at_user_task_peak = (
+                task_metrics.process_at_user_task_peak
+            )
+            thread_at_user_task_peak = (
+                task_metrics.thread_at_user_task_peak
             )
         if oom_killed:
             memory_limit_bytes = (
@@ -479,8 +475,9 @@ def execute_program(
             wall_time_ms=int((finished_at - start) * 1000),
             memory_peak_bytes=memory_peak_bytes,
             pids_peak=pids_peak,
-            process_at_pids_peak=process_at_pids_peak,
-            thread_at_pids_peak=thread_at_pids_peak,
+            user_task_peak=user_task_peak,
+            process_at_user_task_peak=process_at_user_task_peak,
+            thread_at_user_task_peak=thread_at_user_task_peak,
             pids_limit_exceeded=pids_limit_exceeded,
         )
     except docker.errors.DockerException as exc:

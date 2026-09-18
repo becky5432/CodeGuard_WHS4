@@ -194,7 +194,7 @@ class ExecutionTests(unittest.TestCase):
         cgroup_scope.snapshot.assert_called_once_with()
 
     @patch("runner.pipeline.execution.resolve_execution_cgroup")
-    def test_execute_program_returns_user_snapshot_at_cgroup_peak(
+    def test_execute_program_returns_user_task_peak_snapshot(
         self,
         resolve_cgroup,
     ) -> None:
@@ -208,9 +208,9 @@ class ExecutionTests(unittest.TestCase):
         )
         tracker = MagicMock()
         tracker.snapshot.return_value = PidsPeakSnapshot(
-            container_task_peak=18,
-            process_at_pids_peak=3,
-            thread_at_pids_peak=12,
+            user_task_peak=15,
+            process_at_user_task_peak=3,
+            thread_at_user_task_peak=12,
         )
         cgroup_scope = MagicMock()
         cgroup_scope.snapshot.return_value = CgroupMetrics(pids_peak=18)
@@ -229,11 +229,13 @@ class ExecutionTests(unittest.TestCase):
         tracker.snapshot.assert_called_once_with(self.run_id)
         tracker.remove.assert_called_once_with(self.run_id)
         self.container.kill.assert_called_once_with(signal="SIGUSR1")
-        self.assertEqual(result.process_at_pids_peak, 3)
-        self.assertEqual(result.thread_at_pids_peak, 12)
+        self.assertEqual(result.pids_peak, 18)
+        self.assertEqual(result.user_task_peak, 15)
+        self.assertEqual(result.process_at_user_task_peak, 3)
+        self.assertEqual(result.thread_at_user_task_peak, 12)
 
     @patch("runner.pipeline.execution.resolve_execution_cgroup")
-    def test_execute_program_discards_mismatched_user_snapshot(
+    def test_execute_program_keeps_user_snapshot_when_cgroup_peak_differs(
         self,
         resolve_cgroup,
     ) -> None:
@@ -244,9 +246,9 @@ class ExecutionTests(unittest.TestCase):
         resolve_cgroup.return_value = ExecutionCgroupIdentity(999, 1)
         tracker = MagicMock()
         tracker.snapshot.return_value = PidsPeakSnapshot(
-            container_task_peak=17,
-            process_at_pids_peak=3,
-            thread_at_pids_peak=12,
+            user_task_peak=1,
+            process_at_user_task_peak=1,
+            thread_at_user_task_peak=0,
         )
         cgroup_scope = MagicMock()
         cgroup_scope.snapshot.return_value = CgroupMetrics(pids_peak=18)
@@ -260,8 +262,10 @@ class ExecutionTests(unittest.TestCase):
             task_tracker=tracker,
         )
 
-        self.assertIsNone(result.process_at_pids_peak)
-        self.assertIsNone(result.thread_at_pids_peak)
+        self.assertEqual(result.pids_peak, 18)
+        self.assertEqual(result.user_task_peak, 1)
+        self.assertEqual(result.process_at_user_task_peak, 1)
+        self.assertEqual(result.thread_at_user_task_peak, 0)
         tracker.remove.assert_called_once_with(self.run_id)
 
     @patch("runner.pipeline.execution.resolve_execution_cgroup")

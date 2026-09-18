@@ -48,8 +48,9 @@ class ResourceUsage(BaseModel):
     memory_peak_bytes: int | None = None
     pids_peak: int | None = None
     output_bytes: int | None = None
-    process_at_pids_peak: int | None = None
-    thread_at_pids_peak: int | None = None
+    user_task_peak: int | None = None
+    process_at_user_task_peak: int | None = None
+    thread_at_user_task_peak: int | None = None
 
 
 class SecurityContext(BaseModel):

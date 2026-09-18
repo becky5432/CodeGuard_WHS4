@@ -7,7 +7,7 @@
 #endif
 
 #define CG_TRACKER_MAGIC 0x43475452
-#define CG_TRACKER_VERSION 1
+#define CG_TRACKER_VERSION 2
 
 enum cg_tracker_op {
     CG_OP_HEALTH = 1,
@@ -60,17 +60,19 @@ struct cg_run_metrics {
     struct bpf_spin_lock lock;
     __u32 container_task_current;
     __u32 container_task_peak;
+    __u32 user_task_current;
+    __u32 user_task_peak;
     __u32 process_current;
     __u32 thread_current;
-    __u32 process_at_pids_peak;
-    __u32 thread_at_pids_peak;
+    __u32 process_at_user_task_peak;
+    __u32 thread_at_user_task_peak;
     __u32 error_flags;
 };
 
 struct cg_peak_snapshot {
-    __u32 container_task_peak;
-    __u32 process_at_pids_peak;
-    __u32 thread_at_pids_peak;
+    __u32 user_task_peak;
+    __u32 process_at_user_task_peak;
+    __u32 thread_at_user_task_peak;
     __u32 error_flags;
 };
 

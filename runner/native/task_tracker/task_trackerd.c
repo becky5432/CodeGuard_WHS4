@@ -134,10 +134,10 @@ static int register_root(
 
     metrics.process_current = 1;
     metrics.thread_current = 0;
-    if (metrics.container_task_current == metrics.container_task_peak) {
-        metrics.process_at_pids_peak = 1;
-        metrics.thread_at_pids_peak = 0;
-    }
+    metrics.user_task_current = 1;
+    metrics.user_task_peak = 1;
+    metrics.process_at_user_task_peak = 1;
+    metrics.thread_at_user_task_peak = 0;
     result = bpf_map_update_elem(
         metrics_fd,
         &request->run_id,
@@ -170,9 +170,9 @@ static int snapshot(
         ))
         return -errno;
 
-    result->container_task_peak = metrics.container_task_peak;
-    result->process_at_pids_peak = metrics.process_at_pids_peak;
-    result->thread_at_pids_peak = metrics.thread_at_pids_peak;
+    result->user_task_peak = metrics.user_task_peak;
+    result->process_at_user_task_peak = metrics.process_at_user_task_peak;
+    result->thread_at_user_task_peak = metrics.thread_at_user_task_peak;
     result->error_flags = metrics.error_flags;
     return 0;
 }

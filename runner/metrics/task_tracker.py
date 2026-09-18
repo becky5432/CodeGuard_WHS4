@@ -13,7 +13,7 @@ from runner.exceptions import TaskTrackingError
 
 
 CG_TRACKER_MAGIC = 0x43475452
-CG_TRACKER_VERSION = 1
+CG_TRACKER_VERSION = 2
 
 CG_OP_HEALTH = 1
 CG_OP_REGISTER_CGROUP = 2
@@ -62,9 +62,9 @@ class UnixSeqpacketTransport:
 
 @dataclass(frozen=True)
 class PidsPeakSnapshot:
-    container_task_peak: int
-    process_at_pids_peak: int
-    thread_at_pids_peak: int
+    user_task_peak: int
+    process_at_user_task_peak: int
+    thread_at_user_task_peak: int
 
 
 @dataclass(frozen=True)
@@ -159,9 +159,9 @@ def resolve_execution_cgroup(
 
 @dataclass(frozen=True)
 class _TrackerResponse:
-    container_task_peak: int
-    process_at_pids_peak: int
-    thread_at_pids_peak: int
+    user_task_peak: int
+    process_at_user_task_peak: int
+    thread_at_user_task_peak: int
     error_flags: int
 
 
@@ -204,9 +204,13 @@ class TaskTrackerClient:
     def snapshot(self, run_id: UUID) -> PidsPeakSnapshot:
         response = self._request(CG_OP_SNAPSHOT, run_id)
         return PidsPeakSnapshot(
-            container_task_peak=response.container_task_peak,
-            process_at_pids_peak=response.process_at_pids_peak,
-            thread_at_pids_peak=response.thread_at_pids_peak,
+            user_task_peak=response.user_task_peak,
+            process_at_user_task_peak=(
+                response.process_at_user_task_peak
+            ),
+            thread_at_user_task_peak=(
+                response.thread_at_user_task_peak
+            ),
         )
 
     def remove(self, run_id: UUID) -> None:
@@ -236,9 +240,9 @@ class TaskTrackerClient:
             version,
             _reserved,
             status,
-            container_task_peak,
-            process_at_pids_peak,
-            thread_at_pids_peak,
+            user_task_peak,
+            process_at_user_task_peak,
+            thread_at_user_task_peak,
             error_flags,
         ) = RESPONSE_STRUCT.unpack(raw_response)
 
@@ -255,8 +259,8 @@ class TaskTrackerClient:
             )
 
         return _TrackerResponse(
-            container_task_peak=container_task_peak,
-            process_at_pids_peak=process_at_pids_peak,
-            thread_at_pids_peak=thread_at_pids_peak,
+            user_task_peak=user_task_peak,
+            process_at_user_task_peak=process_at_user_task_peak,
+            thread_at_user_task_peak=thread_at_user_task_peak,
             error_flags=error_flags,
         )

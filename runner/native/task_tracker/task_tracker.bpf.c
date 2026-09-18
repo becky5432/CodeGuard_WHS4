@@ -48,14 +48,17 @@ static __always_inline void set_error(
     bpf_spin_unlock(&metrics->lock);
 }
 
-static __always_inline void update_peak_locked(
+static __always_inline void update_peaks_locked(
     struct cg_run_metrics *metrics
 )
 {
-    if (metrics->container_task_current > metrics->container_task_peak) {
+    if (metrics->container_task_current > metrics->container_task_peak)
         metrics->container_task_peak = metrics->container_task_current;
-        metrics->process_at_pids_peak = metrics->process_current;
-        metrics->thread_at_pids_peak = metrics->thread_current;
+
+    if (metrics->user_task_current > metrics->user_task_peak) {
+        metrics->user_task_peak = metrics->user_task_current;
+        metrics->process_at_user_task_peak = metrics->process_current;
+        metrics->thread_at_user_task_peak = metrics->thread_current;
     }
 }
 
@@ -151,12 +154,13 @@ int BPF_PROG(
     bpf_spin_lock(&metrics->lock);
     metrics->container_task_current += 1;
     if (user_child) {
+        metrics->user_task_current += 1;
         if (new_process)
             metrics->process_current += 1;
         if (additional_thread)
             metrics->thread_current += 1;
     }
-    update_peak_locked(metrics);
+    update_peaks_locked(metrics);
     bpf_spin_unlock(&metrics->lock);
     return 0;
 }
@@ -227,6 +231,10 @@ int BPF_PROG(handle_sched_process_exit, struct task_struct *task)
     }
 
     if (tracked_user_task) {
+        if (metrics->user_task_current > 0)
+            metrics->user_task_current -= 1;
+        else
+            metrics->error_flags |= CG_ERR_COUNTER;
         if (additional_thread) {
             if (metrics->thread_current > 0)
                 metrics->thread_current -= 1;

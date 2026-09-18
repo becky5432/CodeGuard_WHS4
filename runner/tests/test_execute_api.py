@@ -183,15 +183,18 @@ class ExecuteApiTests(unittest.TestCase):
     def test_task_tracking_error_is_nonfatal_measurement_error(self) -> None:
         self.assertFalse(issubclass(TaskTrackingError, RunnerError))
 
-    def test_resource_usage_supports_same_pids_peak_snapshot(self) -> None:
+    def test_resource_usage_separates_cgroup_and_user_task_peaks(self) -> None:
         usage = ResourceUsage(
             pids_peak=7,
-            process_at_pids_peak=1,
-            thread_at_pids_peak=5,
+            user_task_peak=6,
+            process_at_user_task_peak=1,
+            thread_at_user_task_peak=5,
         )
 
-        self.assertEqual(usage.process_at_pids_peak, 1)
-        self.assertEqual(usage.thread_at_pids_peak, 5)
+        self.assertEqual(usage.pids_peak, 7)
+        self.assertEqual(usage.user_task_peak, 6)
+        self.assertEqual(usage.process_at_user_task_peak, 1)
+        self.assertEqual(usage.thread_at_user_task_peak, 5)
 
     def test_execute_compiles_cpp_with_job_volume(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
@@ -233,8 +236,9 @@ class ExecuteApiTests(unittest.TestCase):
                 "memory_peak_bytes": None,
                 "pids_peak": None,
                 "output_bytes": 6,
-                "process_at_pids_peak": None,
-                "thread_at_pids_peak": None,
+                "user_task_peak": None,
+                "process_at_user_task_peak": None,
+                "thread_at_user_task_peak": None,
             },
         )
         self.assertEqual(
@@ -436,8 +440,9 @@ class ExecuteApiTests(unittest.TestCase):
                 "memory_peak_bytes": 200,
                 "pids_peak": 5,
                 "output_bytes": 11,
-                "process_at_pids_peak": None,
-                "thread_at_pids_peak": None,
+                "user_task_peak": None,
+                "process_at_user_task_peak": None,
+                "thread_at_user_task_peak": None,
             },
         )
 

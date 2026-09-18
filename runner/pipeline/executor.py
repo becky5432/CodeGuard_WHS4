@@ -287,11 +287,12 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                         len(execution_result.stdout.encode("utf-8"))
                         + len(execution_result.stderr.encode("utf-8"))
                     ),
-                    process_at_pids_peak=(
-                        execution_result.process_at_pids_peak
+                    user_task_peak=execution_result.user_task_peak,
+                    process_at_user_task_peak=(
+                        execution_result.process_at_user_task_peak
                     ),
-                    thread_at_pids_peak=(
-                        execution_result.thread_at_pids_peak
+                    thread_at_user_task_peak=(
+                        execution_result.thread_at_user_task_peak
                     ),
                 ),
                 security_context=SecurityContext(
