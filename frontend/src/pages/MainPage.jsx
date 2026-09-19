@@ -435,17 +435,17 @@ function MainPage() {
 
   const wallTimePercentage = calculateUsagePercentage(
     wallTimeMs ?? 0,
-    selectedPolicy.timeoutMs,
+    selectedPolicy.timeout_ms,
   );
 
   const memoryPercentage = calculateUsagePercentage(
     memoryPeakMb ?? 0,
-    selectedPolicy.memoryLimitMb,
+    selectedPolicy.memory_limit_mb,
   );
 
   const pidsPercentage = calculateUsagePercentage(
     pidsPeak ?? 0,
-    selectedPolicy.processLimit,
+    selectedPolicy.pids_limit,
   );
 
   const cpuTimeMs = resourceUsage?.cpu_time_ms;
@@ -750,7 +750,7 @@ function MainPage() {
                   </span>
                   <div>
                     <small>시간 제한</small>
-                    <strong>{selectedPolicy.timeoutMs / 1000} sec</strong>
+                    <strong>{selectedPolicy.timeout_ms / 1000} sec</strong>
                   </div>
                 </div>
 
@@ -760,7 +760,7 @@ function MainPage() {
                   </span>
                   <div>
                     <small>메모리</small>
-                    <strong>{selectedPolicy.memoryLimitMb} MB</strong>
+                    <strong>{selectedPolicy.memory_limit_mb} MB</strong>
                   </div>
                 </div>
 
@@ -770,7 +770,7 @@ function MainPage() {
                   </span>
                   <div>
                     <small>PID</small>
-                    <strong>{selectedPolicy.processLimit}개</strong>
+                    <strong>{selectedPolicy.pids_limit}개</strong>
                   </div>
                 </div>
 
@@ -780,7 +780,7 @@ function MainPage() {
                   </span>
                   <div>
                     <small>CPU</small>
-                    <strong>{selectedPolicy.cpuLimit.toFixed(1)} CPU</strong>
+                    <strong>{selectedPolicy.cpu_limit.toFixed(1)} CPU</strong>
                   </div>
                 </div>
               </div>
@@ -896,7 +896,7 @@ function MainPage() {
                 <strong>
                   {wallTimeMs == null
                     ? "-"
-                    : `${(wallTimeMs / 1000).toFixed(3)} / ${(selectedPolicy.timeoutMs / 1000).toFixed(0)}`}
+                    : `${(wallTimeMs / 1000).toFixed(3)} / ${(selectedPolicy.timeout_ms / 1000).toFixed(0)}`}
                   <small> sec</small>
                 </strong>
                 <div className="resource-progress">
@@ -914,7 +914,7 @@ function MainPage() {
                 <strong>
                   {memoryPeakMb == null
                     ? "-"
-                    : `${memoryPeakMb.toFixed(1)} / ${selectedPolicy.memoryLimitMb}`}
+                    : `${memoryPeakMb.toFixed(1)} / ${selectedPolicy.memory_limit_mb}`}
                   <small> MB</small>
                 </strong>
                 <div className="resource-progress">
@@ -932,7 +932,7 @@ function MainPage() {
                 <strong>
                   {pidsPeak == null
                     ? "-"
-                    : `${pidsPeak} / ${selectedPolicy.processLimit}`}
+                    : `${pidsPeak} / ${selectedPolicy.pids_limit}`}
                   <small> 개</small>
                 </strong>
                 <div className="resource-progress">
