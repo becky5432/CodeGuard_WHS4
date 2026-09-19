@@ -26,7 +26,7 @@ const DISPLAYED_EXECUTION_STAGES = [
   // },
 ];
 
-const ACTIVE_POLICY = {
+const DEFAULT_POLICY = {
   timeout_ms: 2000,
   memory_limit_mb: 128,
   pids_limit: 32,
@@ -403,7 +403,7 @@ function MainPage() {
 
   // 선택값 및 실행 상태 파생 데이터
   const isExecuting = executionState === "loading";
-  const selectedPolicy = ACTIVE_POLICY;
+  const selectedPolicy = DEFAULT_POLICY;
 
   const outputByTab = {
     stdout: executionResult?.stdout,
