@@ -27,10 +27,11 @@ const DISPLAYED_EXECUTION_STAGES = [
 ];
 
 const ACTIVE_POLICY = {
-  timeoutMs: 1000,
-  memoryLimitMb: 64,
-  processLimit: 32,
-  cpuLimit: 1.0,
+  timeout_ms: 2000,
+  memory_limit_mb: 128,
+  pids_limit: 32,
+  cpu_limit: 1.0,
+  output_limit_bytes: 1048576,
 };
 
 const POLLING_INTERVAL_MS = 1000;
@@ -65,6 +66,11 @@ const EXECUTION_RESULT_PRESENTATION = {
     state: "blocked",
     label: "프로세스 제한 초과",
     message: "프로세스 및 스레드 제한을 초과하여 실행이 중지되었습니다.",
+  },
+  OUTPUT_LIMIT: {
+    state: "blocked",
+    label: "출력 제한 초과",
+    message: "출력 제한을 초과하여 실행이 중지되었습니다.",
   },
 };
 
@@ -391,7 +397,6 @@ function MainPage() {
     "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
   );
   const [activeOutputTab, setActiveOutputTab] = useState("stdout");
-  const selectedPolicyProfile = "basic";
 
   // 실행 중복 요청 방지
   const executionLockRef = useRef(false);
@@ -417,6 +422,7 @@ function MainPage() {
   const isTimeLimitExceeded = executionResult?.reason_code === "TIME_LIMIT";
   const isMemoryLimitExceeded = executionResult?.reason_code === "MEMORY_LIMIT";
   const isPidsLimitExceeded = executionResult?.reason_code === "PIDS_LIMIT";
+  const isOutputLimitExceeded = executionResult?.reason_code === "OUTPUT_LIMIT";
 
   // 실제 Runner 응답 기반 자원 사용량
   const resourceUsage = executionResult?.resource_usage;
@@ -447,6 +453,8 @@ function MainPage() {
     cpuTimeMs != null && wallTimeMs != null
       ? calculateUsagePercentage(cpuTimeMs, wallTimeMs)
       : null;
+
+  const outputBytes = resourceUsage?.output_bytes;
 
   // 화면에 표시할 실행 단계
   const executionStages = DISPLAYED_EXECUTION_STAGES.map((stage) => {
@@ -524,7 +532,6 @@ function MainPage() {
       language,
       code,
       stdin: standardInput,
-      policy_profile: selectedPolicyProfile,
     };
 
     let errorPhase = "request";
@@ -562,7 +569,6 @@ function MainPage() {
     setExecutionResult(null);
     setRequestErrorCode(null);
     setMessage("코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.");
-    setActiveIoTab("stdin");
     setActiveOutputTab("stdout");
   };
 
