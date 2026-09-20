@@ -7,20 +7,31 @@ from uuid import UUID
 import docker
 
 from runner.config import settings
-from runner.exceptions import ContainerExecutionError
+from runner.exceptions import ContainerExecutionError, RunnerError
 from runner.metrics.cgroup_scope import CgroupMetrics, ExecutionCgroupScope
 from runner.metrics.resource_monitor import ResourceMonitor
 from runner.metrics.pids_monitor import PidsLimitMonitor
 from runner.pipeline.workspace import VolumeWorkspace
 from runner.policies import EXECUTION_OUTPUT_LIMIT_BYTES
+from runner.security import (
+    SECURITY_CAP_DROP,
+    SECURITY_GID,
+    SECURITY_NO_NEW_PRIVILEGES,
+    SECURITY_OPT,
+    SECURITY_PREFLIGHT_PATH,
+    SECURITY_UID,
+    parse_security_preflight,
+    security_environment,
+    verify_container_security_config,
+)
 
 
 logger = logging.getLogger("runner")
 
-EXECUTION_UID = 10001
-EXECUTION_GID = 10001
-EXECUTION_CAP_DROP = ("ALL",)
-EXECUTION_NO_NEW_PRIVILEGES = True
+EXECUTION_UID = SECURITY_UID
+EXECUTION_GID = SECURITY_GID
+EXECUTION_CAP_DROP = SECURITY_CAP_DROP
+EXECUTION_NO_NEW_PRIVILEGES = SECURITY_NO_NEW_PRIVILEGES
 
 
 @dataclass
@@ -99,9 +110,10 @@ def create_execution_container(
 ):
     """Job Volume을 연결한 실행 컨테이너를 생성하고 반환한다."""
 
-    command = ["/workspace/main"]
+    command = [SECURITY_PREFLIGHT_PATH, "/workspace/main"]
     if stdin:
         command = [
+            SECURITY_PREFLIGHT_PATH,
             "sh",
             "-c",
             "exec /workspace/main < /workspace/stdin",
@@ -124,9 +136,8 @@ def create_execution_container(
         "network_mode": "none",
         "user": f"{EXECUTION_UID}:{EXECUTION_GID}",
         "cap_drop": list(EXECUTION_CAP_DROP),
-        "security_opt": [
-            f"no-new-privileges={str(EXECUTION_NO_NEW_PRIVILEGES).lower()}"
-        ],
+        "security_opt": [SECURITY_OPT],
+        "environment": security_environment(),
       
         "mem_limit": memory_limit_bytes,
         "memswap_limit": memory_limit_bytes,
@@ -147,9 +158,22 @@ def create_execution_container(
         container_options["cgroup_parent"] = cgroup_scope.docker_parent
 
     try:
-        return client.containers.create(
+        container = client.containers.create(
             **container_options,
         )
+        try:
+            verify_container_security_config(
+                container,
+                stage="execute",
+                workspace_mode="ro",
+            )
+        except RunnerError:
+            try:
+                container.remove(force=True)
+            except docker.errors.DockerException:
+                pass
+            raise
+        return container
     except docker.errors.DockerException as exc:
         raise ContainerExecutionError(
             "실행 컨테이너 생성에 실패했습니다.",
@@ -398,6 +422,7 @@ def execute_program(
 
         if output_thread_stopped:
             stdout, stderr = output.decode()
+            stderr = parse_security_preflight(stderr, stage="execute")
         else:
             stdout, stderr = "", ""
         finished_at = wait_state.get("finished_at")

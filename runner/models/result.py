@@ -50,14 +50,6 @@ class ResourceUsage(BaseModel):
     output_bytes: int | None = None
 
 
-class SecurityContext(BaseModel):
-    non_root: bool
-    uid: int
-    gid: int
-    cap_drop: list[str]
-    no_new_privileges: bool
-
-
 class RunnerResponse(BaseModel):
     job_id: UUID
     run_id: UUID
@@ -69,6 +61,5 @@ class RunnerResponse(BaseModel):
     stderr: str = ""
     compile_log: str | None = None
     resource_usage: ResourceUsage | None = None
-    security_context: SecurityContext | None = None
     finished_at: datetime | None = None
     stage_summary: StageSummary = Field(default_factory=StageSummary)

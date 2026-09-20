@@ -19,7 +19,24 @@ class ExecutionTests(unittest.TestCase):
         self.container = MagicMock()
         self.client.containers.create.return_value = self.container
         self.container.wait.return_value = {"StatusCode": 0}
-        self.container.attach.return_value = [(b"Hello\n", None)]
+        self.security_marker = (
+            b"CODEGUARD_SECURITY_CHECK status=verified uid=10001 gid=10001 "
+            b"cap_inh=0000000000000000 cap_prm=0000000000000000 "
+            b"cap_eff=0000000000000000 cap_bnd=0000000000000000 "
+            b"cap_amb=0000000000000000 no_new_privileges=1\n"
+        )
+        self.container.attach.return_value = [
+            (b"Hello\n", self.security_marker)
+        ]
+        self.container.attrs = {
+            "Config": {"User": "10001:10001"},
+            "HostConfig": {
+                "CapDrop": ["ALL"],
+                "SecurityOpt": ["no-new-privileges=true"],
+            },
+            "Mounts": [{"Destination": "/workspace", "RW": False}],
+            "State": {"OOMKilled": False},
+        }
         self.workspace = VolumeWorkspace(
             job_id=uuid4(),
             volume_name="codeguard-job-test",
@@ -41,7 +58,10 @@ class ExecutionTests(unittest.TestCase):
         self.assertIs(result, self.container)
         self.client.containers.create.assert_called_once_with(
             image="codeguard-cpp:dev",
-            command=["/workspace/main"],
+            command=[
+                "/usr/local/bin/codeguard-security-preflight",
+                "/workspace/main",
+            ],
             volumes={
                 self.workspace.volume_name: {
                     "bind": "/workspace",
@@ -53,6 +73,10 @@ class ExecutionTests(unittest.TestCase):
             user="10001:10001",
             cap_drop=["ALL"],
             security_opt=["no-new-privileges=true"],
+            environment={
+                "CODEGUARD_EXPECTED_UID": "10001",
+                "CODEGUARD_EXPECTED_GID": "10001",
+            },
             mem_limit=128 * 1024 * 1024,
             memswap_limit=128 * 1024 * 1024,
             nano_cpus=1_000_000_000,
@@ -80,7 +104,12 @@ class ExecutionTests(unittest.TestCase):
         command = self.client.containers.create.call_args.kwargs["command"]
         self.assertEqual(
             command,
-            ["sh", "-c", "exec /workspace/main < /workspace/stdin"],
+            [
+                "/usr/local/bin/codeguard-security-preflight",
+                "sh",
+                "-c",
+                "exec /workspace/main < /workspace/stdin",
+            ],
         )
 
     def test_create_execution_container_uses_cgroup_parent(self) -> None:
