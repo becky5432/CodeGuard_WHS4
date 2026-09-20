@@ -9,11 +9,13 @@ from runner.config import Settings
 from runner.exceptions import (
     CleanupError,
     ContainerExecutionError,
+    RunnerError,
+    TaskTrackingError,
     SecurityVerificationError,
 )
 from runner.main import app
 from runner.models.job import PolicyLimits, RunnerLanguage, RunnerRequest
-from runner.models.result import RunnerReasonCode, RunnerStatus
+from runner.models.result import ResourceUsage, RunnerReasonCode, RunnerStatus
 from runner.pipeline.compiler import CompileResult
 from runner.pipeline.execution import ExecutionResult
 from runner.pipeline.workspace import VolumeWorkspace
@@ -84,6 +86,10 @@ class ExecuteApiTests(unittest.TestCase):
             "runner.pipeline.executor.settings.execution_cgroup_enabled",
             False,
         )
+        self.task_tracker_enabled_patcher = patch(
+            "runner.pipeline.executor.settings.task_tracker_enabled",
+            False,
+        )
 
         self.get_client_mock = self.get_client_patcher.start()
         self.create_workspace_mock = self.create_workspace_patcher.start()
@@ -100,6 +106,7 @@ class ExecuteApiTests(unittest.TestCase):
 
         self.execute_program_mock = self.execute_program_patcher.start()
         self.execution_cgroup_enabled_patcher.start()
+        self.task_tracker_enabled_patcher.start()
 
     def tearDown(self) -> None:
         patch.stopall()
@@ -166,6 +173,30 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertIn("execution_cgroup_root", Settings.model_fields)
         self.assertTrue(Settings().execution_cgroup_enabled)
 
+    def test_settings_include_task_tracker_configuration(self) -> None:
+        self.assertTrue(Settings().task_tracker_enabled)
+        self.assertEqual(
+            Settings().task_tracker_socket.as_posix(),
+            "/run/codeguard/task-tracker.sock",
+        )
+        self.assertEqual(Settings().task_tracker_timeout_seconds, 0.2)
+
+    def test_task_tracking_error_is_nonfatal_measurement_error(self) -> None:
+        self.assertFalse(issubclass(TaskTrackingError, RunnerError))
+
+    def test_resource_usage_separates_cgroup_and_user_task_peaks(self) -> None:
+        usage = ResourceUsage(
+            pids_peak=7,
+            user_task_peak=6,
+            process_at_user_task_peak=1,
+            thread_at_user_task_peak=5,
+        )
+
+        self.assertEqual(usage.pids_peak, 7)
+        self.assertEqual(usage.user_task_peak, 6)
+        self.assertEqual(usage.process_at_user_task_peak, 1)
+        self.assertEqual(usage.thread_at_user_task_peak, 5)
+
     def test_execute_compiles_cpp_with_job_volume(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
             success=True,
@@ -206,6 +237,9 @@ class ExecuteApiTests(unittest.TestCase):
                 "memory_peak_bytes": None,
                 "pids_peak": None,
                 "output_bytes": 6,
+                "user_task_peak": None,
+                "process_at_user_task_peak": None,
+                "thread_at_user_task_peak": None,
             },
         )
         self.assertEqual(
@@ -461,6 +495,9 @@ class ExecuteApiTests(unittest.TestCase):
                 "memory_peak_bytes": 200,
                 "pids_peak": 5,
                 "output_bytes": 11,
+                "user_task_peak": None,
+                "process_at_user_task_peak": None,
+                "thread_at_user_task_peak": None,
             },
         )
 
