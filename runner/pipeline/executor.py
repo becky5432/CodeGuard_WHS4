@@ -68,7 +68,10 @@ def _remove_container(container, stage: str, job_id, run_id) -> bool:
         return True
 
     try:
-        container.remove(force=True)
+        if stage == "execute":
+            container.remove(force=True, v=True)
+        else:
+            container.remove(force=True)
         return True
     except Exception as exc:
         logger.error(

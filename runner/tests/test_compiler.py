@@ -7,6 +7,7 @@ from uuid import uuid4
 import docker
 from requests.exceptions import ReadTimeout
 
+from runner.config import settings
 from runner.exceptions import ContainerExecutionError, WorkspaceError
 from runner.pipeline.compiler import (
     compile_source,
@@ -56,7 +57,7 @@ class CompilerTests(unittest.TestCase):
 
         self.assertIs(result, self.container)
         self.client.containers.create.assert_called_once_with(
-            image="codeguard-cpp:dev",
+            image=settings.cpp_image,
             command=[
                 "/usr/local/bin/codeguard-security-preflight",
                 "g++",

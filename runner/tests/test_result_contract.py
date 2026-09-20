@@ -34,6 +34,7 @@ class ResultContractTests(unittest.TestCase):
                 "MEMORY_LIMIT",
                 "PIDS_LIMIT",
                 "OUTPUT_LIMIT",
+                "FILESYSTEM_LIMIT",
                 "NETWORK_BLOCKED",
                 "COMPILE_ERROR",
                 "COMPILE_TIMEOUT",

@@ -56,6 +56,8 @@ def verify_container_security_config(
     *,
     stage: str,
     workspace_mode: str,
+    expected_user: str | None = None,
+    required_cap_add: tuple[str, ...] = (),
 ) -> None:
     """Validate Docker inspect configuration before container startup."""
 
@@ -70,7 +72,7 @@ def verify_container_security_config(
     attrs = container.attrs
     config = attrs.get("Config", {})
     host_config = attrs.get("HostConfig", {})
-    expected_user = f"{SECURITY_UID}:{SECURITY_GID}"
+    expected_user = expected_user or f"{SECURITY_UID}:{SECURITY_GID}"
 
     actual_user = config.get("User")
     if actual_user != expected_user:
@@ -79,6 +81,10 @@ def verify_container_security_config(
     actual_cap_drop = host_config.get("CapDrop") or []
     if "ALL" not in {str(value).upper() for value in actual_cap_drop}:
         _security_error(stage, "cap_drop", actual_cap_drop)
+
+    actual_cap_add = {str(value).upper() for value in host_config.get("CapAdd") or []}
+    if not {value.upper() for value in required_cap_add}.issubset(actual_cap_add):
+        _security_error(stage, "cap_add", sorted(actual_cap_add))
 
     actual_security_opt = host_config.get("SecurityOpt") or []
     if SECURITY_OPT not in actual_security_opt:
