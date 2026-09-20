@@ -120,8 +120,10 @@ def create_execution_container(
             }
         },
         "detach": True,
-      
-        "network_mode": "none",
+
+        # 기본 "none"(완전 차단). 설정으로 커스텀 네트워크 지정 시 그 네트워크의
+        # egress 규칙(iptables)이 적용된다.
+        "network_mode": settings.execution_network,
         "user": f"{EXECUTION_UID}:{EXECUTION_GID}",
         "cap_drop": list(EXECUTION_CAP_DROP),
         "security_opt": [
