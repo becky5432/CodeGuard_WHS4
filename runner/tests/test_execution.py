@@ -59,7 +59,6 @@ class ExecutionTests(unittest.TestCase):
             run_id=self.run_id,
             memory_limit_mb=128,
             cpu_bandwidth=1.0,
-            logical_cpu_count=1,
             pids_limit=10,
         )
 
@@ -84,7 +83,7 @@ class ExecutionTests(unittest.TestCase):
             mem_limit=128 * 1024 * 1024,
             memswap_limit=128 * 1024 * 1024,
             nano_cpus=1_000_000_000,
-            cpuset_cpus="0",
+            cpuset_cpus="0,1",
             pids_limit=10,
             labels={
                 "codeguard.managed": "true",
@@ -94,7 +93,7 @@ class ExecutionTests(unittest.TestCase):
             },
         )
 
-    def test_create_execution_container_applies_logical_cpu_count(self) -> None:
+    def test_create_execution_container_applies_internal_logical_cpu_limit(self) -> None:
         create_execution_container(
             client=self.client,
             workspace=self.workspace,
@@ -103,7 +102,6 @@ class ExecutionTests(unittest.TestCase):
             run_id=self.run_id,
             memory_limit_mb=128,
             cpu_bandwidth=1.0,
-            logical_cpu_count=2,
             pids_limit=10,
         )
 
@@ -112,23 +110,27 @@ class ExecutionTests(unittest.TestCase):
         ]
         self.assertEqual(cpuset_cpus, "0,1")
 
-    def test_create_execution_container_rejects_excessive_logical_cpu_count(
+    def test_create_execution_container_uses_available_cpus_below_internal_limit(
         self,
     ) -> None:
-        with self.assertRaises(ContainerExecutionError):
-            create_execution_container(
-                client=self.client,
-                workspace=self.workspace,
-                stdin="",
-                job_id=self.workspace.job_id,
-                run_id=self.run_id,
-                memory_limit_mb=128,
-                cpu_bandwidth=1.0,
-                logical_cpu_count=5,
-                pids_limit=10,
-            )
+        self.mock_sched_getaffinity.return_value = {0}
 
-        self.client.containers.create.assert_not_called()
+        create_execution_container(
+            client=self.client,
+            workspace=self.workspace,
+            stdin="",
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            memory_limit_mb=128,
+            cpu_bandwidth=1.0,
+            pids_limit=10,
+        )
+
+        cpuset_cpus = self.client.containers.create.call_args.kwargs[
+            "cpuset_cpus"
+        ]
+        self.assertEqual(cpuset_cpus, "0")
+
 
     def test_create_execution_container_uses_stdin_file(self) -> None:
         create_execution_container(
@@ -139,7 +141,6 @@ class ExecutionTests(unittest.TestCase):
             run_id=self.run_id,
             memory_limit_mb=128,
             cpu_bandwidth=1.0,
-            logical_cpu_count=1,
             pids_limit=10,
         )
 
@@ -161,7 +162,6 @@ class ExecutionTests(unittest.TestCase):
             run_id=self.run_id,
             memory_limit_mb=128,
             cpu_bandwidth=1.0,
-            logical_cpu_count=1,
             pids_limit=10,
             cgroup_scope=cgroup_scope,
         )
@@ -200,7 +200,6 @@ class ExecutionTests(unittest.TestCase):
                 run_id=self.run_id,
                 memory_limit_mb=128,
                 cpu_bandwidth=1.0,
-                logical_cpu_count=1,
                 pids_limit=10,
             )
 
