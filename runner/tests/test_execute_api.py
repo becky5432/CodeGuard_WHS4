@@ -122,6 +122,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "memory_limit_mb": 128,
                 "pids_limit": 10,
                 "cpu_bandwidth": 1.0,
+                "cpu_time_limit_ms": 2000,
             },
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -137,6 +138,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "pids_limit",
                 "cpu_bandwidth",
                 "output_limit_bytes",
+                "cpu_time_limit_ms",
             },
         )
 
@@ -146,6 +148,7 @@ class ExecuteApiTests(unittest.TestCase):
             set(RunnerReasonCode.__members__),
             {
                 "TIME_LIMIT",
+                "CPU_TIME_LIMIT",
                 "MEMORY_LIMIT",
                 "PIDS_LIMIT",
                 "OUTPUT_LIMIT",
