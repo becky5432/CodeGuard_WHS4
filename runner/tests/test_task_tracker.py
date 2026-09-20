@@ -129,7 +129,6 @@ class TaskTrackerClientTests(unittest.TestCase):
 
         for field in (
             "initial_task_count",
-            "container_task_peak",
             "user_task_current",
             "user_task_peak",
             "process_at_user_task_peak",
@@ -139,6 +138,21 @@ class TaskTrackerClientTests(unittest.TestCase):
             self.assertIn(field, header)
         self.assertEqual(REQUEST_STRUCT.size, 40)
         self.assertEqual(RESPONSE_STRUCT.size, 28)
+
+    def test_ebpf_metrics_only_track_user_task_lineage(self) -> None:
+        native_dir = (
+            Path(__file__).resolve().parents[1] / "native" / "task_tracker"
+        )
+        header = (native_dir / "task_tracker_shared.h").read_text(
+            encoding="utf-8"
+        )
+        source = (native_dir / "task_tracker.bpf.c").read_text(
+            encoding="utf-8"
+        )
+
+        for token in ("container_task_current", "container_task_peak"):
+            self.assertNotIn(token, header)
+            self.assertNotIn(token, source)
 
     def test_bpf_program_tracks_fork_exit_and_same_peak_snapshot(self) -> None:
         native_dir = (
@@ -164,6 +178,77 @@ class TaskTrackerClientTests(unittest.TestCase):
         self.assertIn("task_tracker.skel.h", makefile)
         self.assertIn("codeguard-task-tracker", makefile)
         self.assertIn("codeguard-init", makefile)
+
+    def test_bpf_derives_additional_threads_from_live_user_tasks(self) -> None:
+        native_dir = (
+            Path(__file__).resolve().parents[1] / "native" / "task_tracker"
+        )
+        source = (native_dir / "task_tracker.bpf.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "metrics->user_task_current - metrics->process_current",
+            source,
+        )
+        self.assertNotIn("metrics->thread_current += 1;", source)
+        self.assertNotIn("metrics->thread_current -= 1;", source)
+
+    def test_native_daemon_uses_interruptible_signal_handlers(self) -> None:
+        native_dir = (
+            Path(__file__).resolve().parents[1] / "native" / "task_tracker"
+        )
+        source = (native_dir / "task_trackerd.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("sigaction(SIGINT, &action, NULL)", source)
+        self.assertIn("sigaction(SIGTERM, &action, NULL)", source)
+        self.assertIn(".sa_flags = 0", source)
+        self.assertIn(
+            "pipe2(signal_pipe_fds, O_NONBLOCK | O_CLOEXEC)",
+            source,
+        )
+        self.assertIn("write(signal_pipe_fds[1]", source)
+        self.assertIn("poll(poll_fds, 2, -1)", source)
+        self.assertIn("poll(client_poll_fds, 2, -1)", source)
+        self.assertNotIn("signal(SIGINT, handle_signal)", source)
+        self.assertNotIn("signal(SIGTERM, handle_signal)", source)
+
+    def test_bpf_rejects_parent_task_from_another_run(self) -> None:
+        native_dir = (
+            Path(__file__).resolve().parents[1] / "native" / "task_tracker"
+        )
+        source = (native_dir / "task_tracker.bpf.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("static __always_inline bool same_run_id", source)
+        self.assertIn(
+            "same_run_id(&parent_value->run_id, &cgroup_value->run_id)",
+            source,
+        )
+        self.assertIn(
+            "same_run_id(&task_value->run_id, &cgroup_value->run_id)",
+            source,
+        )
+
+    def test_native_cleanup_propagates_map_errors(self) -> None:
+        native_dir = (
+            Path(__file__).resolve().parents[1] / "native" / "task_tracker"
+        )
+        source = (native_dir / "task_trackerd.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("static void remember_errno", source)
+        self.assertGreaterEqual(source.count("return first_error;"), 4)
+        for call in (
+            "result = remove_cgroups(",
+            "result = remove_tasks(",
+            "result = remove_processes(",
+        ):
+            self.assertIn(call, source)
 
     def test_bpf_process_reference_count_uses_verifier_safe_locking(self) -> None:
         native_dir = (

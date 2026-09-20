@@ -35,6 +35,21 @@ struct {
     __type(value, struct cg_run_metrics);
 } run_metrics SEC(".maps");
 
+static __always_inline bool same_run_id(
+    const struct cg_run_id *left,
+    const struct cg_run_id *right
+)
+{
+    int index;
+
+#pragma unroll
+    for (index = 0; index < 16; index++) {
+        if (left->bytes[index] != right->bytes[index])
+            return false;
+    }
+    return true;
+}
+
 static __always_inline void set_error(
     struct cg_run_metrics *metrics,
     __u32 error
@@ -52,14 +67,25 @@ static __always_inline void update_peaks_locked(
     struct cg_run_metrics *metrics
 )
 {
-    if (metrics->container_task_current > metrics->container_task_peak)
-        metrics->container_task_peak = metrics->container_task_current;
-
     if (metrics->user_task_current > metrics->user_task_peak) {
         metrics->user_task_peak = metrics->user_task_current;
         metrics->process_at_user_task_peak = metrics->process_current;
         metrics->thread_at_user_task_peak = metrics->thread_current;
     }
+}
+
+static __always_inline void update_thread_count_locked(
+    struct cg_run_metrics *metrics
+)
+{
+    if (metrics->user_task_current < metrics->process_current) {
+        metrics->thread_current = 0;
+        metrics->error_flags |= CG_ERR_COUNTER;
+        return;
+    }
+
+    metrics->thread_current =
+        metrics->user_task_current - metrics->process_current;
 }
 
 SEC("tp_btf/sched_process_fork")
@@ -83,7 +109,6 @@ int BPF_PROG(
     struct cg_process_value *process_value;
     bool user_child = false;
     bool new_process = false;
-    bool additional_thread = false;
     long result;
 
     cgroup_value = bpf_map_lookup_elem(&tracked_cgroups, &cgroup_key);
@@ -98,11 +123,11 @@ int BPF_PROG(
     child_key.tid = BPF_CORE_READ(child, pid);
     parent_value = bpf_map_lookup_elem(&tracked_tasks, &parent_key);
 
-    if (parent_value) {
+    if (parent_value &&
+        same_run_id(&parent_value->run_id, &cgroup_value->run_id)) {
         user_child = true;
         child_value.run_id = parent_value->run_id;
         child_value.tgid = BPF_CORE_READ(child, tgid);
-        additional_thread = child_key.tid != child_value.tgid;
 
         result = bpf_map_update_elem(
             &tracked_tasks,
@@ -152,13 +177,11 @@ int BPF_PROG(
     }
 
     bpf_spin_lock(&metrics->lock);
-    metrics->container_task_current += 1;
     if (user_child) {
         metrics->user_task_current += 1;
         if (new_process)
             metrics->process_current += 1;
-        if (additional_thread)
-            metrics->thread_current += 1;
+        update_thread_count_locked(metrics);
     }
     update_peaks_locked(metrics);
     bpf_spin_unlock(&metrics->lock);
@@ -179,7 +202,6 @@ int BPF_PROG(handle_sched_process_exit, struct task_struct *task)
     struct cg_process_key process_key = {};
     struct cg_process_value *process_value;
     bool tracked_user_task = false;
-    bool additional_thread = false;
     bool last_process_task = false;
     bool process_counter_error = false;
     __u32 previous_live_tasks = 0;
@@ -194,10 +216,10 @@ int BPF_PROG(handle_sched_process_exit, struct task_struct *task)
 
     task_key.tid = BPF_CORE_READ(task, pid);
     task_value = bpf_map_lookup_elem(&tracked_tasks, &task_key);
-    if (task_value) {
+    if (task_value &&
+        same_run_id(&task_value->run_id, &cgroup_value->run_id)) {
         tracked_user_task = true;
         task_copy = *task_value;
-        additional_thread = task_key.tid != task_copy.tgid;
         process_key.run_id = task_copy.run_id;
         process_key.tgid = task_copy.tgid;
         process_value = bpf_map_lookup_elem(&process_tasks, &process_key);
@@ -224,29 +246,18 @@ int BPF_PROG(handle_sched_process_exit, struct task_struct *task)
     bpf_spin_lock(&metrics->lock);
     if (process_counter_error)
         metrics->error_flags |= CG_ERR_COUNTER;
-    if (metrics->container_task_current > 0) {
-        metrics->container_task_current -= 1;
-    } else {
-        metrics->error_flags |= CG_ERR_COUNTER;
-    }
-
     if (tracked_user_task) {
         if (metrics->user_task_current > 0)
             metrics->user_task_current -= 1;
         else
             metrics->error_flags |= CG_ERR_COUNTER;
-        if (additional_thread) {
-            if (metrics->thread_current > 0)
-                metrics->thread_current -= 1;
-            else
-                metrics->error_flags |= CG_ERR_COUNTER;
-        }
         if (last_process_task) {
             if (metrics->process_current > 0)
                 metrics->process_current -= 1;
             else
                 metrics->error_flags |= CG_ERR_COUNTER;
         }
+        update_thread_count_locked(metrics);
     }
     bpf_spin_unlock(&metrics->lock);
     return 0;

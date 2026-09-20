@@ -1,7 +1,9 @@
 #define _GNU_SOURCE
 
 #include <errno.h>
+#include <fcntl.h>
 #include <grp.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -21,11 +23,34 @@
 #define DEFAULT_SOCKET_PATH "/run/codeguard/task-tracker.sock"
 
 static volatile sig_atomic_t stop_requested;
+static int signal_pipe_fds[2] = {-1, -1};
 
 static void handle_signal(int signal_number)
 {
+    int saved_errno = errno;
+    char notification = 1;
+
     (void)signal_number;
     stop_requested = 1;
+    if (signal_pipe_fds[1] >= 0)
+        (void)write(signal_pipe_fds[1], &notification, sizeof(notification));
+    errno = saved_errno;
+}
+
+static int install_signal_handlers(void)
+{
+    struct sigaction action = {
+        .sa_handler = handle_signal,
+        .sa_flags = 0,
+    };
+
+    if (sigemptyset(&action.sa_mask) < 0)
+        return -1;
+    if (sigaction(SIGINT, &action, NULL) < 0)
+        return -1;
+    if (sigaction(SIGTERM, &action, NULL) < 0)
+        return -1;
+    return 0;
 }
 
 static bool same_run_id(
@@ -34,6 +59,20 @@ static bool same_run_id(
 )
 {
     return memcmp(left->bytes, right->bytes, sizeof(left->bytes)) == 0;
+}
+
+static void remember_errno(int *first_error)
+{
+    int error_number = errno;
+
+    if (error_number != ENOENT && *first_error == 0)
+        *first_error = -error_number;
+}
+
+static void remember_result(int *first_error, int result)
+{
+    if (result < 0 && *first_error == 0)
+        *first_error = result;
 }
 
 static int register_cgroup(
@@ -47,15 +86,12 @@ static int register_cgroup(
     struct cg_cgroup_value cgroup_value = {
         .run_id = request->run_id,
     };
-    struct cg_run_metrics metrics = {
-        .container_task_current = request->initial_task_count,
-        .container_task_peak = request->initial_task_count,
-    };
+    struct cg_run_metrics metrics = {};
     int metrics_fd = bpf_map__fd(skel->maps.run_metrics);
     int cgroups_fd = bpf_map__fd(skel->maps.tracked_cgroups);
     int result;
 
-    if (request->cgroup_id == 0 || request->initial_task_count == 0)
+    if (request->cgroup_id == 0)
         return -EINVAL;
 
     result = bpf_map_update_elem(
@@ -184,58 +220,88 @@ static int remove_cgroups(
 {
     struct cg_cgroup_key key = {};
     struct cg_cgroup_key next = {};
-    bool present = bpf_map_get_next_key(map_fd, NULL, &key) == 0;
+    int first_error = 0;
 
-    while (present) {
+    if (bpf_map_get_next_key(map_fd, NULL, &key) < 0) {
+        remember_errno(&first_error);
+        return first_error;
+    }
+
+    for (;;) {
         struct cg_cgroup_value value = {};
-        bool has_next = bpf_map_get_next_key(map_fd, &key, &next) == 0;
+        int next_result = bpf_map_get_next_key(map_fd, &key, &next);
 
-        if (bpf_map_lookup_elem(map_fd, &key, &value) == 0 &&
-            same_run_id(&value.run_id, run_id))
-            bpf_map_delete_elem(map_fd, &key);
-        if (!has_next)
+        if (next_result < 0)
+            remember_errno(&first_error);
+
+        if (bpf_map_lookup_elem(map_fd, &key, &value) < 0) {
+            remember_errno(&first_error);
+        } else if (same_run_id(&value.run_id, run_id) &&
+                   bpf_map_delete_elem(map_fd, &key) < 0) {
+            remember_errno(&first_error);
+        }
+        if (next_result < 0)
             break;
         key = next;
     }
-    return 0;
+    return first_error;
 }
 
 static int remove_tasks(int map_fd, const struct cg_run_id *run_id)
 {
     struct cg_task_key key = {};
     struct cg_task_key next = {};
-    bool present = bpf_map_get_next_key(map_fd, NULL, &key) == 0;
+    int first_error = 0;
 
-    while (present) {
+    if (bpf_map_get_next_key(map_fd, NULL, &key) < 0) {
+        remember_errno(&first_error);
+        return first_error;
+    }
+
+    for (;;) {
         struct cg_task_value value = {};
-        bool has_next = bpf_map_get_next_key(map_fd, &key, &next) == 0;
+        int next_result = bpf_map_get_next_key(map_fd, &key, &next);
 
-        if (bpf_map_lookup_elem(map_fd, &key, &value) == 0 &&
-            same_run_id(&value.run_id, run_id))
-            bpf_map_delete_elem(map_fd, &key);
-        if (!has_next)
+        if (next_result < 0)
+            remember_errno(&first_error);
+
+        if (bpf_map_lookup_elem(map_fd, &key, &value) < 0) {
+            remember_errno(&first_error);
+        } else if (same_run_id(&value.run_id, run_id) &&
+                   bpf_map_delete_elem(map_fd, &key) < 0) {
+            remember_errno(&first_error);
+        }
+        if (next_result < 0)
             break;
         key = next;
     }
-    return 0;
+    return first_error;
 }
 
 static int remove_processes(int map_fd, const struct cg_run_id *run_id)
 {
     struct cg_process_key key = {};
     struct cg_process_key next = {};
-    bool present = bpf_map_get_next_key(map_fd, NULL, &key) == 0;
+    int first_error = 0;
 
-    while (present) {
-        bool has_next = bpf_map_get_next_key(map_fd, &key, &next) == 0;
+    if (bpf_map_get_next_key(map_fd, NULL, &key) < 0) {
+        remember_errno(&first_error);
+        return first_error;
+    }
 
-        if (same_run_id(&key.run_id, run_id))
-            bpf_map_delete_elem(map_fd, &key);
-        if (!has_next)
+    for (;;) {
+        int next_result = bpf_map_get_next_key(map_fd, &key, &next);
+
+        if (next_result < 0)
+            remember_errno(&first_error);
+        if (same_run_id(&key.run_id, run_id) &&
+            bpf_map_delete_elem(map_fd, &key) < 0)
+            remember_errno(&first_error);
+        if (next_result < 0)
             break;
         key = next;
     }
-    return 0;
+    return first_error;
 }
 
 static int remove_run(
@@ -243,11 +309,27 @@ static int remove_run(
     const struct cg_run_id *run_id
 )
 {
-    remove_cgroups(bpf_map__fd(skel->maps.tracked_cgroups), run_id);
-    remove_tasks(bpf_map__fd(skel->maps.tracked_tasks), run_id);
-    remove_processes(bpf_map__fd(skel->maps.process_tasks), run_id);
-    bpf_map_delete_elem(bpf_map__fd(skel->maps.run_metrics), run_id);
-    return 0;
+    int first_error = 0;
+    int result;
+
+    result = remove_cgroups(
+        bpf_map__fd(skel->maps.tracked_cgroups),
+        run_id
+    );
+    remember_result(&first_error, result);
+    result = remove_tasks(bpf_map__fd(skel->maps.tracked_tasks), run_id);
+    remember_result(&first_error, result);
+    result = remove_processes(
+        bpf_map__fd(skel->maps.process_tasks),
+        run_id
+    );
+    remember_result(&first_error, result);
+    if (bpf_map_delete_elem(
+            bpf_map__fd(skel->maps.run_metrics),
+            run_id
+        ) < 0)
+        remember_errno(&first_error);
+    return first_error;
 }
 
 static int dispatch(
@@ -319,12 +401,45 @@ static void serve_client(
     int client_fd
 )
 {
+    struct pollfd client_poll_fds[2] = {
+        {
+            .fd = client_fd,
+            .events = POLLIN,
+        },
+        {
+            .fd = signal_pipe_fds[0],
+            .events = POLLIN,
+        },
+    };
     struct cg_request request = {};
     struct cg_response response = {
         .magic = CG_TRACKER_MAGIC,
         .version = CG_TRACKER_VERSION,
     };
-    ssize_t received = recv(client_fd, &request, sizeof(request), 0);
+    ssize_t received;
+
+    for (;;) {
+        int poll_result = poll(client_poll_fds, 2, -1);
+
+        if (poll_result < 0) {
+            if (errno == EINTR) {
+                if (stop_requested)
+                    return;
+                continue;
+            }
+            perror("task tracker client poll");
+            return;
+        }
+        if ((client_poll_fds[1].revents & POLLIN) || stop_requested)
+            return;
+        if (client_poll_fds[0].revents & POLLIN)
+            break;
+        return;
+    }
+
+    received = recv(client_fd, &request, sizeof(request), 0);
+    if (stop_requested)
+        return;
 
     if (received != (ssize_t)sizeof(request))
         response.status = -EMSGSIZE;
@@ -339,6 +454,7 @@ int main(int argc, char **argv)
 {
     const char *socket_path = DEFAULT_SOCKET_PATH;
     struct task_tracker_bpf *skel = NULL;
+    struct pollfd poll_fds[2] = {};
     int server_fd = -1;
     int exit_code = EXIT_FAILURE;
 
@@ -349,8 +465,14 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    signal(SIGINT, handle_signal);
-    signal(SIGTERM, handle_signal);
+    if (pipe2(signal_pipe_fds, O_NONBLOCK | O_CLOEXEC) < 0) {
+        perror("task tracker signal pipe");
+        goto cleanup;
+    }
+    if (install_signal_handlers() < 0) {
+        perror("task tracker signal handler");
+        goto cleanup;
+    }
     skel = task_tracker_bpf__open_and_load();
     if (!skel) {
         fprintf(stderr, "failed to load task tracker BPF program\n");
@@ -367,8 +489,32 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
+    poll_fds[0].fd = server_fd;
+    poll_fds[0].events = POLLIN;
+    poll_fds[1].fd = signal_pipe_fds[0];
+    poll_fds[1].events = POLLIN;
+
     while (!stop_requested) {
-        int client_fd = accept4(server_fd, NULL, NULL, SOCK_CLOEXEC);
+        int poll_result = poll(poll_fds, 2, -1);
+        int client_fd;
+
+        if (poll_result < 0) {
+            if (errno == EINTR)
+                continue;
+            perror("task tracker poll");
+            goto cleanup;
+        }
+        if (poll_fds[1].revents & POLLIN)
+            break;
+        if (stop_requested)
+            break;
+        if (!(poll_fds[0].revents & POLLIN)) {
+            errno = EIO;
+            perror("task tracker socket event");
+            goto cleanup;
+        }
+
+        client_fd = accept4(server_fd, NULL, NULL, SOCK_CLOEXEC);
 
         if (client_fd < 0) {
             if (errno == EINTR)
@@ -384,6 +530,12 @@ int main(int argc, char **argv)
 cleanup:
     if (server_fd >= 0)
         close(server_fd);
+    if (signal_pipe_fds[0] >= 0)
+        close(signal_pipe_fds[0]);
+    signal_pipe_fds[0] = -1;
+    if (signal_pipe_fds[1] >= 0)
+        close(signal_pipe_fds[1]);
+    signal_pipe_fds[1] = -1;
     unlink(socket_path);
     task_tracker_bpf__destroy(skel);
     return exit_code;

@@ -4,8 +4,17 @@
 
 이 기능은 Linux cgroup v2와 BTF를 사용한다. Runner의 기존
 `pids.max`, `pids.peak`, `pids.events` 제한은 그대로 유지하며,
-`codeguard-task-tracker`는 cgroup 전체 Peak 시점의 사용자 프로세스 수와
-추가 스레드 수를 분석 지표로 제공한다.
+`codeguard-task-tracker`는 사용자 코드 계보의 Task를 별도로 추적한다.
+
+- `pids_peak`: Execution cgroup 전체 생명주기의 Task 최대값
+- `user_task_peak`: 사용자 코드 계보의 Task 최대값
+- `process_at_user_task_peak`, `thread_at_user_task_peak`:
+  `user_task_peak`가 발생한 동일 시점의 프로세스 수와 추가 스레드 수
+
+`pids_peak`와 `user_task_peak`는 측정 범위가 다르므로 최대값이 발생한
+시점도 서로 다를 수 있다. 자세한 측정 기준은
+[`runner/native/task_tracker/README.md`](runner/native/task_tracker/README.md)를
+참고한다.
 
 ### Ubuntu 의존성
 
@@ -72,4 +81,5 @@ python3 -m unittest \
 ```
 
 Tracker가 비활성화되거나 측정에 실패하면 실행 자체는 계속되며,
-`process_at_pids_peak`와 `thread_at_pids_peak`는 `null`로 반환된다.
+`user_task_peak`, `process_at_user_task_peak`,
+`thread_at_user_task_peak`는 `null`로 반환된다.

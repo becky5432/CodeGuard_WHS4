@@ -194,6 +194,40 @@ int main(void) {
 }
 """
 
+MAIN_THREAD_EXITS_THEN_SPAWNS_SOURCE = r"""
+#include <pthread.h>
+#include <unistd.h>
+
+static void *leaf(void *unused) {
+    (void)unused;
+    usleep(300000);
+    return 0;
+}
+
+static void *survivor(void *unused) {
+    (void)unused;
+    pthread_t first;
+    pthread_t second;
+
+    usleep(100000);
+    if (pthread_create(&first, 0, leaf, 0) != 0)
+        return (void *)1;
+    if (pthread_create(&second, 0, leaf, 0) != 0)
+        return (void *)2;
+
+    pthread_join(first, 0);
+    pthread_join(second, 0);
+    return 0;
+}
+
+int main(void) {
+    pthread_t worker;
+    if (pthread_create(&worker, 0, survivor, 0) != 0)
+        return 1;
+    pthread_exit(0);
+}
+"""
+
 TIMEOUT_SOURCE = r"""
 int main(void) {
     for (;;) { }
@@ -307,6 +341,16 @@ class TaskTrackerIntegrationTests(unittest.TestCase):
 
     def test_main_thread_exit_keeps_process_identity(self) -> None:
         self.assert_snapshot(self.execute(MAIN_THREAD_EXITS_SOURCE), 3, 1, 2)
+
+    def test_main_thread_exit_then_new_threads_keeps_snapshot_consistent(
+        self,
+    ) -> None:
+        self.assert_snapshot(
+            self.execute(MAIN_THREAD_EXITS_THEN_SPAWNS_SOURCE),
+            3,
+            1,
+            2,
+        )
 
     def test_timeout_cleanup_does_not_pollute_next_run(self) -> None:
         blocked = self.execute(TIMEOUT_SOURCE, timeout_ms=100)

@@ -58,8 +58,6 @@ struct cg_process_value {
 
 struct cg_run_metrics {
     struct bpf_spin_lock lock;
-    __u32 container_task_current;
-    __u32 container_task_peak;
     __u32 user_task_current;
     __u32 user_task_peak;
     __u32 process_current;
