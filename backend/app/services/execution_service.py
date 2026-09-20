@@ -46,7 +46,7 @@ class ExecutionService:
         if request.policy is not None:
             return request.policy
 
-        return PolicyLimits.model_validate(DEFAULT_POLICY)    
+        return PolicyLimits.model_validate(DEFAULT_POLICY)
 
     # 프론트의 실행 요청 접수
     def submit(
@@ -119,7 +119,7 @@ class ExecutionService:
                     status=ExecutionStatus.ERROR.value,
                     reason_code=ExecutionReasonCode.INTERNAL_ERROR.value,
                     error_message="Runner 서버로부터 실행 결과를 "
-                            "받지 못했습니다.", 
+                            "받지 못했습니다.",
                 )
 
                 return

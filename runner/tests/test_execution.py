@@ -36,6 +36,16 @@ class ExecutionTests(unittest.TestCase):
         self.client.containers.create.return_value = self.container
         self.container.wait.return_value = {"StatusCode": 0}
         self.container.attach.return_value = [(b"Hello\n", None)]
+        self.container.attrs = {
+            "Config": {"User": "0:0"},
+            "HostConfig": {
+                "CapDrop": ["ALL"],
+                "CapAdd": ["SYS_PTRACE", "SETUID", "SETGID"],
+                "SecurityOpt": ["no-new-privileges=true"],
+            },
+            "Mounts": [{"Destination": "/workspace", "RW": False}],
+            "State": {"OOMKilled": False},
+        }
         self.workspace = VolumeWorkspace(
             job_id=uuid4(),
             volume_name="codeguard-job-test",

@@ -23,12 +23,26 @@ class CompilerTests(unittest.TestCase):
         self.client.containers.create.return_value = self.container
         self.container.put_archive.return_value = True
         self.container.wait.return_value = {"StatusCode": 0}
-        self.container.logs.side_effect = [b"", b""]
+        self.security_marker = (
+            b"CODEGUARD_SECURITY_CHECK status=verified uid=10001 gid=10001 "
+            b"cap_inh=0000000000000000 cap_prm=0000000000000000 "
+            b"cap_eff=0000000000000000 cap_bnd=0000000000000000 "
+            b"cap_amb=0000000000000000 no_new_privileges=1\n"
+        )
+        self.container.logs.side_effect = [b"", self.security_marker]
         archive_stream = MagicMock()
         self.container.get_archive.return_value = (
             archive_stream,
             {"name": "main", "size": 1},
         )
+        self.container.attrs = {
+            "Config": {"User": "10001:10001"},
+            "HostConfig": {
+                "CapDrop": ["ALL"],
+                "SecurityOpt": ["no-new-privileges=true"],
+            },
+            "Mounts": [{"Destination": "/workspace", "RW": True}],
+        }
         self.workspace = VolumeWorkspace(
             job_id=uuid4(),
             volume_name="codeguard-job-test",
@@ -45,6 +59,7 @@ class CompilerTests(unittest.TestCase):
         self.client.containers.create.assert_called_once_with(
             image=settings.cpp_image,
             command=[
+                "/usr/local/bin/codeguard-security-preflight",
                 "g++",
                 "-std=c++17",
                 "-Wall",
@@ -62,6 +77,13 @@ class CompilerTests(unittest.TestCase):
             },
             detach=True,
             network_mode="none",
+            user="10001:10001",
+            cap_drop=["ALL"],
+            security_opt=["no-new-privileges=true"],
+            environment={
+                "CODEGUARD_EXPECTED_UID": "10001",
+                "CODEGUARD_EXPECTED_GID": "10001",
+            },
             labels={
                 "codeguard.managed": "true",
                 "codeguard.job_id": str(self.workspace.job_id),
@@ -77,9 +99,12 @@ class CompilerTests(unittest.TestCase):
         )
 
         command = self.client.containers.create.call_args.kwargs["command"]
-        self.assertEqual(command[0:2], ["gcc", "-std=c17"])
-        self.assertEqual(command[2:5], ["-Wall", "-Wextra", "-O0"])
-        self.assertEqual(command[5], "/workspace/main.c")
+        self.assertEqual(
+            command[0:3],
+            ["/usr/local/bin/codeguard-security-preflight", "gcc", "-std=c17"],
+        )
+        self.assertEqual(command[3:6], ["-Wall", "-Wextra", "-O0"])
+        self.assertEqual(command[6], "/workspace/main.c")
 
     def test_compile_source_uploads_and_runs_without_removing_container(self) -> None:
         result = compile_source(
@@ -122,7 +147,10 @@ class CompilerTests(unittest.TestCase):
 
     def test_compile_source_returns_compile_error(self) -> None:
         self.container.wait.return_value = {"StatusCode": 1}
-        self.container.logs.side_effect = [b"", b"syntax error"]
+        self.container.logs.side_effect = [
+            b"",
+            self.security_marker + b"syntax error",
+        ]
 
         result = compile_source(
             container=self.container,
