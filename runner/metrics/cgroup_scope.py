@@ -36,6 +36,7 @@ class CgroupMetrics:
     pids_peak: int | None = None
     oom_killed: bool = False
     pids_limit_exceeded: bool = False
+    cpu_time_usec: int | None = None
 
 
 @dataclass(frozen=True)
