@@ -7,6 +7,7 @@ import docker
 
 from runner.config import settings
 from runner.exceptions import CleanupError, WorkspaceError
+from runner.security import SECURITY_GID, SECURITY_UID
 
 
 SOURCE_FILENAMES = {
@@ -72,6 +73,8 @@ def build_source_archive(language: str, code: str, stdin: str = "") -> bytes:
         file_info = tarfile.TarInfo(name=filename)
         file_info.size = len(source_bytes)
         file_info.mode = 0o600
+        file_info.uid = SECURITY_UID
+        file_info.gid = SECURITY_GID
         archive.addfile(file_info, io.BytesIO(source_bytes))
 
         if stdin:
@@ -79,6 +82,8 @@ def build_source_archive(language: str, code: str, stdin: str = "") -> bytes:
             stdin_info = tarfile.TarInfo(name="stdin")
             stdin_info.size = len(stdin_bytes)
             stdin_info.mode = 0o444
+            stdin_info.uid = SECURITY_UID
+            stdin_info.gid = SECURITY_GID
             archive.addfile(stdin_info, io.BytesIO(stdin_bytes))
 
     return archive_buffer.getvalue()

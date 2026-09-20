@@ -4,7 +4,7 @@ import Header from "../components/Header";
 import Sidebar from "../components/Sidebar";
 
 function CommonLayout({ title, description }) {
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
 
   return (
     <div className="app">

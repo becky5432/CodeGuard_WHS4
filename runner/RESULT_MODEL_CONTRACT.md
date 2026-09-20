@@ -102,6 +102,10 @@ class RunnerResponse(BaseModel):
 
 Backend에서는 `stage_summary`와 `finished_at`이 필수다. 현재 Runner는 실행 도중 응답 객체를 만들기 때문에 `finished_at`은 내부적으로 `None`을 임시 허용하고, `/execute` 응답 반환 전에 반드시 현재 UTC 시각을 설정한다.
 
+### 3.6 Container 보안 검증
+
+Compile과 Execution Container의 UID/GID, Capability, NoNewPrivs 및 workspace mount mode는 Runner 내부에서 검증한다. 실제 보안 상세값은 Runner 로그에만 기록하며 `RunnerResponse`에는 포함하지 않는다. 검증 실패 시 compiler 또는 사용자 프로그램을 실행하지 않고 `ERROR` / `INTERNAL_ERROR`로 반환한다.
+
 ## 4. 단계별 판정 기준
 
 | 상황 | 대표 `status` | 대표 `reason_code` | `succeeded` | `failed` | `skipped` |
@@ -214,7 +218,7 @@ stage_summary.errors.setdefault(
 
 - Runner가 생성한 JSON을 Backend의 `RunnerResponse` 모델로 검증할 수 있어야 한다.
 - 모든 응답에 `stage_summary`와 `finished_at`이 포함되어야 한다.
-- 단일 `stage` 필드는 반환하지 않아야 한다.
+- 단일 `stage` 및 `security_context` 필드는 반환하지 않아야 한다.
 - 컴파일 실패 시 Execution 단계는 `skipped`에 기록되어야 한다.
 - Cleanup 실패가 기존 `status`, `stdout`, `stderr`, `exit_code`, `compile_log`를 덮어쓰지 않아야 한다.
 - 정책 제한 구현 전에도 `BLOCKED`와 정책 사유 코드가 스키마에 정의되어 있어야 한다.

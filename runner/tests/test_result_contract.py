@@ -34,6 +34,7 @@ class ResultContractTests(unittest.TestCase):
                 "MEMORY_LIMIT",
                 "PIDS_LIMIT",
                 "OUTPUT_LIMIT",
+                "FILESYSTEM_LIMIT",
                 "NETWORK_BLOCKED",
                 "COMPILE_ERROR",
                 "COMPILE_TIMEOUT",
@@ -93,6 +94,7 @@ class ResultContractTests(unittest.TestCase):
         payload = response.model_dump(mode="json")
 
         self.assertNotIn("stage", payload)
+        self.assertNotIn("security_context", payload)
         BackendRunnerResponse.model_validate(payload)
 
 

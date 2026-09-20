@@ -31,6 +31,7 @@ class RunnerReasonCode(str, Enum):
     MEMORY_LIMIT = "MEMORY_LIMIT"
     PIDS_LIMIT = "PIDS_LIMIT"        # 프로세스 + 스레드 수 제한
     OUTPUT_LIMIT = "OUTPUT_LIMIT"
+    FILESYSTEM_LIMIT = "FILESYSTEM_LIMIT"
     NETWORK_BLOCKED = "NETWORK_BLOCKED"
     COMPILE_ERROR = "COMPILE_ERROR"
     COMPILE_TIMEOUT = "COMPILE_TIMEOUT"
@@ -43,6 +44,7 @@ class ResourceUsage(BaseModel):
     cpu_time_ms: int | None = None        # CPU 사용 시간 (누적)
     memory_peak_bytes: int | None = None  # 최대 메모리 (bytes 단위 주의)
     pids_peak: int | None = None          # 최대 프로세스 및 스레드 수
+    output_bytes: int | None = None       # stdout·stderr 합산 출력 크기
 
 
 class StageError(BaseModel):

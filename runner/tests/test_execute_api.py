@@ -6,7 +6,11 @@ from uuid import UUID, uuid4
 from fastapi.testclient import TestClient
 
 from runner.config import Settings
-from runner.exceptions import CleanupError, ContainerExecutionError
+from runner.exceptions import (
+    CleanupError,
+    ContainerExecutionError,
+    SecurityVerificationError,
+)
 from runner.main import app
 from runner.models.job import PolicyLimits, RunnerLanguage, RunnerRequest
 from runner.models.result import RunnerReasonCode, RunnerStatus
@@ -28,7 +32,6 @@ class ExecuteApiTests(unittest.TestCase):
         "stderr",
         "compile_log",
         "resource_usage",
-        "security_context",
         "finished_at",
         "stage_summary",
     }
@@ -77,6 +80,11 @@ class ExecuteApiTests(unittest.TestCase):
             "runner.pipeline.executor.execute_program",
         )
 
+        self.execution_cgroup_enabled_patcher = patch(
+            "runner.pipeline.executor.settings.execution_cgroup_enabled",
+            False,
+        )
+
         self.get_client_mock = self.get_client_patcher.start()
         self.create_workspace_mock = self.create_workspace_patcher.start()
         self.remove_workspace_mock = self.remove_workspace_patcher.start()
@@ -91,6 +99,7 @@ class ExecuteApiTests(unittest.TestCase):
         )
 
         self.execute_program_mock = self.execute_program_patcher.start()
+        self.execution_cgroup_enabled_patcher.start()
 
     def tearDown(self) -> None:
         patch.stopall()
@@ -133,6 +142,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "MEMORY_LIMIT",
                 "PIDS_LIMIT",
                 "OUTPUT_LIMIT",
+                "FILESYSTEM_LIMIT",
                 "NETWORK_BLOCKED",
                 "COMPILE_ERROR",
                 "COMPILE_TIMEOUT",
@@ -154,6 +164,7 @@ class ExecuteApiTests(unittest.TestCase):
     def test_settings_include_execution_cgroup_configuration(self) -> None:
         self.assertIn("execution_cgroup_enabled", Settings.model_fields)
         self.assertIn("execution_cgroup_root", Settings.model_fields)
+        self.assertTrue(Settings().execution_cgroup_enabled)
 
     def test_execute_compiles_cpp_with_job_volume(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
@@ -195,16 +206,6 @@ class ExecuteApiTests(unittest.TestCase):
                 "memory_peak_bytes": None,
                 "pids_peak": None,
                 "output_bytes": 6,
-            },
-        )
-        self.assertEqual(
-            payload["security_context"],
-            {
-                "non_root": True,
-                "uid": 10001,
-                "gid": 10001,
-                "cap_drop": ["ALL"],
-                "no_new_privileges": True,
             },
         )
         self.assertEqual(
@@ -261,7 +262,7 @@ class ExecuteApiTests(unittest.TestCase):
         )
 
         self.execution_container.remove.assert_called_once_with(
-            force=True,
+            force=True, v=True,
         )
 
         self.compile_container.remove.assert_called_once_with(
@@ -302,6 +303,19 @@ class ExecuteApiTests(unittest.TestCase):
             stdin="",
         )
 
+    def test_execute_returns_filesystem_limit_and_backend_accepts_response(self) -> None:
+        from app.schemas.runner_schema import RunnerResponse as BackendRunnerResponse
+        self.compile_source_mock.return_value = CompileResult(success=True, stdout="", stderr="", exit_code=0, artifact_ready=True)
+        self.execute_program_mock.return_value = ExecutionResult(0, "user output", "", filesystem_limit_exceeded=True)
+        response = self.client.post("/execute", json=self.make_request_body())
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "BLOCKED")
+        self.assertEqual(payload["reason_code"], "FILESYSTEM_LIMIT")
+        self.assertEqual(payload["stdout"], "user output")
+        self.assertEqual(payload["stage_summary"]["failed"], ["EXECUTE"])
+        BackendRunnerResponse.model_validate(payload)
+
     def test_execute_returns_compile_error(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
             success=False,
@@ -322,7 +336,7 @@ class ExecuteApiTests(unittest.TestCase):
         )
         self.assertEqual(payload["stage_summary"]["failed"], ["COMPILE"])
         self.assertEqual(payload["stage_summary"]["skipped"], ["EXECUTE"])
-        self.assertIsNone(payload["security_context"])
+        self.assertNotIn("security_context", payload)
         self.assertEqual(
             payload["stage_summary"]["errors"]["COMPILE"][0],
             {
@@ -343,6 +357,57 @@ class ExecuteApiTests(unittest.TestCase):
         )
 
         self.execution_container.remove.assert_not_called()
+
+    def test_compile_security_failure_returns_internal_error(self) -> None:
+        self.create_compile_container_mock.side_effect = SecurityVerificationError(
+            "Compile Container 보안 설정 검증에 실패했습니다."
+        )
+
+        payload = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        ).json()
+
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
+        self.assertEqual(
+            payload["stage_summary"]["succeeded"],
+            ["WORKSPACE", "CLEANUP"],
+        )
+        self.assertEqual(payload["stage_summary"]["failed"], ["COMPILE"])
+        self.assertEqual(payload["stage_summary"]["skipped"], ["EXECUTE"])
+        self.assertNotIn("security_context", payload)
+        self.compile_source_mock.assert_not_called()
+        self.execute_program_mock.assert_not_called()
+
+    def test_execution_security_failure_returns_internal_error(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
+            success=True,
+            stdout="",
+            stderr="",
+            exit_code=0,
+            artifact_ready=True,
+        )
+        self.create_execution_container_mock.side_effect = (
+            SecurityVerificationError(
+                "Execution Container 보안 설정 검증에 실패했습니다."
+            )
+        )
+
+        payload = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        ).json()
+
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
+        self.assertEqual(
+            payload["stage_summary"]["succeeded"],
+            ["WORKSPACE", "COMPILE", "CLEANUP"],
+        )
+        self.assertEqual(payload["stage_summary"]["failed"], ["EXECUTE"])
+        self.assertNotIn("security_context", payload)
+        self.execute_program_mock.assert_not_called()
 
     def test_execute_returns_compile_timeout_and_skips_execution(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
