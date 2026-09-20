@@ -13,7 +13,10 @@ from runner.metrics.cgroup_scope import CgroupMetrics, ExecutionCgroupScope
 from runner.metrics.resource_monitor import ResourceMonitor
 from runner.metrics.pids_monitor import PidsLimitMonitor
 from runner.pipeline.workspace import VolumeWorkspace
-from runner.policies import EXECUTION_OUTPUT_LIMIT_BYTES
+from runner.policies import (
+    EXECUTION_LOGICAL_CPU_LIMIT,
+    EXECUTION_OUTPUT_LIMIT_BYTES,
+)
 from runner.security.filesystem_trace import (
     TRACE_DIRECTORY, TRACE_PATH, TRACE_SYSCALLS, RAW_WRITE_SYSCALLS,
     FilesystemViolation, collect_filesystem_trace,
@@ -94,19 +97,15 @@ def _stop_output_thread(frames, output_thread) -> bool:
         output_thread.join(timeout=1.0)
     return not output_thread.is_alive()
 
-def _resolve_cpuset(logical_cpu_count: int) -> str:
+def _resolve_cpuset() -> str:
     available_cpus = sorted(os.sched_getaffinity(0))
 
-    if logical_cpu_count > len(available_cpus):
+    if not available_cpus:
         raise ContainerExecutionError(
-            "요청한 논리 CPU 수가 사용 가능한 CPU 수보다 큽니다.",
-            details={
-                "requested": logical_cpu_count,
-                "available": len(available_cpus),
-            },
+            "Runner에서 사용 가능한 논리 CPU를 확인할 수 없습니다.",
         )
 
-    selected_cpus = available_cpus[:logical_cpu_count]
+    selected_cpus = available_cpus[:EXECUTION_LOGICAL_CPU_LIMIT]
     return ",".join(str(cpu) for cpu in selected_cpus)
 
 def create_execution_container(
@@ -117,7 +116,6 @@ def create_execution_container(
     run_id: UUID,
     memory_limit_mb: int,
     cpu_bandwidth: float,
-    logical_cpu_count: int,
     pids_limit: int,
     cgroup_scope: ExecutionCgroupScope | None = None,
 ):
@@ -137,7 +135,7 @@ def create_execution_container(
 
     memory_limit_bytes = memory_limit_mb * 1024 * 1024
     nano_cpus_limit = int(cpu_bandwidth * 1_000_000_000)
-    cpuset_cpus = _resolve_cpuset(logical_cpu_count)
+    cpuset_cpus = _resolve_cpuset()
 
     container_options = {
         "image": settings.cpp_image,
