@@ -7,12 +7,20 @@ from uuid import UUID
 import docker
 
 from runner.config import settings
-from runner.exceptions import ContainerExecutionError
+from runner.exceptions import ContainerExecutionError, RunnerError
 from runner.metrics.cgroup_scope import CgroupMetrics, ExecutionCgroupScope
 from runner.metrics.resource_monitor import ResourceMonitor
 from runner.metrics.pids_monitor import PidsLimitMonitor
 from runner.pipeline.workspace import VolumeWorkspace
 from runner.policies import EXECUTION_OUTPUT_LIMIT_BYTES
+from runner.security import (
+    SECURITY_CAP_DROP,
+    SECURITY_GID,
+    SECURITY_NO_NEW_PRIVILEGES,
+    SECURITY_OPT,
+    SECURITY_UID,
+    verify_container_security_config,
+)
 from runner.security.filesystem_trace import (
     TRACE_DIRECTORY, TRACE_PATH, TRACE_SYSCALLS, RAW_WRITE_SYSCALLS,
     FilesystemViolation, collect_filesystem_trace,
@@ -21,10 +29,10 @@ from runner.security.filesystem_trace import (
 
 logger = logging.getLogger("runner")
 
-EXECUTION_UID = 10001
-EXECUTION_GID = 10001
-EXECUTION_CAP_DROP = ("ALL",)
-EXECUTION_NO_NEW_PRIVILEGES = True
+EXECUTION_UID = SECURITY_UID
+EXECUTION_GID = SECURITY_GID
+EXECUTION_CAP_DROP = SECURITY_CAP_DROP
+EXECUTION_NO_NEW_PRIVILEGES = SECURITY_NO_NEW_PRIVILEGES
 TRACER_CAP_ADD = ("SYS_PTRACE", "SETUID", "SETGID")
 
 
@@ -139,9 +147,7 @@ def create_execution_container(
         "user": "0:0",
         "cap_drop": list(EXECUTION_CAP_DROP),
         "cap_add": list(TRACER_CAP_ADD),
-        "security_opt": [
-            f"no-new-privileges={str(EXECUTION_NO_NEW_PRIVILEGES).lower()}"
-        ],
+        "security_opt": [SECURITY_OPT],
         "mem_limit": memory_limit_bytes,
         "memswap_limit": memory_limit_bytes,
         "nano_cpus": nano_cpus_limit,
@@ -157,9 +163,24 @@ def create_execution_container(
         container_options["cgroup_parent"] = cgroup_scope.docker_parent
 
     try:
-        return client.containers.create(
+        container = client.containers.create(
             **container_options,
         )
+        try:
+            verify_container_security_config(
+                container,
+                stage="execute",
+                workspace_mode="ro",
+                expected_user="0:0",
+                required_cap_add=TRACER_CAP_ADD,
+            )
+        except RunnerError:
+            try:
+                container.remove(force=True, v=True)
+            except docker.errors.DockerException:
+                pass
+            raise
+        return container
     except docker.errors.DockerException as exc:
         raise ContainerExecutionError(
             "실행 컨테이너 생성에 실패했습니다.",

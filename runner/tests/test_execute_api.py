@@ -6,7 +6,11 @@ from uuid import UUID, uuid4
 from fastapi.testclient import TestClient
 
 from runner.config import Settings
-from runner.exceptions import CleanupError, ContainerExecutionError
+from runner.exceptions import (
+    CleanupError,
+    ContainerExecutionError,
+    SecurityVerificationError,
+)
 from runner.main import app
 from runner.models.job import PolicyLimits, RunnerLanguage, RunnerRequest
 from runner.models.result import RunnerReasonCode, RunnerStatus
@@ -28,7 +32,6 @@ class ExecuteApiTests(unittest.TestCase):
         "stderr",
         "compile_log",
         "resource_usage",
-        "security_context",
         "finished_at",
         "stage_summary",
     }
@@ -206,16 +209,6 @@ class ExecuteApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            payload["security_context"],
-            {
-                "non_root": True,
-                "uid": 10001,
-                "gid": 10001,
-                "cap_drop": ["ALL"],
-                "no_new_privileges": True,
-            },
-        )
-        self.assertEqual(
             payload["stage_summary"],
             {
                 "succeeded": ["WORKSPACE", "COMPILE", "EXECUTE", "CLEANUP"],
@@ -343,7 +336,7 @@ class ExecuteApiTests(unittest.TestCase):
         )
         self.assertEqual(payload["stage_summary"]["failed"], ["COMPILE"])
         self.assertEqual(payload["stage_summary"]["skipped"], ["EXECUTE"])
-        self.assertIsNone(payload["security_context"])
+        self.assertNotIn("security_context", payload)
         self.assertEqual(
             payload["stage_summary"]["errors"]["COMPILE"][0],
             {
@@ -364,6 +357,57 @@ class ExecuteApiTests(unittest.TestCase):
         )
 
         self.execution_container.remove.assert_not_called()
+
+    def test_compile_security_failure_returns_internal_error(self) -> None:
+        self.create_compile_container_mock.side_effect = SecurityVerificationError(
+            "Compile Container 보안 설정 검증에 실패했습니다."
+        )
+
+        payload = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        ).json()
+
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
+        self.assertEqual(
+            payload["stage_summary"]["succeeded"],
+            ["WORKSPACE", "CLEANUP"],
+        )
+        self.assertEqual(payload["stage_summary"]["failed"], ["COMPILE"])
+        self.assertEqual(payload["stage_summary"]["skipped"], ["EXECUTE"])
+        self.assertNotIn("security_context", payload)
+        self.compile_source_mock.assert_not_called()
+        self.execute_program_mock.assert_not_called()
+
+    def test_execution_security_failure_returns_internal_error(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
+            success=True,
+            stdout="",
+            stderr="",
+            exit_code=0,
+            artifact_ready=True,
+        )
+        self.create_execution_container_mock.side_effect = (
+            SecurityVerificationError(
+                "Execution Container 보안 설정 검증에 실패했습니다."
+            )
+        )
+
+        payload = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        ).json()
+
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
+        self.assertEqual(
+            payload["stage_summary"]["succeeded"],
+            ["WORKSPACE", "COMPILE", "CLEANUP"],
+        )
+        self.assertEqual(payload["stage_summary"]["failed"], ["EXECUTE"])
+        self.assertNotIn("security_context", payload)
+        self.execute_program_mock.assert_not_called()
 
     def test_execute_returns_compile_timeout_and_skips_execution(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
