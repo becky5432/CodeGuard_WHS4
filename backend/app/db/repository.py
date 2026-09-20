@@ -66,6 +66,18 @@ def update_status(db: Session, job_id: str, status: str) -> Execution | None:
     return execution
 
 
+def _truncate_bytes(value: str | None, limit: int) -> str:
+    """UTF-8 바이트 기준으로 절단한다.
+
+    문자 수가 아니라 바이트 수로 잘라, 러너의 출력 제한(바이트 기준)과
+    단위를 맞춘다. 멀티바이트 글자가 경계에서 잘려도 깨진 조각은 버린다.
+    """
+    encoded = (value or "").encode("utf-8")
+    if len(encoded) <= limit:
+        return value or ""
+    return encoded[:limit].decode("utf-8", errors="ignore")
+
+
 def save_result(
     db: Session,
     job_id: str,
@@ -101,9 +113,9 @@ def save_result(
     execution.reason_code = reason_code
     execution.error_message = error_message
     execution.exit_code = exit_code
-    execution.stdout = (stdout or "")[:limit]
-    execution.stderr = (stderr or "")[:limit]
-    execution.compile_log = (compile_log or "")[:limit]
+    execution.stdout = _truncate_bytes(stdout, limit)
+    execution.stderr = _truncate_bytes(stderr, limit)
+    execution.compile_log = _truncate_bytes(compile_log, limit)
     execution.stage_summary = stage_summary
     execution.finished_at = finished_at or datetime.now(timezone.utc)
 
