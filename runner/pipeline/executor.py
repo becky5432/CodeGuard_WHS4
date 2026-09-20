@@ -219,7 +219,6 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 "run_id": run_id,
                 "memory_limit_mb": job.policy.memory_limit_mb,
                 "cpu_bandwidth": job.policy.cpu_bandwidth,
-                "logical_cpu_count": job.policy.logical_cpu_count,
                 "pids_limit": job.policy.pids_limit,
             }
             if execution_cgroup_scope is not None:
