@@ -120,6 +120,7 @@ def create_execution_container(
             }
         },
         "detach": True,
+        "read_only": True,
       
         "network_mode": "none",
         "user": f"{EXECUTION_UID}:{EXECUTION_GID}",
