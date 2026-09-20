@@ -23,6 +23,7 @@ class RunnerReasonCode(str, Enum):
     MEMORY_LIMIT = "MEMORY_LIMIT"
     PIDS_LIMIT = "PIDS_LIMIT"
     OUTPUT_LIMIT = "OUTPUT_LIMIT"
+    FILESYSTEM_LIMIT = "FILESYSTEM_LIMIT"
     NETWORK_BLOCKED = "NETWORK_BLOCKED"
     COMPILE_ERROR = "COMPILE_ERROR"
     COMPILE_TIMEOUT = "COMPILE_TIMEOUT"
@@ -53,14 +54,6 @@ class ResourceUsage(BaseModel):
     thread_at_user_task_peak: int | None = None
 
 
-class SecurityContext(BaseModel):
-    non_root: bool
-    uid: int
-    gid: int
-    cap_drop: list[str]
-    no_new_privileges: bool
-
-
 class RunnerResponse(BaseModel):
     job_id: UUID
     run_id: UUID
@@ -72,6 +65,5 @@ class RunnerResponse(BaseModel):
     stderr: str = ""
     compile_log: str | None = None
     resource_usage: ResourceUsage | None = None
-    security_context: SecurityContext | None = None
     finished_at: datetime | None = None
     stage_summary: StageSummary = Field(default_factory=StageSummary)

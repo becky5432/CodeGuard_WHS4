@@ -83,14 +83,6 @@ class StageSummary(BaseModel):
 ### 3.5 RunnerResponse
 
 ```python
-class SecurityContext(BaseModel):
-    non_root: bool
-    uid: int
-    gid: int
-    cap_drop: list[str]
-    no_new_privileges: bool
-
-
 class RunnerResponse(BaseModel):
     job_id: UUID
     run_id: UUID
@@ -102,7 +94,6 @@ class RunnerResponse(BaseModel):
     stderr: str = ""
     compile_log: str | None = None
     resource_usage: ResourceUsage | None = None
-    security_context: SecurityContext | None = None
     stage_summary: StageSummary = Field(default_factory=StageSummary)
     finished_at: datetime | None = None
 ```
@@ -111,21 +102,9 @@ class RunnerResponse(BaseModel):
 
 Backend에서는 `stage_summary`와 `finished_at`이 필수다. 현재 Runner는 실행 도중 응답 객체를 만들기 때문에 `finished_at`은 내부적으로 `None`을 임시 허용하고, `/execute` 응답 반환 전에 반드시 현재 UTC 시각을 설정한다.
 
-### 3.6 SecurityContext
+### 3.6 Container 보안 검증
 
-`security_context`는 해당 실행의 Execution Container 생성 시 Runner가 사용한 권한 제한 설정값의 스냅샷이다.
-
-이 값은 컨테이너 내부에서 `getuid()`, `CapEff`, `NoNewPrivs` 등을 직접 읽어 생성한 실측값이 아니다. Runner가 Execution Container를 생성할 때 사용한 설정값을 `RunnerResponse`에 담아 반환하며, 권한 제한의 실제 동작 여부는 별도의 실행 검증을 통해 확인한다.
-
-| 필드 | 타입 | 설명 |
-| --- | --- | --- |
-| `non_root` | `boolean` | root가 아닌 사용자로 실행하도록 설정했는지 여부 |
-| `uid` | `integer` | Execution Container에 설정한 UID |
-| `gid` | `integer` | Execution Container에 설정한 GID |
-| `cap_drop` | `string[]` | 제거하도록 설정한 Linux Capability 목록 |
-| `no_new_privileges` | `boolean` | 추가 권한 획득 방지 설정 여부 |
-
-Execution Container가 실제로 생성된 실행에는 `security_context`를 반환한다. 컴파일 실패 등 EXECUTE 단계 이전에 실패하여 Execution Container가 생성되지 않은 경우에는 `security_context`가 `null`이다.
+Compile과 Execution Container의 UID/GID, Capability, NoNewPrivs 및 workspace mount mode는 Runner 내부에서 검증한다. 실제 보안 상세값은 Runner 로그에만 기록하며 `RunnerResponse`에는 포함하지 않는다. 검증 실패 시 compiler 또는 사용자 프로그램을 실행하지 않고 `ERROR` / `INTERNAL_ERROR`로 반환한다.
 
 ## 4. 단계별 판정 기준
 
@@ -239,7 +218,7 @@ stage_summary.errors.setdefault(
 
 - Runner가 생성한 JSON을 Backend의 `RunnerResponse` 모델로 검증할 수 있어야 한다.
 - 모든 응답에 `stage_summary`와 `finished_at`이 포함되어야 한다.
-- 단일 `stage` 필드는 반환하지 않아야 한다.
+- 단일 `stage` 및 `security_context` 필드는 반환하지 않아야 한다.
 - 컴파일 실패 시 Execution 단계는 `skipped`에 기록되어야 한다.
 - Cleanup 실패가 기존 `status`, `stdout`, `stderr`, `exit_code`, `compile_log`를 덮어쓰지 않아야 한다.
 - 정책 제한 구현 전에도 `BLOCKED`와 정책 사유 코드가 스키마에 정의되어 있어야 한다.
