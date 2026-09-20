@@ -74,7 +74,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=run_id,
             memory_limit_mb=memory_limit_mb,
-            cpu_limit=1.0,
+            cpu_bandwidth=1.0,
             pids_limit=pids_limit,
         )
         self.addCleanup(container.remove, force=True, v=True)
@@ -450,7 +450,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
                 'job_id': str(uuid4()), 'language': 'C',
                 'code': '#include <stdio.h>\nint main(void) { fopen("/workspace/api_violation", "w"); return 0; }',
                 'stdin': '', 'created_at': datetime.now(timezone.utc).isoformat(),
-                'policy': {'timeout_ms': 3000, 'memory_limit_mb': 128, 'pids_limit': 32, 'cpu_limit': 1.0},
+                'policy': {'timeout_ms': 3000, 'memory_limit_mb': 128, 'pids_limit': 32, 'cpu_bandwidth': 1.0, 'cpu_time_limit_ms': 2000,},
             })
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()
