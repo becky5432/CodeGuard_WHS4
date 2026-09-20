@@ -12,6 +12,7 @@ from app.schemas.runner_schema import (
     StageSummary,
 )
 
+
 # Runner 서버 연결 실패 및 timeout은
 # ExecutionService에서 ERROR/INTERNAL_ERROR로 처리        
 class HttpRunnerClient:
