@@ -15,7 +15,12 @@ from runner.exceptions import (
 )
 from runner.main import app
 from runner.models.job import PolicyLimits, RunnerLanguage, RunnerRequest
-from runner.models.result import ResourceUsage, RunnerReasonCode, RunnerStatus
+from runner.models.result import (
+    CpuUsageSample,
+    ResourceUsage,
+    RunnerReasonCode,
+    RunnerStatus,
+)
 from runner.pipeline.compiler import CompileResult
 from runner.pipeline.execution import ExecutionResult
 from runner.pipeline.workspace import VolumeWorkspace
@@ -494,6 +499,18 @@ class ExecuteApiTests(unittest.TestCase):
             memory_peak_bytes=200,
             pids_peak=5,
             cpu_time_ms=18,
+            cpu_usage_samples=[
+                CpuUsageSample(
+                    elapsed_ms=100,
+                    interval_ms=100,
+                    cpu_time_delta_ms=38,
+                ),
+                CpuUsageSample(
+                    elapsed_ms=199,
+                    interval_ms=99,
+                    cpu_time_delta_ms=72,
+                ),
+            ],
         )
 
         payload = self.client.post(
@@ -512,7 +529,18 @@ class ExecuteApiTests(unittest.TestCase):
                 "user_task_peak": None,
                 "process_at_user_task_peak": None,
                 "thread_at_user_task_peak": None,
-                "cpu_usage_samples": None,
+                "cpu_usage_samples": [
+                    {
+                        "elapsed_ms": 100,
+                        "interval_ms": 100,
+                        "cpu_time_delta_ms": 38,
+                    },
+                    {
+                        "elapsed_ms": 199,
+                        "interval_ms": 99,
+                        "cpu_time_delta_ms": 72,
+                    },
+                ],
             },
         )
 
