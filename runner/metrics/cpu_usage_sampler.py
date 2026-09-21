@@ -55,3 +55,33 @@ class CpuUsageSampler:
 
         self.previous_cpu_usec = current_cpu_usec
         self.previous_elapsed_ms = elapsed_ms
+
+    def sample_final(
+        self,
+        finished_at: float,
+        final_cpu_usec: int | None,
+    ) -> None:
+        if final_cpu_usec is None:
+            return
+
+        elapsed_ms = int((finished_at - self.start_time) * 1000)
+        interval_ms = elapsed_ms - self.previous_elapsed_ms
+
+        if interval_ms <= 0:
+            return
+
+        cpu_time_delta_ms = max(
+            final_cpu_usec - self.previous_cpu_usec,
+            0,
+        ) // 1000
+
+        self.samples.append(
+            CpuUsageSample(
+                elapsed_ms=elapsed_ms,
+                interval_ms=interval_ms,
+                cpu_time_delta_ms=cpu_time_delta_ms,
+            )
+        )
+
+        self.previous_cpu_usec = final_cpu_usec
+        self.previous_elapsed_ms = elapsed_ms
