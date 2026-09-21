@@ -577,6 +577,13 @@ def execute_program(
         finished_at = wait_state.get("finished_at")
         if not isinstance(finished_at, float):
             finished_at = time.monotonic()
+
+        if cpu_sampler is not None:
+            cpu_sampler.sample_final(
+                finished_at=finished_at,
+                final_cpu_usec=cgroup_metrics.cpu_time_usec,
+            )
+        
         filesystem_violation = FilesystemViolation()
         if system_error is None:
             try:
@@ -600,6 +607,11 @@ def execute_program(
             oom_killed=oom_killed,
             wall_time_ms=int((finished_at - start) * 1000),
             cpu_time_ms=cpu_time_ms,
+            cpu_usage_samples=(
+                cpu_sampler.samples
+                if cpu_sampler is not None
+                else None
+            ),
             memory_peak_bytes=memory_peak_bytes,
             pids_peak=pids_peak,
             user_task_peak=user_task_peak,
