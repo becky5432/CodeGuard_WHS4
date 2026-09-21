@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.schemas.execution_schema import PolicyLimits
+from app.schemas.execution_schema import CpuUsageSample, PolicyLimits
 # execution_schema.py에 있는 PolicyLimits를 그대로 전달
 
 
@@ -28,6 +28,7 @@ class RunnerStage(str, Enum):
     
 class RunnerReasonCode(str, Enum):
     TIME_LIMIT = "TIME_LIMIT"
+    CPU_TIME_LIMIT = "CPU_TIME_LIMIT"  # CPU 시간 제한
     MEMORY_LIMIT = "MEMORY_LIMIT"
     PIDS_LIMIT = "PIDS_LIMIT"        # 프로세스 + 스레드 수 제한
     OUTPUT_LIMIT = "OUTPUT_LIMIT"
@@ -46,6 +47,7 @@ class ResourceUsage(BaseModel):
     memory_peak_bytes: int | None = None  # 최대 메모리 (bytes 단위 주의)
     pids_peak: int | None = None          # 최대 프로세스 및 스레드 수
     output_bytes: int | None = None       # stdout·stderr 합산 출력 크기
+    cpu_usage_samples: list[CpuUsageSample] | None = None   # 실행 중 수집한 CPU 사용량 구간별 샘플
 
 
 class StageError(BaseModel):
