@@ -28,6 +28,7 @@ class RunnerReasonCode(str, Enum):
     COMPILE_ERROR = "COMPILE_ERROR"
     COMPILE_TIMEOUT = "COMPILE_TIMEOUT"
     RUNTIME_ERROR = "RUNTIME_ERROR"
+    SECURITY_VERIFICATION_FAILED = "SECURITY_VERIFICATION_FAILED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -49,14 +50,9 @@ class ResourceUsage(BaseModel):
     memory_peak_bytes: int | None = None
     pids_peak: int | None = None
     output_bytes: int | None = None
-
-
-class SecurityContext(BaseModel):
-    non_root: bool
-    uid: int
-    gid: int
-    cap_drop: list[str]
-    no_new_privileges: bool
+    user_task_peak: int | None = None
+    process_at_user_task_peak: int | None = None
+    thread_at_user_task_peak: int | None = None
 
 
 class RunnerResponse(BaseModel):
@@ -70,6 +66,5 @@ class RunnerResponse(BaseModel):
     stderr: str = ""
     compile_log: str | None = None
     resource_usage: ResourceUsage | None = None
-    security_context: SecurityContext | None = None
     finished_at: datetime | None = None
     stage_summary: StageSummary = Field(default_factory=StageSummary)

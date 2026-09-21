@@ -1,4 +1,12 @@
+FROM gcc:15.2.0 AS helper-build
+
+COPY runner/native/task_tracker/codeguard_init.c /tmp/codeguard_init.c
+RUN gcc -O2 -Wall -Wextra -Werror \
+    -o /tmp/codeguard-init /tmp/codeguard_init.c
+
 FROM gcc:15.2.0
+
+COPY --from=helper-build /tmp/codeguard-init /usr/local/bin/codeguard-init
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends strace \
@@ -10,3 +18,8 @@ RUN apt-get update \
     && chmod 700 /run/codeguard-trace
 
 WORKDIR /workspace
+
+RUN chown 10001:10001 /workspace
+
+COPY runner/container/cpp/security-preflight.sh /usr/local/bin/codeguard-security-preflight
+RUN chmod 0555 /usr/local/bin/codeguard-security-preflight

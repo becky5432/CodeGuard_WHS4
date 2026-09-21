@@ -40,6 +40,7 @@ class ResultContractTests(unittest.TestCase):
                 "COMPILE_TIMEOUT",
                 "RUNTIME_ERROR",
                 "INTERNAL_ERROR",
+                "SECURITY_VERIFICATION_FAILED",
             },
         )
 
@@ -94,6 +95,7 @@ class ResultContractTests(unittest.TestCase):
         payload = response.model_dump(mode="json")
 
         self.assertNotIn("stage", payload)
+        self.assertNotIn("security_context", payload)
         BackendRunnerResponse.model_validate(payload)
 
 
