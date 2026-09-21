@@ -40,6 +40,7 @@ class ResultContractTests(unittest.TestCase):
                 "COMPILE_TIMEOUT",
                 "RUNTIME_ERROR",
                 "INTERNAL_ERROR",
+                "SECURITY_VERIFICATION_FAILED",
             },
         )
 
