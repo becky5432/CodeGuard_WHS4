@@ -483,6 +483,7 @@ class ExecuteApiTests(unittest.TestCase):
             wall_time_ms=25,
             memory_peak_bytes=200,
             pids_peak=5,
+            cpu_time_ms=18,
         )
 
         payload = self.client.post(
@@ -494,7 +495,7 @@ class ExecuteApiTests(unittest.TestCase):
             payload["resource_usage"],
             {
                 "wall_time_ms": 25,
-                "cpu_time_ms": None,
+                "cpu_time_ms": 18,
                 "memory_peak_bytes": 200,
                 "pids_peak": 5,
                 "output_bytes": 11,
