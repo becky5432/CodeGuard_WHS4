@@ -21,6 +21,7 @@ from runner.metrics.task_tracker import (
     TaskTrackerClient,
     resolve_execution_cgroup,
 )
+from runner.models.result import CpuUsageSample
 from runner.pipeline.workspace import VolumeWorkspace
 from runner.policies import (
     EXECUTION_LOGICAL_CPU_LIMIT,
@@ -73,6 +74,7 @@ class ExecutionResult:
     filesystem_limit_exceeded: bool = False
     filesystem_violation_syscall: str | None = None
     filesystem_violation_path: str | None = None
+    cpu_usage_samples: list[CpuUsageSample] | None = None
 
 
 class _BoundedOutput:
