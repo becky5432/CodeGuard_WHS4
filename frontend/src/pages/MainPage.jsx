@@ -73,6 +73,11 @@ const EXECUTION_RESULT_PRESENTATION = {
     label: "출력 제한 초과",
     message: "출력 제한을 초과하여 실행이 중지되었습니다.",
   },
+  SECURITY_VERIFICATION_FAILED: {
+    state: "error",
+    label: "권한 제한 실패",
+    message: "권한 검증에 실패하여 코드 실행이 중지되었습니다.",
+  },
 };
 
 const wait = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
@@ -910,7 +915,7 @@ function MainPage() {
 
                   <article
                     className={`planned-feature-item ${
-                      isLimitTriggered("PERMISSION_LIMIT")
+                      isLimitTriggered("SECURITY_VERIFICATION_FAILED")
                         ? "limit-triggered"
                         : ""
                     }`}
