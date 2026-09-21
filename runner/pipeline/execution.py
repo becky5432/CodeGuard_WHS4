@@ -21,6 +21,7 @@ from runner.metrics.task_tracker import (
     TaskTrackerClient,
     resolve_execution_cgroup,
 )
+from runner.metrics.cpu_usage_sampler import CpuUsageSampler
 from runner.models.result import CpuUsageSample
 from runner.pipeline.workspace import VolumeWorkspace
 from runner.policies import (
@@ -270,6 +271,7 @@ def execute_program(
     root_registered = False
     task_metrics: PidsPeakSnapshot | None = None
     cpu_start_usec: int | None = None
+    cpu_sampler: CpuUsageSampler | None = None
 
     def wait_for_container() -> None:
         try:
@@ -345,6 +347,16 @@ def execute_program(
             container.kill(signal="SIGUSR1")
             start = time.monotonic()
 
+            if (
+                cgroup_scope is not None
+                and cpu_start_usec is not None
+            ):
+                cpu_sampler = CpuUsageSampler(
+                    cgroup_scope=cgroup_scope,
+                    start_cpu_usec=cpu_start_usec,
+                    start_time=start,
+                )
+
             pids_monitor.start()
 
             thread = threading.Thread(
@@ -375,7 +387,12 @@ def execute_program(
                     pids_limit_exceeded = True
                     break
 
-                remaining = timeout_seconds - (time.monotonic() - start)
+                now = time.monotonic()
+
+                if cpu_sampler is not None:
+                    cpu_sampler.sample_if_due(now)
+
+                remaining = timeout_seconds - (now - start)
                 if remaining <= 0:
                     timeout_reached = True
                     break
