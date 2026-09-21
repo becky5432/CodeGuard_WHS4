@@ -3,7 +3,11 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from runner.config import settings
-from runner.exceptions import RunnerError, WorkspaceError
+from runner.exceptions import (
+    RunnerError,
+    SecurityVerificationError,
+    WorkspaceError,
+)
 from runner.metrics.cgroup_scope import (
     ExecutionCgroupScope,
     validate_docker_cgroup_driver,
@@ -299,6 +303,11 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             if isinstance(exc, WorkspaceError)
             else current_stage
         )
+        failure_reason = (
+            RunnerReasonCode.SECURITY_VERIFICATION_FAILED
+            if isinstance(exc, SecurityVerificationError)
+            else RunnerReasonCode.INTERNAL_ERROR
+        )
 
         logger.error(
             "event=runner_internal_error "
@@ -313,7 +322,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
         _mark_failed(
             stage_summary,
             error_stage,
-            RunnerReasonCode.INTERNAL_ERROR,
+            failure_reason,
             exc.message,
         )
         if error_stage == RunnerStage.WORKSPACE:
@@ -325,7 +334,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             job_id=job.job_id,
             run_id=run_id,
             status=RunnerStatus.ERROR,
-            reason_code=RunnerReasonCode.INTERNAL_ERROR,
+            reason_code=failure_reason,
             error_message=exc.message,
             compile_log=compile_log,
         )

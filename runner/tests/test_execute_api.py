@@ -153,6 +153,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "NETWORK_BLOCKED",
                 "COMPILE_ERROR",
                 "COMPILE_TIMEOUT",
+                "SECURITY_VERIFICATION_FAILED",
                 "RUNTIME_ERROR",
                 "INTERNAL_ERROR",
             },
@@ -392,7 +393,7 @@ class ExecuteApiTests(unittest.TestCase):
 
         self.execution_container.remove.assert_not_called()
 
-    def test_compile_security_failure_returns_internal_error(self) -> None:
+    def test_compile_security_failure_returns_security_error(self) -> None:
         self.create_compile_container_mock.side_effect = SecurityVerificationError(
             "Compile Container 보안 설정 검증에 실패했습니다."
         )
@@ -403,10 +404,14 @@ class ExecuteApiTests(unittest.TestCase):
         ).json()
 
         self.assertEqual(payload["status"], "ERROR")
-        self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
+        self.assertEqual(payload["reason_code"], "SECURITY_VERIFICATION_FAILED")
         self.assertEqual(
             payload["stage_summary"]["succeeded"],
             ["WORKSPACE", "CLEANUP"],
+        )
+        self.assertEqual(
+            payload["stage_summary"]["errors"]["COMPILE"][0]["reason_code"],
+            "SECURITY_VERIFICATION_FAILED",
         )
         self.assertEqual(payload["stage_summary"]["failed"], ["COMPILE"])
         self.assertEqual(payload["stage_summary"]["skipped"], ["EXECUTE"])
@@ -414,7 +419,7 @@ class ExecuteApiTests(unittest.TestCase):
         self.compile_source_mock.assert_not_called()
         self.execute_program_mock.assert_not_called()
 
-    def test_execution_security_failure_returns_internal_error(self) -> None:
+    def test_execution_security_failure_returns_security_error(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
             success=True,
             stdout="",
@@ -434,10 +439,14 @@ class ExecuteApiTests(unittest.TestCase):
         ).json()
 
         self.assertEqual(payload["status"], "ERROR")
-        self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
+        self.assertEqual(payload["reason_code"], "SECURITY_VERIFICATION_FAILED")
         self.assertEqual(
             payload["stage_summary"]["succeeded"],
             ["WORKSPACE", "COMPILE", "CLEANUP"],
+        )
+        self.assertEqual(
+            payload["stage_summary"]["errors"]["EXECUTE"][0]["reason_code"],
+            "SECURITY_VERIFICATION_FAILED",
         )
         self.assertEqual(payload["stage_summary"]["failed"], ["EXECUTE"])
         self.assertNotIn("security_context", payload)

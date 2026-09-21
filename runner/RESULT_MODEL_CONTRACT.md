@@ -45,6 +45,7 @@ class RunnerReasonCode(str, Enum):
     COMPILE_ERROR = "COMPILE_ERROR"
     COMPILE_TIMEOUT = "COMPILE_TIMEOUT"
     RUNTIME_ERROR = "RUNTIME_ERROR"
+    SECURITY_VERIFICATION_FAILED = "SECURITY_VERIFICATION_FAILED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 ```
 
@@ -104,7 +105,9 @@ Backend에서는 `stage_summary`와 `finished_at`이 필수다. 현재 Runner는
 
 ### 3.6 Container 보안 검증
 
-Compile과 Execution Container의 UID/GID, Capability, NoNewPrivs 및 workspace mount mode는 Runner 내부에서 검증한다. 실제 보안 상세값은 Runner 로그에만 기록하며 `RunnerResponse`에는 포함하지 않는다. 검증 실패 시 compiler 또는 사용자 프로그램을 실행하지 않고 `ERROR` / `INTERNAL_ERROR`로 반환한다.
+Compile과 Execution Container의 UID/GID, Capability, NoNewPrivs 및 workspace mount mode는 Runner 내부에서 검증한다. Execution 단계에서는 `codeguard-init`이 실제 사용자 프로세스의 real/effective/saved/filesystem UID/GID와 허용된 supplementary groups, Capability, /proc 및 prctl 기반 NoNewPrivs와 root UID/GID 전환 거부를 검사한다. Runner는 보호된 증거를 확인한 뒤에만 사용자 프로그램 실행 신호를 보낸다.
+
+실제 보안 상세값은 Runner 로그에만 기록하며 `RunnerResponse`에는 포함하지 않는다. 설정 불일치, 런타임 검증 실패, 증거 누락 또는 파싱 실패는 사용자 프로그램을 실행하지 않고 `ERROR` / `SECURITY_VERIFICATION_FAILED`로 반환한다.
 
 ## 4. 단계별 판정 기준
 
@@ -113,6 +116,7 @@ Compile과 Execution Container의 UID/GID, Capability, NoNewPrivs 및 workspace 
 | 전체 성공 | `SUCCESS` | `null` | Workspace, Compile, Execute, Cleanup | 없음 | 없음 |
 | Workspace 실패 | `ERROR` | `INTERNAL_ERROR` | 없음 | Workspace | Compile, Execute |
 | 컴파일 실패 | `ERROR` | `COMPILE_ERROR` | Workspace | Compile | Execute |
+| 보안 검증 실패 | `ERROR` | `SECURITY_VERIFICATION_FAILED` | 이전 단계 | Compile 또는 Execute | 후속 단계 |
 | 실행 실패 | `ERROR` | `RUNTIME_ERROR` | Workspace, Compile | Execute | 없음 |
 | 정책 제한 | `BLOCKED` | 해당 제한 코드 | Workspace, Compile | Execute | 없음 |
 | 실행 성공 후 Cleanup 실패 | `SUCCESS` | `null` | Workspace, Compile, Execute | Cleanup | 없음 |
