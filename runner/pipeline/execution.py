@@ -320,7 +320,7 @@ def execute_program(
             # 사용자 코드 실행 직전 execution cgroup의 누적 CPU time을 저장한다.
             if cgroup_scope is not None:
                 try:
-                    cpu_start_usec = cgroup_scope.snapshot().cpu_time_usec
+                    cpu_start_usec = cgroup_scope.read_cpu_usage_usec()
                 except Exception as exc:
                     logger.warning(
                         "event=execution_cpu_baseline_error "

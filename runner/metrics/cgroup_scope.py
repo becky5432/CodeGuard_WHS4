@@ -107,6 +107,11 @@ class ExecutionCgroupScope:
             path=scope_path,
             docker_parent=f"/{relative_path}",
         )
+    
+    def read_cpu_usage_usec(self) -> int | None:
+        cpu_stat = self._read_key_values("cpu.stat")
+        return cpu_stat.get("usage_usec")
+
 
     def snapshot(self) -> CgroupMetrics:
         memory_events = self._read_events("memory.events")
