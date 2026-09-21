@@ -244,6 +244,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "user_task_peak": None,
                 "process_at_user_task_peak": None,
                 "thread_at_user_task_peak": None,
+                "cpu_usage_samples": None,
             },
         )
         self.assertEqual(
@@ -511,6 +512,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "user_task_peak": None,
                 "process_at_user_task_peak": None,
                 "thread_at_user_task_peak": None,
+                "cpu_usage_samples": None,
             },
         )
 
