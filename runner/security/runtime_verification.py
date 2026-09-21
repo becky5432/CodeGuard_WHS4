@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import docker
 
 from runner.exceptions import SecurityVerificationError
+from runner.security import SECURITY_GID, SECURITY_UID
 
 
 logger = logging.getLogger("runner")
@@ -179,10 +180,10 @@ def verify_runtime_permission_restrictions(container) -> None:
             time.sleep(0.01)
     checks = {
         "status": evidence.status == "verified",
-        "uid": all(value == 10001 for value in (
+        "uid": all(value == SECURITY_UID for value in (
             evidence.ruid, evidence.euid, evidence.suid, evidence.fsuid,
         )),
-        "gid": all(value == 10001 for value in (
+        "gid": all(value == SECURITY_GID for value in (
             evidence.rgid, evidence.egid, evidence.sgid, evidence.fsgid,
         )),
         "supplementary_groups": (
