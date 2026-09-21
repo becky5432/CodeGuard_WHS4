@@ -61,8 +61,17 @@ button {
 .editor-fullscreen-button {
   flex-shrink: 0;
 }
-
-.environment-limit-grid {
+.environment-limit-grids {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.environment-limit-grid-top {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+.environment-limit-grid-bottom {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
@@ -107,6 +116,27 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.environment-limit-card.limit-triggered,
+.planned-feature-item.limit-triggered {
+  background: #fff1f2;
+  border-color: #fda4af;
+}
+
+.limit-triggered .environment-limit-icon,
+.limit-triggered .planned-feature-icon {
+  color: #dc2626;
+  background: #fee2e2;
+}
+
+.limit-triggered small,
+.limit-triggered strong {
+  color: #b91c1c;
+}
+
+.limit-triggered .limit-status-badge {
+  color: #b91c1c;
+  background: #fee2e2;
+}
 
 .planned-feature-title {
   margin-top: 16px !important;
@@ -128,35 +158,28 @@ button {
   padding: 8px 6px;
   border: 1px dashed var(--gray-300);
   border-radius: 9px;
-  color: #9aa4b4;
-  background-color: #fafbfd;
   text-align: center;
 }
 
-.planned-feature-icon {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  color: #aeb7c5;
-}
-
-.planned-feature-icon .metric-icon {
-  width: 28px;
-  height: 28px;
-}
-
 .planned-feature-item strong {
-  color: #8994a5;
   font-size: 11px;
 }
 
 .planned-feature-item small {
   padding: 2px 7px;
   border-radius: 999px;
-  color: #9ba5b4;
-  background-color: #eef1f5;
-  font-size: 10px;
+  font-size: 11 px;
+}
+.limit-status-badge {
+  padding: 4px 12px;
+
+  color: #34895a;
+  background: #eaf7ef;
+  border-radius: 999px;
+
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .metric-icon {
@@ -535,7 +558,6 @@ button {
 .policy-limit-list div {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   min-height: 64px;
   padding: 16px 18px;
   border-bottom: 1px solid var(--gray-200);
@@ -574,27 +596,26 @@ button {
 
 .resource-card-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0;
+  grid-template-columns: 1fr 1fr 2fr 1fr 1fr;
+  gap: 10px;
   margin-top: 12px;
 }
 
 .resource-usage-card {
+  display: grid;
+  grid-template-rows: auto auto 7px auto;
+  align-content: start;
+  gap: 6px;
+
+  box-sizing: border-box;
   min-width: 0;
-  padding: 4px 14px;
-  border: 0;
-  border-right: 1px solid var(--gray-200);
-  border-radius: 0;
+  width: 100%;
+  height: 112px;
+  padding: 10px;
+
   background-color: var(--white);
-}
-
-.resource-usage-card:first-child {
-  padding-left: 0;
-}
-
-.resource-usage-card:last-child {
-  padding-right: 0;
-  border-right: 0;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
 }
 
 .resource-progress {
@@ -625,6 +646,74 @@ button {
 
 .resource-limit-exceeded .resource-progress span {
   background-color: #e04435;
+}
+
+.resource-pids-detail .resource-progress {
+  height: 6px;
+}
+.resource-pids-total span {
+  background-color: #54ad5f;
+}
+
+.resource-process-detail span {
+  background-color: var(--blue-600);
+}
+
+.resource-thread-detail span {
+  background-color: #8b5fd3;
+}
+
+.resource-cpu .resource-progress span {
+  background-color: #d7a63d;
+}
+
+.resource-output .resource-progress span {
+  background-color: #df7440;
+}
+
+.resource-limit-exceeded .resource-progress span {
+  background-color: #e04435;
+}
+
+.resource-cpu .resource-progress span {
+  background-color: #d7a63d;
+}
+
+.resource-pids-total {
+  height: 6px;
+  margin: 0;
+}
+
+.resource-pids-detail {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 6px;
+
+  height: 15px;
+  margin: 0;
+  line-height: 1;
+
+  transform: translateY(10px);
+}
+.resource-pids-detail + .resource-pids-detail {
+  margin-top: -6px;
+}
+
+.resource-pids-detail small,
+.resource-pids-detail em {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.resource-pids-detail em {
+  text-align: right;
+}
+
+.resource-pids-detail .resource-progress {
+  height: 5px;
+  margin: 0;
 }
 
 /* 코드 편집기 전체 화면 */
@@ -1141,13 +1230,19 @@ button {
     min-height: auto;
   }
 
-  .environment-limit-grid {
+  .environment-limit-grid-top {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  .environment-limit-grid-bottom {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 900px) {
-  .environment-limit-grid {
+  .environment-limit-grid-top {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .environment-limit-grid-bottom {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -1361,12 +1456,6 @@ button {
   font-size: 14px;
 }
 
-.environment-limit-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-}
-
 .environment-limit-card {
   display: flex;
   align-items: center;
@@ -1405,8 +1494,36 @@ button {
 }
 
 .metric-cpu {
-  color: #2f9d58;
-  background: #eaf8ee;
+  color: #d97706;
+  background: #fff4df;
+}
+
+.metric-cputime {
+  color: #db2777;
+  background: #fdf2f8;
+}
+
+.planned-file-icon {
+  color: #4f7fe8;
+  background: #eef4ff;
+}
+
+/* 네트워크: 초록 */
+.planned-network-icon {
+  color: #3f9b62;
+  background: #edf8f1;
+}
+
+/* 권한: 보라 */
+.planned-permission-icon {
+  color: #7659d9;
+  background: #f2efff;
+}
+
+/* 출력: 주황 */
+.planned-output-icon {
+  color: #d97732;
+  background: #fff4e8;
 }
 
 .environment-limit-card > span:last-child {
@@ -1440,12 +1557,6 @@ button {
 .planned-feature-item {
   min-height: 90px;
   padding: 10px 6px;
-}
-
-.planned-feature-icon,
-.planned-feature-icon .metric-icon {
-  width: 30px;
-  height: 30px;
 }
 
 .result-section .workspace-panel-header,
@@ -1608,12 +1719,6 @@ button {
   }
 }
 
-@media (max-width: 900px) {
-  .environment-limit-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 @media (max-width: 720px) {
   .main-content {
     padding: 16px;
@@ -1624,7 +1729,8 @@ button {
     flex-direction: column;
   }
 
-  .environment-limit-grid,
+  .environment-limit-grid-top,
+  .environment-limit-grid-bottom,
   .execution-result-meta {
     grid-template-columns: 1fr;
   }
@@ -1648,11 +1754,6 @@ button {
 .environment-limit-icon .metric-icon {
   width: 30px;
   height: 30px;
-}
-
-.environment-limit-icon.metric-cpu {
-  color: #d97706;
-  background: #fff4df;
 }
 
 .editor-action-buttons {
@@ -1753,24 +1854,6 @@ button {
   margin: 0 -20px 0;
   padding: 0 20px;
   border-bottom: 1px solid var(--gray-200);
-}
-
-.resource-usage-card {
-  display: flex;
-  min-height: 78px;
-  flex-direction: column;
-  justify-content: flex-start;
-  min-width: 0;
-  padding: 0 14px;
-  border-right: 0;
-}
-
-.resource-usage-card:first-child {
-  padding-left: 0;
-}
-
-.resource-usage-card:last-child {
-  padding-right: 0;
 }
 
 .resource-usage-card > span {
@@ -1935,4 +2018,390 @@ body,
     padding: 0;
     border-right: 0;
   }
+}
+
+.resource-usage-card > span,
+.resource-pids-heading > div > span {
+  display: block;
+  margin: 0;
+
+  color: var(--gray-600);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.resource-process {
+  grid-template-rows: 41px 7px 15px 15px;
+  align-content: start;
+  gap: 3px;
+}
+
+.resource-pids-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 0;
+}
+
+.resource-pids-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.resource-pids-heading strong {
+  display: block;
+  margin: 0;
+
+  font-size: 16px;
+  line-height: 20px;
+}
+
+.resource-pids-heading > em {
+  align-self: flex-end;
+  margin: 0 0 2px;
+
+  color: var(--gray-500);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 15px;
+}
+
+.resource-pids-total {
+  width: 100%;
+  height: 7px;
+  margin: 0;
+}
+
+.resource-pids-detail {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 6px;
+
+  height: 15px;
+  margin: 0;
+}
+
+.resource-pids-detail > span,
+.resource-pids-detail > em {
+  display: block;
+  margin: 0;
+
+  color: var(--gray-500);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 15px;
+}
+
+.resource-pids-detail > em {
+  text-align: right;
+}
+
+.resource-pids-detail .resource-progress {
+  height: 5px;
+  margin: 0;
+}
+.resource-card-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 2fr 1fr 1fr;
+  align-items: stretch;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.resource-usage-card > span {
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.resource-usage-card > strong {
+  display: block;
+  margin: 0;
+
+  color: #0f172a;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.resource-usage-card > em {
+  min-height: 13px;
+  margin: 0;
+
+  color: #94a3b8;
+  font-size: 11px;
+  font-style: normal;
+  text-align: right;
+}
+
+.resource-progress {
+  height: 7px;
+  margin: 0;
+}
+.resource-usage-card {
+  display: grid;
+  grid-template-rows: 20px 24px 7px 14px;
+  align-content: start;
+  gap: 7px;
+
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  padding: 10px;
+
+  background-color: var(--white);
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+}
+
+/* 모든 카드 제목 */
+.resource-card-grid .resource-usage-card > span,
+.resource-pids-heading > div > span {
+  display: block;
+  margin: 0;
+
+  color: var(--gray-600);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+/* 모든 카드 주요 측정값 */
+.resource-card-grid .resource-usage-card > strong,
+.resource-pids-heading strong {
+  display: block;
+  margin: 0;
+
+  color: var(--gray-900);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 24px;
+}
+
+.resource-usage-card strong small {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.resource-progress {
+  width: 100%;
+  height: 7px;
+  margin: 0;
+  overflow: hidden;
+
+  background-color: var(--gray-200);
+  border-radius: 999px;
+}
+
+.resource-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.25s ease;
+}
+
+.resource-usage-card > em {
+  margin: 0;
+
+  color: var(--gray-500);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 14px;
+  text-align: right;
+}
+.resource-process {
+  display: grid;
+  grid-template-rows: 51px 7px 18px 18px;
+  align-content: start;
+  gap: 6px;
+}
+
+.resource-pids-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 0;
+}
+
+.resource-pids-heading > div {
+  display: grid;
+  grid-template-rows: 20px 24px;
+  gap: 7px;
+}
+
+.resource-pids-heading > em {
+  align-self: end;
+  margin: 0;
+
+  color: var(--gray-500);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 14px;
+}
+
+.resource-pids-total {
+  width: 100%;
+  height: 7px;
+  margin: 0;
+}
+
+.resource-pids-detail {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 8px;
+
+  height: 18px;
+  margin: 0;
+}
+
+.resource-pids-detail > span,
+.resource-pids-detail > em {
+  display: block;
+  margin: 0;
+
+  color: var(--gray-500);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 18px;
+}
+
+.resource-pids-detail > em {
+  text-align: right;
+}
+
+.resource-pids-detail .resource-progress {
+  height: 6px;
+  margin: 0;
+}
+
+/* 적용 중인 제한 - 긴 텍스트 말줄임표 */
+.environment-limit-card > div {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.environment-limit-card small,
+.environment-limit-card strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 아래쪽 고정 제한도 확대 시 넘치지 않도록 */
+.planned-feature-item strong,
+.planned-feature-item .limit-status-badge {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 상태 / 종료 코드 / 종료 사유 말줄임표 */
+.execution-result-meta > div > strong {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.execution-result-meta .execution-status-badge {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.io-result-output-empty {
+  color: var(--gray-500);
+  font-size: 13px;
+}
+/* 고정 통제 항목 색상 - 자원 제한과 구분 */
+.planned-file-icon {
+  color: #0891b2;
+  background: #ecfeff;
+}
+
+.planned-network-icon {
+  color: #0f766e;
+  background: #f0fdfa;
+}
+
+.planned-permission-icon {
+  color: #475569;
+  background: #f1f5f9;
+}
+
+.planned-output-icon {
+  color: #b45309;
+  background: #fffbeb;
+}
+.resource-usage-card .resource-progress {
+  margin: 0;
+}
+.resource-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.resource-progress-row > em {
+  flex: 0 0 auto;
+  min-width: 30px;
+  margin: 0;
+  color: var(--gray-600);
+  font-size: 14px;
+  font-weight: 600;
+  font-style: normal;
+  line-height: 1;
+  text-align: right;
+  white-space: nowrap;
+}
+.resource-pids-detail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 18px;
+  margin: 0;
+}
+
+.resource-pids-detail > span {
+  flex: 0 0 64px;
+}
+
+.resource-pids-detail .resource-progress {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.resource-pids-detail > em {
+  flex: 0 0 auto;
+  min-width: 40px;
+  margin: 0;
+  text-align: right;
+}
+.execution-result-meta > div:last-child > strong:not(.execution-status-badge) {
+  display: block;
+  min-width: 0;
+  width: 100%;
+  height: 28px;
+  line-height: 28px;
+
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  text-align: left;
 }

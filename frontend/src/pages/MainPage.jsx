@@ -30,8 +30,9 @@ const DEFAULT_POLICY = {
   timeout_ms: 2000,
   memory_limit_mb: 128,
   pids_limit: 32,
-  cpu_limit: 1.0,
+  cpu_bandwidth: 1.0,
   output_limit_bytes: 1048576,
+  cpu_time_limit_ms: 2000, //값 변경 필요
 };
 
 const POLLING_INTERVAL_MS = 1000;
@@ -102,6 +103,12 @@ function MetricIcon({ type }) {
         <rect x="6" y="6" width="12" height="12" rx="1.5" />
         <rect x="9.5" y="9.5" width="5" height="5" rx="0.5" />
         <path d="M9 3v3M12 3v3M15 3v3M9 18v3M12 18v3M15 18v3M3 9h3M3 12h3M3 15h3M18 9h3M18 12h3M18 15h3" />
+      </>
+    ),
+    cputime: (
+      <>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7v5l3.8 2.3" />
       </>
     ),
     file: (
@@ -397,6 +404,8 @@ function MainPage() {
     "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
   );
   const [activeOutputTab, setActiveOutputTab] = useState("stdout");
+  const processPeak = null;
+  const threadPeak = null;
 
   // 실행 중복 요청 방지
   const executionLockRef = useRef(false);
@@ -418,11 +427,16 @@ function MainPage() {
   const executionReasonCode =
     executionResult?.reason_code ?? requestErrorCode ?? "-";
   const executionExitCode = executionResult?.exit_code ?? "-";
+  const terminationReason = executionResult?.reason_code;
 
+  const isLimitTriggered = (...reasonCodes) =>
+    reasonCodes.includes(terminationReason);
   const isTimeLimitExceeded = executionResult?.reason_code === "TIME_LIMIT";
   const isMemoryLimitExceeded = executionResult?.reason_code === "MEMORY_LIMIT";
   const isPidsLimitExceeded = executionResult?.reason_code === "PIDS_LIMIT";
   const isOutputLimitExceeded = executionResult?.reason_code === "OUTPUT_LIMIT";
+  const isCpuTimeLimitExceeded =
+    executionResult?.reason_code === "CPUTIME_LIMIT";
 
   // 실제 Runner 응답 기반 자원 사용량
   const resourceUsage = executionResult?.resource_usage;
@@ -453,8 +467,38 @@ function MainPage() {
     cpuTimeMs != null && wallTimeMs != null
       ? calculateUsagePercentage(cpuTimeMs, wallTimeMs)
       : null;
+  const cpuTimePercentage =
+    cpuTimeMs == null
+      ? 0
+      : Math.min(
+          Math.round((cpuTimeMs / selectedPolicy.cpu_time_limit_ms) * 100),
+          100,
+        );
 
   const outputBytes = resourceUsage?.output_bytes;
+  const outputPercentage =
+    outputBytes == null
+      ? 0
+      : Math.min(
+          Math.round((outputBytes / selectedPolicy.output_limit_bytes) * 100),
+          100,
+        );
+
+  const processPercentage =
+    processPeak == null
+      ? 0
+      : Math.min(
+          Math.round((processPeak / selectedPolicy.pids_limit) * 100),
+          100,
+        );
+
+  const threadPercentage =
+    threadPeak == null
+      ? 0
+      : Math.min(
+          Math.round((threadPeak / selectedPolicy.pids_limit) * 100),
+          100,
+        );
 
   // 화면에 표시할 실행 단계
   const executionStages = DISPLAYED_EXECUTION_STAGES.map((stage) => {
@@ -670,8 +714,9 @@ function MainPage() {
 
           <div className="io-section">
             <div className="io-input-panel">
-              <label htmlFor="standard-input">표준 입력 (stdin)</label>
-
+              <label className="io-field-label" htmlFor="standard-input">
+                표준 입력 (stdin)
+              </label>
               <textarea
                 id="standard-input"
                 className="standard-input"
@@ -726,7 +771,10 @@ function MainPage() {
                 </button>
               </div>
 
-              <pre className="io-result-output" aria-label="출력 결과">
+              <pre
+                className={`io-result-output${executionResult ? "" : " io-result-output-empty"}`}
+                aria-label="출력 결과"
+              >
                 {resultOutput}
               </pre>
             </div>
@@ -742,83 +790,138 @@ function MainPage() {
 
             <div className="settings-content">
               <h3>적용 중인 제한</h3>
+              <div className="environment-limit-grids">
+                <div className="environment-limit-grid-top">
+                  <div
+                    className={`environment-limit-card ${
+                      isLimitTriggered("TIME_LIMIT") ? "limit-triggered" : ""
+                    }`}
+                  >
+                    <span className="environment-limit-icon metric-time">
+                      <MetricIcon type="time" />
+                    </span>
+                    <div>
+                      <small>시간 제한</small>
+                      <strong>{selectedPolicy.timeout_ms / 1000} sec</strong>
+                    </div>
+                  </div>
 
-              <div className="environment-limit-grid">
-                <div className="environment-limit-card">
-                  <span className="environment-limit-icon metric-time">
-                    <MetricIcon type="time" />
-                  </span>
-                  <div>
-                    <small>시간 제한</small>
-                    <strong>{selectedPolicy.timeout_ms / 1000} sec</strong>
+                  {/* 메모리 제한 */}
+                  <div
+                    className={`environment-limit-card ${
+                      isLimitTriggered("MEMORY_LIMIT") ? "limit-triggered" : ""
+                    }`}
+                  >
+                    <span className="environment-limit-icon metric-memory">
+                      <MetricIcon type="memory" />
+                    </span>
+                    <div>
+                      <small>메모리</small>
+                      <strong>{selectedPolicy.memory_limit_mb} MB</strong>
+                    </div>
+                  </div>
+
+                  <div
+                    className={`environment-limit-card ${
+                      isLimitTriggered("PIDS_LIMIT") ? "limit-triggered" : ""
+                    }`}
+                  >
+                    <span className="environment-limit-icon metric-process">
+                      <MetricIcon type="process" />
+                    </span>
+                    <div>
+                      <small>PID</small>
+                      <strong>{selectedPolicy.pids_limit}개</strong>
+                    </div>
+                  </div>
+
+                  <div
+                    className={`environment-limit-card ${
+                      isLimitTriggered("CPU_LIMIT") ? "limit-triggered" : ""
+                    }`}
+                  >
+                    <span className="environment-limit-icon metric-cpu">
+                      <MetricIcon type="cpu" />
+                    </span>
+                    <div>
+                      <small>CPU 처리량</small>
+                      <strong>
+                        {selectedPolicy.cpu_bandwidth.toFixed(1)} CPU
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div
+                    className={`environment-limit-card ${
+                      isLimitTriggered("CPUTIME_LIMIT") ? "limit-triggered" : ""
+                    }`}
+                  >
+                    <span className="environment-limit-icon metric-cputime">
+                      <MetricIcon type="cputime" />
+                    </span>
+                    <div>
+                      <small>CPU time</small>
+                      <strong>
+                        {selectedPolicy.cpu_time_limit_ms / 1000} sec
+                      </strong>
+                    </div>
                   </div>
                 </div>
 
-                <div className="environment-limit-card">
-                  <span className="environment-limit-icon metric-memory">
-                    <MetricIcon type="memory" />
-                  </span>
-                  <div>
-                    <small>메모리</small>
-                    <strong>{selectedPolicy.memory_limit_mb} MB</strong>
-                  </div>
+                <div className="environment-limit-grid-bottom">
+                  <article
+                    className={`planned-feature-item ${
+                      isLimitTriggered("OUTPUT_LIMIT") ? "limit-triggered" : ""
+                    }`}
+                  >
+                    <span className="environment-limit-icon planned-output-icon">
+                      <MetricIcon type="output" />
+                    </span>
+                    <strong>출력 제한</strong>
+                    <small className="limit-status-badge">제한 중</small>
+                  </article>
+                  <article
+                    className={`planned-feature-item ${
+                      isLimitTriggered("FILE_ACCESS_LIMIT")
+                        ? "limit-triggered"
+                        : ""
+                    }`}
+                  >
+                    <span className="environment-limit-icon planned-file-icon">
+                      <MetricIcon type="file" />
+                    </span>
+                    <strong>파일 접근 제한</strong>
+                    <small className="limit-status-badge">제한 중</small>
+                  </article>
+
+                  <article
+                    className={`planned-feature-item ${
+                      isLimitTriggered("NETWORK_ACCESS_LIMIT")
+                        ? "limit-triggered"
+                        : ""
+                    }`}
+                  >
+                    <span className="environment-limit-icon planned-network-icon">
+                      <MetricIcon type="network" />
+                    </span>
+                    <strong>네트워크 차단</strong>
+                    <small className="limit-status-badge">제한 중</small>
+                  </article>
+
+                  <article
+                    className={`planned-feature-item ${
+                      isLimitTriggered("PERMISSION_LIMIT")
+                        ? "limit-triggered"
+                        : ""
+                    }`}
+                  >
+                    <span className="environment-limit-icon planned-permission-icon">
+                      <MetricIcon type="permission" />
+                    </span>
+                    <strong>권한 제한</strong>
+                    <small className="limit-status-badge">제한 중</small>
+                  </article>
                 </div>
-
-                <div className="environment-limit-card">
-                  <span className="environment-limit-icon metric-process">
-                    <MetricIcon type="process" />
-                  </span>
-                  <div>
-                    <small>PID</small>
-                    <strong>{selectedPolicy.pids_limit}개</strong>
-                  </div>
-                </div>
-
-                <div className="environment-limit-card">
-                  <span className="environment-limit-icon metric-cpu">
-                    <MetricIcon type="cpu" />
-                  </span>
-                  <div>
-                    <small>CPU</small>
-                    <strong>{selectedPolicy.cpu_limit.toFixed(1)} CPU</strong>
-                  </div>
-                </div>
-              </div>
-
-              <h3 className="planned-feature-title">추가 예정 기능</h3>
-
-              <div className="planned-feature-grid">
-                <article className="planned-feature-item">
-                  <span className="planned-feature-icon planned-file-icon">
-                    <MetricIcon type="file" />
-                  </span>
-                  <strong>파일 접근 제한</strong>
-                  <small>추가 예정</small>
-                </article>
-
-                <article className="planned-feature-item">
-                  <span className="planned-feature-icon planned-network-icon">
-                    <MetricIcon type="network" />
-                  </span>
-                  <strong>네트워크 차단</strong>
-                  <small>추가 예정</small>
-                </article>
-
-                <article className="planned-feature-item">
-                  <span className="planned-feature-icon planned-permission-icon">
-                    <MetricIcon type="permission" />
-                  </span>
-                  <strong>권한 제한</strong>
-                  <small>추가 예정</small>
-                </article>
-
-                <article className="planned-feature-item">
-                  <span className="planned-feature-icon planned-output-icon">
-                    <MetricIcon type="output" />
-                  </span>
-                  <strong>출력 제한</strong>
-                  <small>추가 예정</small>
-                </article>
               </div>
             </div>
           </section>
@@ -846,18 +949,20 @@ function MainPage() {
                   <span>상태</span>
                   <strong
                     className={`execution-status-badge execution-status-${executionState}`}
-                    title={jobId ? `실행 ID: ${jobId}` : undefined}
+                    title={executionStatusText}
                   >
                     {executionStatusText}
                   </strong>
                 </div>
                 <div>
                   <span>종료 코드</span>
-                  <strong>{executionExitCode}</strong>
+                  <strong title={executionExitCode}>{executionExitCode}</strong>
                 </div>
                 <div>
                   <span>종료 사유</span>
-                  <strong>{executionReasonCode}</strong>
+                  <strong title={executionReasonCode}>
+                    {executionReasonCode}
+                  </strong>
                 </div>
               </div>
 
@@ -894,15 +999,23 @@ function MainPage() {
               >
                 <span>실행 시간</span>
                 <strong>
-                  {wallTimeMs == null
-                    ? "-"
-                    : `${(wallTimeMs / 1000).toFixed(3)} / ${(selectedPolicy.timeout_ms / 1000).toFixed(0)}`}
-                  <small> sec</small>
+                  {wallTimeMs == null ? (
+                    "측정 전"
+                  ) : (
+                    <>
+                      {(wallTimeMs / 1000).toFixed(3)} /{" "}
+                      {(selectedPolicy.timeout_ms / 1000).toFixed(0)}
+                      <small> sec</small>
+                    </>
+                  )}
                 </strong>
-                <div className="resource-progress">
-                  <span style={{ width: `${wallTimePercentage}%` }} />
+                <div className="resource-progress-row">
+                  <div className="resource-progress">
+                    <span style={{ width: `${wallTimePercentage}%` }} />
+                  </div>
+
+                  {wallTimeMs != null && <em>{wallTimePercentage}%</em>}
                 </div>
-                <em>{wallTimeMs == null ? "-" : `${wallTimePercentage}%`}</em>
               </article>
 
               <article
@@ -912,15 +1025,23 @@ function MainPage() {
               >
                 <span>최대 메모리</span>
                 <strong>
-                  {memoryPeakMb == null
-                    ? "-"
-                    : `${memoryPeakMb.toFixed(1)} / ${selectedPolicy.memory_limit_mb}`}
-                  <small> MB</small>
+                  {memoryPeakMb == null ? (
+                    "측정 전"
+                  ) : (
+                    <>
+                      {memoryPeakMb.toFixed(1)} /{" "}
+                      {selectedPolicy.memory_limit_mb}
+                      <small> MB</small>
+                    </>
+                  )}
                 </strong>
-                <div className="resource-progress">
-                  <span style={{ width: `${memoryPercentage}%` }} />
+                <div className="resource-progress-row">
+                  <div className="resource-progress">
+                    <span style={{ width: `${memoryPercentage}%` }} />
+                  </div>
+
+                  {memoryPeakMb != null && <em>{memoryPercentage}%</em>}
                 </div>
-                <em>{memoryPeakMb == null ? "-" : `${memoryPercentage}%`}</em>
               </article>
 
               <article
@@ -928,39 +1049,103 @@ function MainPage() {
                   isPidsLimitExceeded ? " resource-limit-exceeded" : ""
                 }`}
               >
-                <span>최대 PID 개수</span>
-                <strong>
-                  {pidsPeak == null
-                    ? "-"
-                    : `${pidsPeak} / ${selectedPolicy.pids_limit}`}
-                  <small> 개</small>
-                </strong>
-                <div className="resource-progress">
-                  <span style={{ width: `${pidsPercentage}%` }} />
+                <div className="resource-pids-heading">
+                  <div>
+                    <span>최대 PIDs 개수</span>
+                    <strong>
+                      {pidsPeak == null ? (
+                        "측정 전"
+                      ) : (
+                        <>
+                          {pidsPeak} / {selectedPolicy.pids_limit}
+                          <small> 개</small>
+                        </>
+                      )}
+                    </strong>
+                  </div>
                 </div>
-                <em>{pidsPeak == null ? "-" : `${pidsPercentage}%`}</em>
+
+                <div className="resource-progress-row resource-pids-progress-row">
+                  <div className="resource-progress resource-pids-total">
+                    <span style={{ width: `${pidsPercentage}%` }} />
+                  </div>
+
+                  {pidsPeak != null && <em>{pidsPercentage}%</em>}
+                </div>
+
+                <div className="resource-pids-detail">
+                  <span>Process</span>
+
+                  <div className="resource-progress resource-process-detail">
+                    <span style={{ width: `${processPercentage}%` }} />
+                  </div>
+
+                  {processPeak != null && <em>{processPeak}개</em>}
+                </div>
+
+                <div className="resource-pids-detail">
+                  <span>Thread</span>
+
+                  <div className="resource-progress resource-thread-detail">
+                    <span style={{ width: `${threadPercentage}%` }} />
+                  </div>
+
+                  {threadPeak != null && <em>{threadPeak}개</em>}
+                </div>
+              </article>
+
+              <article
+                className={`resource-usage-card resource-output${
+                  isOutputLimitExceeded ? " resource-limit-exceeded" : ""
+                }`}
+              >
+                <span>출력량</span>
+                <strong>
+                  {outputBytes == null ? (
+                    "측정 전"
+                  ) : (
+                    <>
+                      {(outputBytes / 1024).toFixed(1)} /{" "}
+                      {(selectedPolicy.output_limit_bytes / 1024).toFixed(0)}
+                      <small> KB</small>
+                    </>
+                  )}
+                </strong>
+
+                <div className="resource-progress-row">
+                  <div className="resource-progress">
+                    <span style={{ width: `${outputPercentage}%` }} />
+                  </div>
+
+                  {outputBytes != null && <em>{outputPercentage}%</em>}
+                </div>
               </article>
 
               <article
                 className={`resource-usage-card resource-cpu${
-                  cpuTimeMs == null ? " resource-disabled" : ""
+                  isCpuTimeLimitExceeded ? " resource-limit-exceeded" : ""
                 }`}
               >
-                <span>CPU 사용률</span>
+                <span>CPU 시간</span>
                 <strong>
-                  {cpuUsagePercentage == null
-                    ? "미측정"
-                    : `${cpuUsagePercentage}`}
-                  {cpuUsagePercentage != null && <small>%</small>}
+                  {cpuTimeMs == null ? (
+                    "측정 전"
+                  ) : (
+                    <>
+                      {(cpuTimeMs / 1000).toFixed(3)} /{" "}
+                      {(selectedPolicy.cpu_time_limit_ms / 1000).toFixed(0)}
+                      <small> sec</small>
+                    </>
+                  )}
                 </strong>
-                <div className="resource-progress">
-                  <span style={{ width: `${cpuUsagePercentage ?? 0}%` }} />
+
+                <div className="resource-progress-row">
+                  <div className="resource-progress">
+                    <span style={{ width: `${cpuTimePercentage}%` }} />
+                  </div>
+
+                  {cpuTimeMs != null && <em>{cpuTimePercentage}%</em>}
                 </div>
-                <em>
-                  {cpuTimeMs == null
-                    ? "측정 예정"
-                    : `${cpuTimeMs.toLocaleString()} ms`}
-                </em>
               </article>
             </div>
           </section>
