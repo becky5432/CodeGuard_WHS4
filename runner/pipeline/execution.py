@@ -59,6 +59,7 @@ class ExecutionResult:
     output_limit_exceeded: bool = False
     oom_killed: bool = False
     wall_time_ms: int | None = None
+    cpu_time_ms: int | None = None
     memory_peak_bytes: int | None = None
     pids_peak: int | None = None
     user_task_peak: int | None = None
@@ -260,6 +261,7 @@ def execute_program(
     cgroup_registered = False
     root_registered = False
     task_metrics: PidsPeakSnapshot | None = None
+    cpu_start_usec: int | None = None
 
     def wait_for_container() -> None:
         try:
@@ -315,8 +317,22 @@ def execute_program(
                         exc,
                     )
 
+            # 사용자 코드 실행 직전 execution cgroup의 누적 CPU time을 저장한다.
+            if cgroup_scope is not None:
+                try:
+                    cpu_start_usec = cgroup_scope.snapshot().cpu_time_usec
+                except Exception as exc:
+                    logger.warning(
+                        "event=execution_cpu_baseline_error "
+                        "job_id=%s run_id=%s error=%s",
+                        job_id,
+                        run_id,
+                        exc,
+                    )
+
             # codeguard-init은 SIGUSR1을 받을 때까지 사용자 코드를
             # 실행하지 않는다. Tracker 실패 여부와 무관하게 실행은 계속한다.
+
             container.kill(signal="SIGUSR1")
             start = time.monotonic()
 
@@ -464,6 +480,17 @@ def execute_program(
                     exc,
                 )
 
+        cpu_time_ms: int | None = None
+
+        if (
+            cpu_start_usec is not None
+            and cgroup_metrics.cpu_time_usec is not None
+        ):
+            cpu_time_ms = max(
+                cgroup_metrics.cpu_time_usec - cpu_start_usec,
+                0,
+            ) // 1000
+
         memory_peak_bytes = (
             cgroup_metrics.memory_peak_bytes
             if cgroup_metrics.memory_peak_bytes is not None
@@ -546,6 +573,7 @@ def execute_program(
             output_limit_exceeded=output.exceeded.is_set(),
             oom_killed=oom_killed,
             wall_time_ms=int((finished_at - start) * 1000),
+            cpu_time_ms=cpu_time_ms,
             memory_peak_bytes=memory_peak_bytes,
             pids_peak=pids_peak,
             user_task_peak=user_task_peak,
