@@ -243,6 +243,7 @@ class ExecutionTests(unittest.TestCase):
         pids_monitor_class.return_value.pids_peak = 2
         pids_monitor_class.return_value.exceeded.return_value = False
         cgroup_scope = MagicMock()
+        cgroup_scope.read_cpu_usage_usec.return_value = None
         cgroup_scope.snapshot.return_value = CgroupMetrics(
             memory_peak_bytes=16 * 1024 * 1024,
             pids_peak=18,
@@ -258,7 +259,8 @@ class ExecutionTests(unittest.TestCase):
 
         self.assertEqual(result.memory_peak_bytes, 16 * 1024 * 1024)
         self.assertEqual(result.pids_peak, 18)
-        self.assertEqual(cgroup_scope.snapshot.call_count, 2)
+        cgroup_scope.read_cpu_usage_usec.assert_called_once_with()
+        cgroup_scope.snapshot.assert_called_once_with()
 
     def test_execute_program_calculates_cpu_time_from_cgroup_usage(self) -> None:
         cgroup_scope = MagicMock()
