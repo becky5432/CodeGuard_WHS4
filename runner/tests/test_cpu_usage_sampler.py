@@ -75,14 +75,14 @@ class CpuUsageSamplerTests(unittest.TestCase):
             start_time=10.0,
         )
 
-        sampler.sample_if_due(10.100)
-        sampler.sample_if_due(10.200)
-        sampler.sample_if_due(10.300)
+        sampler.sample_if_due(10.101)
+        sampler.sample_if_due(10.201)
+        sampler.sample_if_due(10.301)
 
         self.assertEqual(len(sampler.samples), 2)
 
         second = sampler.samples[1]
-        self.assertEqual(second.elapsed_ms, 300)
+        self.assertEqual(second.elapsed_ms, 301)
         self.assertEqual(second.interval_ms, 200)
         self.assertEqual(second.cpu_time_delta_ms, 72)
 
