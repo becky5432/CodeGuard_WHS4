@@ -21,11 +21,7 @@ class Settings(BaseSettings):
 
     volume_name_prefix: str = "codeguard-job-"
     cpp_image: str = "codeguard-cpp:dev"
-    # 실행 컨테이너의 네트워크 설정.
-    #  "none"  = 네트워크 완전 차단 (기본값, 가장 안전)
-    #  "<이름>" = 커스텀 도커 네트워크에 연결 (egress 규칙이 적용된 네트워크)
-    # 환경변수 EXECUTION_NETWORK 로도 지정 가능 (예: EXECUTION_NETWORK=lab-net)
-    execution_network: str = "none"
+    execution_network: str = "bridge"
     execution_cgroup_enabled: bool = True
     execution_cgroup_root: Path = Path("/sys/fs/cgroup/codeguard")
 
