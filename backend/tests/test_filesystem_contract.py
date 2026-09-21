@@ -16,6 +16,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.executions import router
 from app.db import repository
+from app.db.models import Execution
 from app.db.database import Base, get_db
 from app.schemas.execution_schema import ExecutionCreateRequest, ExecutionReasonCode
 from app.schemas.runner_schema import RunnerResponse as BackendRunnerResponse
@@ -75,5 +76,35 @@ def test_filesystem_limit_runner_to_db_to_lookup_api():
         assert payload['reason_code'] == 'FILESYSTEM_LIMIT'
         assert payload['exit_code'] == 0
         assert payload['stage_summary']['errors']['EXECUTE'][0]['reason_code'] == 'FILESYSTEM_LIMIT'
+    finally:
+        engine.dispose()
+
+
+def test_security_verification_reason_round_trips_string_column():
+    assert Execution.__table__.c.reason_code.type.length == 32
+    reason = ExecutionReasonCode.SECURITY_VERIFICATION_FAILED.value
+    assert len(reason) <= 32
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine)
+    job_id = str(uuid4())
+    limits = {
+        "timeout_ms": 3000, "memory_limit_mb": 128,
+        "pids_limit": 32, "cpu_bandwidth": 1.0,
+        "output_limit_bytes": 1024,
+    }
+    try:
+        with sessions() as db:
+            repository.create_execution(
+                db, job_id, "C", "int main(void){return 0;}", "", limits,
+            )
+            repository.save_result(
+                db, job_id, status="ERROR", reason_code=reason,
+            )
+            saved = repository.get_execution(db, job_id)
+            assert saved.reason_code == reason
     finally:
         engine.dispose()

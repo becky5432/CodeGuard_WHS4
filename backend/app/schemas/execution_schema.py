@@ -15,8 +15,10 @@ class PolicyLimits(BaseModel):
     timeout_ms: int = Field(gt=0)
     memory_limit_mb: int = Field(gt=0)
     pids_limit: int = Field(gt=0)     # 프로세스 및 스레드 수 함께 제한
-    cpu_limit: float = Field(gt=0)    # cpu_limit: CPU 할당 한도 (quota 제한)
+    cpu_bandwidth: float = Field(gt=0)    # CPU 처리량 한도 (quota 제한)
+    cpu_time_limit_ms: int = Field(gt=0)    # CPU 시간 제한
     output_limit_bytes: int = Field(gt=0)   # 실행 단계 stdout·stderr 합산 출력 제한
+
 
 
 class ExecutionStatus(str, Enum):
@@ -36,6 +38,7 @@ class ExecutionStage(str, Enum):
 
 class ExecutionReasonCode(str, Enum):
     TIME_LIMIT = "TIME_LIMIT"
+    CPU_TIME_LIMIT = "CPU_TIME_LIMIT"  # CPU 시간 제한
     MEMORY_LIMIT = "MEMORY_LIMIT"
     PIDS_LIMIT = "PIDS_LIMIT"      # 프로세스 + 스레드 수 제한
     OUTPUT_LIMIT = "OUTPUT_LIMIT"
@@ -44,7 +47,15 @@ class ExecutionReasonCode(str, Enum):
     COMPILE_ERROR = "COMPILE_ERROR"
     COMPILE_TIMEOUT = "COMPILE_TIMEOUT"
     RUNTIME_ERROR = "RUNTIME_ERROR"
+    SECURITY_VERIFICATION_FAILED = "SECURITY_VERIFICATION_FAILED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+
+
+class CpuUsageSample(BaseModel):
+    """실행 중 수집한 CPU 사용량 그래프용 시간 구간 샘플"""
+    elapsed_ms: int = Field(ge=0)  # 실행 시작 후 해당 구간 종료 시점까지의 누적 경과 시간
+    interval_ms: int = Field(gt=0)  # 직전 샘플 이후 실제로 경과한 시간
+    cpu_time_delta_ms: int = Field(ge=0)  # 해당 구간에서 프로그램과 하위 task가 실제 CPU를 사용한 시간
 
 
 class ResourceUsage(BaseModel):
@@ -53,6 +64,7 @@ class ResourceUsage(BaseModel):
     memory_peak_bytes: int | None = None  # 최대 메모리 (bytes 단위 주의)
     pids_peak: int | None = None          # 최대 프로세스 및 스레드 수 
     output_bytes: int | None = None       # stdout·stderr 합산 출력 크기
+    cpu_usage_samples: list[CpuUsageSample] | None = None
     
     
 class StageError(BaseModel):

@@ -1,6 +1,6 @@
 """실제 Docker Engine과 settings.cpp_image가 필요한 파일시스템 통합 테스트.
 
-기본 이미지 준비: docker build -t codeguard-cpp:dev runner/container/cpp
+기본 이미지 준비: docker build -t codeguard-cpp:dev -f runner/container/cpp/Dockerfile .
 실행: RUNNER_DOCKER_TESTS=1 python -m unittest runner.tests.test_filesystem_integration -v
 활성화한 경우 Docker 연결/이미지 오류를 건너뛰지 않고 실패로 보고한다.
 PID 판정 테스트는 Docker 호스트의 /proc 및 cgroup v2 접근이 필요하다.

@@ -48,13 +48,15 @@ Task의 측정 오류가 사용자 코드 계보의 Snapshot을 무효화하지 
 ## 3. 측정 흐름
 
 1. Execution Container는 사용자 프로그램 대신 `codeguard-init`을 먼저 실행한다.
-2. Runner는 Execution cgroup ID와 컨테이너의 Root TID를 native tracker에 등록한다.
-3. 등록이 끝나면 Runner가 `SIGUSR1`을 전달한다.
-4. `codeguard-init`은 별도 자식 프로세스를 만들지 않고 `exec`으로 사용자 프로그램을 실행한다.
-5. eBPF는 `sched_process_fork`와 `sched_process_exit` 이벤트로 Root TID에서 파생된 Task의 생성과 종료를 추적한다.
-6. 이벤트마다 사용자 Task 수와 생존 TGID 수를 갱신하고, 추가 스레드 수를 두 값의 차이로 계산한다.
-7. 사용자 Task 수가 기존 최대값을 초과하면 `user_task_peak`와 그 시점의 프로세스·추가 스레드 수를 함께 저장한다.
-8. 실행 종료 후 Runner가 native tracker에 Snapshot을 요청하여 최종 Peak 값을 회수한다.
+2. `codeguard-init`은 실제 사용자 프로세스의 real/effective/saved/filesystem UID/GID와 허용된 supplementary groups, Capability, NoNewPrivs를 검증한다. 선행 SIGUSR1을 폐기한 다음 보호된 증거를 완성하고 대기한다.
+3. Runner는 Execution cgroup ID와 컨테이너의 Root TID를 native tracker에 등록한다.
+4. Runner가 보호된 권한 증거를 검증한다.
+5. 검증에 성공한 경우에만 Runner가 `SIGUSR1`을 전달한다.
+6. `codeguard-init`은 별도 자식 프로세스를 만들지 않고 `exec`으로 사용자 프로그램을 실행한다.
+7. eBPF는 `sched_process_fork`와 `sched_process_exit` 이벤트로 Root TID에서 파생된 Task의 생성과 종료를 추적한다.
+8. 이벤트마다 사용자 Task 수와 생존 TGID 수를 갱신하고, 추가 스레드 수를 두 값의 차이로 계산한다.
+9. 사용자 Task 수가 기존 최대값을 초과하면 `user_task_peak`와 그 시점의 프로세스·추가 스레드 수를 함께 저장한다.
+10. 실행 종료 후 Runner가 native tracker에 Snapshot을 요청하여 최종 Peak 값을 회수한다.
 
 `codeguard-init`을 사용하는 이유는 추적 대상을 등록하기 전에 사용자
 프로그램이 실행되어 짧은 Task 생성 이벤트가 누락되는 것을 방지하기
