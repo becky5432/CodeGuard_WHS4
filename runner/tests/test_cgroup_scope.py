@@ -90,6 +90,12 @@ class ExecutionCgroupScopeTests(unittest.TestCase):
             "max 2\n",
             encoding="utf-8",
         )
+        (scope.path / "cpu.stat").write_text(
+            "usage_usec 123456\n"
+            "user_usec 100000\n"
+            "system_usec 23456\n",
+            encoding="utf-8",
+        )
 
         metrics = scope.snapshot()
 
@@ -97,6 +103,7 @@ class ExecutionCgroupScopeTests(unittest.TestCase):
         self.assertEqual(metrics.pids_peak, 64)
         self.assertTrue(metrics.oom_killed)
         self.assertTrue(metrics.pids_limit_exceeded)
+        self.assertEqual(metrics.cpu_time_usec, 123456)
 
     def test_snapshot_returns_none_when_peak_files_are_missing(self) -> None:
         scope = ExecutionCgroupScope.create(
@@ -112,6 +119,7 @@ class ExecutionCgroupScopeTests(unittest.TestCase):
         self.assertIsNone(metrics.pids_peak)
         self.assertFalse(metrics.oom_killed)
         self.assertFalse(metrics.pids_limit_exceeded)
+        self.assertIsNone(metrics.cpu_time_usec)
 
     def test_create_builds_systemd_slice_without_creating_directory(self) -> None:
         run_id = uuid4()
