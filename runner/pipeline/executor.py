@@ -279,6 +279,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 resource_usage=ResourceUsage(
                     wall_time_ms=execution_result.wall_time_ms,
                     cpu_time_ms=execution_result.cpu_time_ms,
+                    cpu_usage_samples=execution_result.cpu_usage_samples,
                     memory_peak_bytes=(
                         execution_result.memory_peak_bytes
                     ),
