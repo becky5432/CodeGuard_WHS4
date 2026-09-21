@@ -111,9 +111,11 @@ class ExecutionCgroupScope:
     def snapshot(self) -> CgroupMetrics:
         memory_events = self._read_events("memory.events")
         pids_events = self._read_events("pids.events")
+        cpu_stat = self._read_key_values("cpu.stat")
         return CgroupMetrics(
             memory_peak_bytes=self._read_int("memory.peak"),
             pids_peak=self._read_int("pids.peak"),
+            cpu_time_usec=cpu_stat.get("usage_usec"),
             oom_killed=memory_events.get("oom_kill", 0) > 0,
             pids_limit_exceeded=pids_events.get("max", 0) > 0,
         )
@@ -142,6 +144,31 @@ class ExecutionCgroupScope:
                 exc,
             )
             return None
+
+    def _read_key_values(self, filename: str) -> dict[str, int]:
+        try:
+            lines = (self.path / filename).read_text(
+                encoding="utf-8"
+            ).splitlines()
+        except (FileNotFoundError, OSError) as exc:
+            logger.warning(
+                "event=cgroup_metric_read_error path=%s error=%s",
+                self.path / filename,
+                exc,
+            )
+            return {}
+
+        values: dict[str, int] = {}
+        for line in lines:
+            parts = line.split()
+            if len(parts) != 2:
+                continue
+            try:
+                values[parts[0]] = int(parts[1])
+            except ValueError:
+                continue
+
+        return values
 
     def _read_events(self, filename: str) -> dict[str, int]:
         try:
