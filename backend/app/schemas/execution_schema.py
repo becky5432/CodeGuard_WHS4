@@ -38,7 +38,7 @@ class ExecutionStage(str, Enum):
 
 class ExecutionReasonCode(str, Enum):
     TIME_LIMIT = "TIME_LIMIT"
-    CPU_TIME_LIMIT = "CPU_TIME_LIMIT"  # CPU 시간 제한 
+    CPU_TIME_LIMIT = "CPU_TIME_LIMIT"  # CPU 시간 제한
     MEMORY_LIMIT = "MEMORY_LIMIT"
     PIDS_LIMIT = "PIDS_LIMIT"      # 프로세스 + 스레드 수 제한
     OUTPUT_LIMIT = "OUTPUT_LIMIT"

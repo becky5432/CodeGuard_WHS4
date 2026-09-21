@@ -276,7 +276,8 @@ class TaskTrackerIntegrationTests(unittest.TestCase):
                 timeout_ms=timeout_ms,
                 memory_limit_mb=64,
                 pids_limit=pids_limit,
-                cpu_limit=1.0,
+                cpu_bandwidth=1.0,
+                cpu_time_limit_ms=2000,
             ),
             created_at=datetime.now(timezone.utc),
         )

@@ -220,7 +220,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 "job_id": job.job_id,
                 "run_id": run_id,
                 "memory_limit_mb": job.policy.memory_limit_mb,
-                "cpu_limit": job.policy.cpu_limit,
+                "cpu_bandwidth": job.policy.cpu_bandwidth,
                 "pids_limit": job.policy.pids_limit,
             }
             if execution_cgroup_scope is not None:
@@ -278,6 +278,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 compile_log=compile_log,
                 resource_usage=ResourceUsage(
                     wall_time_ms=execution_result.wall_time_ms,
+                    cpu_time_ms=execution_result.cpu_time_ms,
                     memory_peak_bytes=(
                         execution_result.memory_peak_bytes
                     ),

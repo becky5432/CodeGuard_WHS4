@@ -4,3 +4,6 @@ EXECUTION_OUTPUT_LIMIT_BYTES = 1024 * 1024
 
 # 사용자 runtime 정책과 분리된 Runner 내부 컴파일 안전 상한이다.
 COMPILE_TIMEOUT_SECONDS = 10
+
+# 서비스 정책과 분리된 Runner 내부 CPU 안전 상한이다.
+EXECUTION_LOGICAL_CPU_LIMIT = 2

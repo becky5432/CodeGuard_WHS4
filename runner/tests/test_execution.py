@@ -58,6 +58,14 @@ class ExecutionTests(unittest.TestCase):
             volume_name="codeguard-job-test",
         )
         self.run_id = uuid4()
+        self.affinity_patcher = patch(
+            "runner.pipeline.execution.os.sched_getaffinity",
+            return_value={0, 1},
+        )
+        self.mock_sched_getaffinity = self.affinity_patcher.start()
+        self.addCleanup(self.affinity_patcher.stop)
+
+        
 
     def test_create_execution_container_returns_registered_container(self) -> None:
         result = create_execution_container(
@@ -67,7 +75,7 @@ class ExecutionTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=self.run_id,
             memory_limit_mb=128,
-            cpu_limit=1.0,
+            cpu_bandwidth=1.0,
             pids_limit=10,
         )
 
@@ -92,6 +100,7 @@ class ExecutionTests(unittest.TestCase):
             mem_limit=128 * 1024 * 1024,
             memswap_limit=128 * 1024 * 1024,
             nano_cpus=1_000_000_000,
+            cpuset_cpus="0,1",
             pids_limit=10,
             labels={
                 "codeguard.managed": "true",
@@ -101,6 +110,45 @@ class ExecutionTests(unittest.TestCase):
             },
         )
 
+    def test_create_execution_container_applies_internal_logical_cpu_limit(self) -> None:
+        create_execution_container(
+            client=self.client,
+            workspace=self.workspace,
+            stdin="",
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            memory_limit_mb=128,
+            cpu_bandwidth=1.0,
+            pids_limit=10,
+        )
+
+        cpuset_cpus = self.client.containers.create.call_args.kwargs[
+            "cpuset_cpus"
+        ]
+        self.assertEqual(cpuset_cpus, "0,1")
+
+    def test_create_execution_container_uses_available_cpus_below_internal_limit(
+        self,
+    ) -> None:
+        self.mock_sched_getaffinity.return_value = {0}
+
+        create_execution_container(
+            client=self.client,
+            workspace=self.workspace,
+            stdin="",
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            memory_limit_mb=128,
+            cpu_bandwidth=1.0,
+            pids_limit=10,
+        )
+
+        cpuset_cpus = self.client.containers.create.call_args.kwargs[
+            "cpuset_cpus"
+        ]
+        self.assertEqual(cpuset_cpus, "0")
+
+
     def test_create_execution_container_uses_stdin_file(self) -> None:
         create_execution_container(
             client=self.client,
@@ -109,7 +157,7 @@ class ExecutionTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=self.run_id,
             memory_limit_mb=128,
-            cpu_limit=1.0,
+            cpu_bandwidth=1.0,
             pids_limit=10,
         )
 
@@ -130,7 +178,7 @@ class ExecutionTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=self.run_id,
             memory_limit_mb=128,
-            cpu_limit=1.0,
+            cpu_bandwidth=1.0,
             pids_limit=10,
             cgroup_scope=cgroup_scope,
         )
@@ -186,7 +234,7 @@ class ExecutionTests(unittest.TestCase):
                 job_id=self.workspace.job_id,
                 run_id=self.run_id,
                 memory_limit_mb=128,
-                cpu_limit=1.0,
+                cpu_bandwidth=1.0,
                 pids_limit=10,
             )
 
@@ -215,6 +263,7 @@ class ExecutionTests(unittest.TestCase):
         pids_monitor_class.return_value.pids_peak = 2
         pids_monitor_class.return_value.exceeded.return_value = False
         cgroup_scope = MagicMock()
+        cgroup_scope.read_cpu_usage_usec.return_value = None
         cgroup_scope.snapshot.return_value = CgroupMetrics(
             memory_peak_bytes=16 * 1024 * 1024,
             pids_peak=18,
@@ -230,6 +279,26 @@ class ExecutionTests(unittest.TestCase):
 
         self.assertEqual(result.memory_peak_bytes, 16 * 1024 * 1024)
         self.assertEqual(result.pids_peak, 18)
+        cgroup_scope.read_cpu_usage_usec.assert_called_once_with()
+        cgroup_scope.snapshot.assert_called_once_with()
+
+    def test_execute_program_calculates_cpu_time_from_cgroup_usage(self) -> None:
+        cgroup_scope = MagicMock()
+        cgroup_scope.read_cpu_usage_usec.return_value = 10_000
+        cgroup_scope.snapshot.return_value = CgroupMetrics(
+            cpu_time_usec=85_000,
+        )
+
+        result = execute_program(
+            container=self.container,
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            timeout_ms=2000,
+            cgroup_scope=cgroup_scope,
+        )
+
+        self.assertEqual(result.cpu_time_ms, 75)
+        cgroup_scope.read_cpu_usage_usec.assert_called_once_with()
         cgroup_scope.snapshot.assert_called_once_with()
 
     @patch("runner.pipeline.execution.resolve_execution_cgroup")

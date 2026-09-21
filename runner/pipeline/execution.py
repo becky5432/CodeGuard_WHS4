@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -21,7 +22,10 @@ from runner.metrics.task_tracker import (
     resolve_execution_cgroup,
 )
 from runner.pipeline.workspace import VolumeWorkspace
-from runner.policies import EXECUTION_OUTPUT_LIMIT_BYTES
+from runner.policies import (
+    EXECUTION_LOGICAL_CPU_LIMIT,
+    EXECUTION_OUTPUT_LIMIT_BYTES,
+)
 from runner.security import (
     SECURITY_CAP_DROP,
     SECURITY_GID,
@@ -59,6 +63,7 @@ class ExecutionResult:
     output_limit_exceeded: bool = False
     oom_killed: bool = False
     wall_time_ms: int | None = None
+    cpu_time_ms: int | None = None
     memory_peak_bytes: int | None = None
     pids_peak: int | None = None
     user_task_peak: int | None = None
@@ -117,6 +122,16 @@ def _stop_output_thread(frames, output_thread) -> bool:
         output_thread.join(timeout=1.0)
     return not output_thread.is_alive()
 
+def _resolve_cpuset() -> str:
+    available_cpus = sorted(os.sched_getaffinity(0))
+
+    if not available_cpus:
+        raise ContainerExecutionError(
+            "Runner에서 사용 가능한 논리 CPU를 확인할 수 없습니다.",
+        )
+
+    selected_cpus = available_cpus[:EXECUTION_LOGICAL_CPU_LIMIT]
+    return ",".join(str(cpu) for cpu in selected_cpus)
 
 def create_execution_container(
     client,
@@ -125,7 +140,7 @@ def create_execution_container(
     job_id: UUID,
     run_id: UUID,
     memory_limit_mb: int,
-    cpu_limit: float,
+    cpu_bandwidth: float,
     pids_limit: int,
     cgroup_scope: ExecutionCgroupScope | None = None,
 ):
@@ -148,7 +163,8 @@ def create_execution_container(
     command = ["sh", "-c", trace_command]
 
     memory_limit_bytes = memory_limit_mb * 1024 * 1024
-    nano_cpus_limit = int(cpu_limit * 1_000_000_000)
+    nano_cpus_limit = int(cpu_bandwidth * 1_000_000_000)
+    cpuset_cpus = _resolve_cpuset()
 
     container_options = {
         "image": settings.cpp_image,
@@ -171,6 +187,7 @@ def create_execution_container(
         "mem_limit": memory_limit_bytes,
         "memswap_limit": memory_limit_bytes,
         "nano_cpus": nano_cpus_limit,
+        "cpuset_cpus": cpuset_cpus,
         "pids_limit": pids_limit,
         "labels": {
             "codeguard.managed": "true",
@@ -250,6 +267,7 @@ def execute_program(
     cgroup_registered = False
     root_registered = False
     task_metrics: PidsPeakSnapshot | None = None
+    cpu_start_usec: int | None = None
 
     def wait_for_container() -> None:
         try:
@@ -308,6 +326,20 @@ def execute_program(
             # codeguard-init은 보호된 증거를 기록한 뒤 SIGUSR1을 기다린다.
             # 실제 권한 제한이 확인된 경우에만 사용자 코드를 해제한다.
             verify_runtime_permission_restrictions(container)
+
+            # 사용자 코드 실행 직전 execution cgroup의 누적 CPU time을 저장한다.
+            if cgroup_scope is not None:
+                try:
+                    cpu_start_usec = cgroup_scope.read_cpu_usage_usec()
+                except Exception as exc:
+                    logger.warning(
+                        "event=execution_cpu_baseline_error "
+                        "job_id=%s run_id=%s error=%s",
+                        job_id,
+                        run_id,
+                        exc,
+                    )
+
             container.kill(signal="SIGUSR1")
             start = time.monotonic()
 
@@ -455,6 +487,17 @@ def execute_program(
                     exc,
                 )
 
+        cpu_time_ms: int | None = None
+
+        if (
+            cpu_start_usec is not None
+            and cgroup_metrics.cpu_time_usec is not None
+        ):
+            cpu_time_ms = max(
+                cgroup_metrics.cpu_time_usec - cpu_start_usec,
+                0,
+            ) // 1000
+
         memory_peak_bytes = (
             cgroup_metrics.memory_peak_bytes
             if cgroup_metrics.memory_peak_bytes is not None
@@ -537,6 +580,7 @@ def execute_program(
             output_limit_exceeded=output.exceeded.is_set(),
             oom_killed=oom_killed,
             wall_time_ms=int((finished_at - start) * 1000),
+            cpu_time_ms=cpu_time_ms,
             memory_peak_bytes=memory_peak_bytes,
             pids_peak=pids_peak,
             user_task_peak=user_task_peak,

@@ -32,7 +32,8 @@ class ExecutorTests(unittest.TestCase):
                 timeout_ms=1000,
                 memory_limit_mb=64,
                 pids_limit=8,
-                cpu_limit=1.0,
+                cpu_bandwidth=1.0,
+                cpu_time_limit_ms=1000,
             ),
             created_at=datetime.now(timezone.utc),
         )
@@ -81,6 +82,7 @@ class ExecutorTests(unittest.TestCase):
                     exit_code=0,
                     stdout="",
                     stderr="",
+                    cpu_time_ms=75,
                     pids_peak=18,
                     user_task_peak=15,
                     process_at_user_task_peak=3,
@@ -100,6 +102,10 @@ class ExecutorTests(unittest.TestCase):
             create_execution.call_args.kwargs["cgroup_scope"],
             cgroup_scope,
         )
+        self.assertEqual(
+            create_execution.call_args.kwargs["cpu_bandwidth"],
+            1.0,
+        )
         self.assertIs(
             execute_program.call_args.kwargs["cgroup_scope"],
             cgroup_scope,
@@ -110,6 +116,7 @@ class ExecutorTests(unittest.TestCase):
         )
         self.assertEqual(response.resource_usage.pids_peak, 18)
         self.assertEqual(response.resource_usage.user_task_peak, 15)
+        self.assertEqual(response.resource_usage.cpu_time_ms, 75)
         self.assertEqual(
             response.resource_usage.process_at_user_task_peak,
             3,
@@ -157,7 +164,8 @@ class ExecutorTests(unittest.TestCase):
                 timeout_ms=1000,
                 memory_limit_mb=64,
                 pids_limit=8,
-                cpu_limit=1.0,
+                cpu_bandwidth=1.0,
+                cpu_time_limit_ms=1000,
             ),
             created_at=datetime.now(timezone.utc),
         )

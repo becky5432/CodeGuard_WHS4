@@ -93,7 +93,7 @@ def test_security_verification_reason_round_trips_string_column():
     job_id = str(uuid4())
     limits = {
         "timeout_ms": 3000, "memory_limit_mb": 128,
-        "pids_limit": 32, "cpu_limit": 1.0,
+        "pids_limit": 32, "cpu_bandwidth": 1.0,
         "output_limit_bytes": 1024,
     }
     try:
