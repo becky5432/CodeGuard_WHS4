@@ -258,7 +258,25 @@ class ExecutionTests(unittest.TestCase):
 
         self.assertEqual(result.memory_peak_bytes, 16 * 1024 * 1024)
         self.assertEqual(result.pids_peak, 18)
-        cgroup_scope.snapshot.assert_called_once_with()
+        self.assertEqual(cgroup_scope.snapshot.call_count, 2)
+
+    def test_execute_program_calculates_cpu_time_from_cgroup_usage(self) -> None:
+        cgroup_scope = MagicMock()
+        cgroup_scope.snapshot.side_effect = [
+            CgroupMetrics(cpu_time_usec=10_000),
+            CgroupMetrics(cpu_time_usec=85_000),
+        ]
+
+        result = execute_program(
+            container=self.container,
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            timeout_ms=2000,
+            cgroup_scope=cgroup_scope,
+        )
+
+        self.assertEqual(result.cpu_time_ms, 75)
+        self.assertEqual(cgroup_scope.snapshot.call_count, 2)
 
     @patch("runner.pipeline.execution.resolve_execution_cgroup")
     def test_execute_program_returns_user_task_peak_snapshot(
