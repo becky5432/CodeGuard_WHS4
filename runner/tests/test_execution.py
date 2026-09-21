@@ -262,10 +262,10 @@ class ExecutionTests(unittest.TestCase):
 
     def test_execute_program_calculates_cpu_time_from_cgroup_usage(self) -> None:
         cgroup_scope = MagicMock()
-        cgroup_scope.snapshot.side_effect = [
-            CgroupMetrics(cpu_time_usec=10_000),
-            CgroupMetrics(cpu_time_usec=85_000),
-        ]
+        cgroup_scope.read_cpu_usage_usec.return_value = 10_000
+        cgroup_scope.snapshot.return_value = CgroupMetrics(
+            cpu_time_usec=85_000,
+        )
 
         result = execute_program(
             container=self.container,
@@ -276,7 +276,8 @@ class ExecutionTests(unittest.TestCase):
         )
 
         self.assertEqual(result.cpu_time_ms, 75)
-        self.assertEqual(cgroup_scope.snapshot.call_count, 2)
+        cgroup_scope.read_cpu_usage_usec.assert_called_once_with()
+        cgroup_scope.snapshot.assert_called_once_with()
 
     @patch("runner.pipeline.execution.resolve_execution_cgroup")
     def test_execute_program_returns_user_task_peak_snapshot(
