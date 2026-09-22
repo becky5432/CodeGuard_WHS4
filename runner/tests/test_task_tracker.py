@@ -292,7 +292,7 @@ class TaskTrackerClientTests(unittest.TestCase):
         self.assertIn("CAP_PERFMON", service)
         self.assertIn("NoNewPrivileges=true", service)
 
-    def test_codeguard_init_waits_and_execs_without_forking(self) -> None:
+    def test_codeguard_init_execs_without_signal_or_forking(self) -> None:
         source = (
             Path(__file__).resolve().parents[1]
             / "native"
@@ -300,7 +300,7 @@ class TaskTrackerClientTests(unittest.TestCase):
             / "codeguard_init.c"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("sigwait", source)
+        self.assertNotIn("sigwait", source)
         self.assertIn("execv", source)
         self.assertIn('strcmp(argv[index], "--stdin")', source)
         self.assertNotIn("fork(", source)

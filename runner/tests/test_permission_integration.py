@@ -1,4 +1,4 @@
-"""Docker integration tests for the pre-exec permission handshake."""
+"""Docker integration tests for the minimal pre-exec permission check."""
 
 import os
 import unittest
@@ -17,10 +17,7 @@ from runner.pipeline.compiler import (
 from runner.pipeline.execution import create_execution_container, execute_program
 from runner.pipeline.workspace import create_workspace, remove_workspace
 from runner.security.filesystem_trace import FilesystemViolation, TRACE_DIRECTORY
-from runner.security.runtime_verification import (
-    SECURITY_EVIDENCE_PATH,
-    verify_runtime_permission_restrictions,
-)
+from runner.security.runtime_verification import SECURITY_STATUS_PATH
 
 
 @unittest.skipUnless(
@@ -94,44 +91,9 @@ class PermissionVerificationIntegrationTests(unittest.TestCase):
         )
         self.assertIsNone(result.system_error)
 
-    def test_duplicate_release_signal_runs_user_code_once(self) -> None:
-        workspace = create_workspace(self.client, uuid4())
-        self.addCleanup(remove_workspace, self.client, workspace)
-        compile_container = create_compile_container(
-            self.client, workspace, "C",
-        )
-        self.addCleanup(compile_container.remove, force=True)
-        compiled = compile_source(
-            compile_container,
-            workspace,
-            "C",
-            ("#include <stdio.h>\n#include <unistd.h>\n"
-             "int main(void) { puts(\"USER_RAN_ONCE\"); fflush(stdout); "
-             "sleep(1); return 0; }"),
-        )
-        self.assertTrue(compiled.success, compiled.stderr)
-
-        container = create_execution_container(
-            self.client, workspace, "", workspace.job_id, uuid4(), 128, 1.0, 32,
-        )
-        self.addCleanup(container.remove, force=True, v=True)
-        container.start()
-        verify_runtime_permission_restrictions(container)
-        container.kill(signal="SIGUSR1")
-        try:
-            container.kill(signal="SIGUSR1")
-        except docker.errors.APIError:
-            pass
-        container.wait(timeout=3)
-
-        output = container.logs(stdout=True, stderr=False).decode(
-            "utf-8", errors="replace",
-        )
-        self.assertEqual(output.count("USER_RAN_ONCE"), 1)
-
     def test_failed_runtime_verification_never_releases_user_code(self) -> None:
         command = (
-            f"umask 077; set -C; exec 3>{SECURITY_EVIDENCE_PATH}; "
+            f"umask 077; set -C; exec 3>{SECURITY_STATUS_PATH}; "
             "exec /usr/local/bin/codeguard-init --security-fd 3 -- "
             "/bin/echo SHOULD_NOT_RUN"
         )

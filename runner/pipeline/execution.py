@@ -10,6 +10,7 @@ import docker
 from runner.config import settings
 from runner.exceptions import (
     ContainerExecutionError,
+    SecurityVerificationError,
     RunnerError,
     TaskTrackingError,
 )
@@ -34,13 +35,13 @@ from runner.security import (
     SECURITY_UID,
     verify_container_security_config,
 )
+from runner.security.runtime_verification import (
+    SECURITY_STATUS_PATH,
+    collect_runtime_permission_failure,
+)
 from runner.security.filesystem_trace import (
     TRACE_DIRECTORY, TRACE_PATH, TRACE_SYSCALLS, RAW_WRITE_SYSCALLS,
     FilesystemViolation, collect_filesystem_trace,
-)
-from runner.security.runtime_verification import (
-    SECURITY_EVIDENCE_PATH,
-    verify_runtime_permission_restrictions,
 )
 
 
@@ -147,11 +148,11 @@ def create_execution_container(
     """Job Volume을 연결한 실행 컨테이너를 생성하고 반환한다."""
 
     # A persistent anonymous evidence volume survives container exit, unlike tmpfs.
-    # -D keeps codeguard-init (and later the user program) as container PID 1,
-    # while the root tracer runs outside the registered user-task lineage.
+    # Keep strace as container PID 1 so Docker wait observes the tracer only after
+    # it has followed codeguard-init/user exit and completed the trace footer.
     trace_command = (
-        f"umask 077; set -C; exec 3>{SECURITY_EVIDENCE_PATH}; ulimit -f 2048; "
-        f"exec strace -D -f -q -yy -s 4096 "
+        f"umask 077; set -C; exec 3>{SECURITY_STATUS_PATH}; ulimit -f 2048; "
+        f"exec strace -f -q -yy -s 4096 "
         f"-u codeguard "
         f"-o {TRACE_PATH} -e trace={TRACE_SYSCALLS} "
         f"-e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init "
@@ -292,6 +293,21 @@ def execute_program(
             demux=True,
         )
         try:
+            # No post-start execution gate exists in the #112 trace lifecycle.
+            # Capture CPU/wall baselines before starting the container.
+            if cgroup_scope is not None:
+                try:
+                    cpu_start_usec = cgroup_scope.read_cpu_usage_usec()
+                except Exception as exc:
+                    logger.warning(
+                        "event=execution_cpu_baseline_error "
+                        "job_id=%s run_id=%s error=%s",
+                        job_id,
+                        run_id,
+                        exc,
+                    )
+
+            start = time.monotonic()
             container.start()
 
             if task_tracker is not None:
@@ -322,26 +338,6 @@ def execute_program(
                         run_id,
                         exc,
                     )
-
-            # codeguard-init은 보호된 증거를 기록한 뒤 SIGUSR1을 기다린다.
-            # 실제 권한 제한이 확인된 경우에만 사용자 코드를 해제한다.
-            verify_runtime_permission_restrictions(container)
-
-            # 사용자 코드 실행 직전 execution cgroup의 누적 CPU time을 저장한다.
-            if cgroup_scope is not None:
-                try:
-                    cpu_start_usec = cgroup_scope.read_cpu_usage_usec()
-                except Exception as exc:
-                    logger.warning(
-                        "event=execution_cpu_baseline_error "
-                        "job_id=%s run_id=%s error=%s",
-                        job_id,
-                        run_id,
-                        exc,
-                    )
-
-            container.kill(signal="SIGUSR1")
-            start = time.monotonic()
 
             pids_monitor.start()
 
@@ -558,6 +554,11 @@ def execute_program(
         finished_at = wait_state.get("finished_at")
         if not isinstance(finished_at, float):
             finished_at = time.monotonic()
+        if collect_runtime_permission_failure(container):
+            raise SecurityVerificationError(
+                "Execution Container 권한 제한 적용을 검증하지 못했습니다."
+            )
+
         filesystem_violation = FilesystemViolation()
         if system_error is None:
             try:
