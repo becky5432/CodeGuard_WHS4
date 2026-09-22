@@ -449,6 +449,67 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.filesystem_violation_syscall, "unlink")
         self.assertEqual(result.filesystem_violation_path, "/workspace/main")
 
+    @patch("runner.pipeline.execution.CpuUsageSampler")
+    @patch("runner.pipeline.execution.PidsLimitMonitor")
+    @patch("runner.pipeline.execution.ResourceMonitor")
+    def test_cpu_time_limit_kills_container_and_sets_evidence(
+        self,
+        resource_monitor_class,
+        pids_monitor_class,
+        cpu_sampler_class,
+    ) -> None:
+        released = threading.Event()
+        container = MagicMock()
+        container.attrs = {"State": {"OOMKilled": False}}
+        container.attach.return_value = []
+
+        def wait_for_exit():
+            if not released.wait(timeout=1):
+                raise RuntimeError("cpu time kill did not release wait")
+            return {"StatusCode": 137}
+
+        def kill(*args, **kwargs):
+            if kwargs.get("signal") == "SIGUSR1":
+                return
+            released.set()
+
+        container.wait.side_effect = wait_for_exit
+        container.kill.side_effect = kill
+
+        resource_monitor_class.return_value.memory_peak_bytes = None
+        pids_monitor_class.return_value.exceeded.return_value = False
+        pids_monitor_class.return_value.pids_peak = None
+
+        cgroup_scope = MagicMock()
+        cgroup_scope.read_cpu_usage_usec.side_effect = [
+            10_000,
+            10_000,
+            111_000,
+        ]
+        cgroup_scope.snapshot.return_value = CgroupMetrics(
+            cpu_time_usec=111_000,
+        )
+
+        result = execute_program(
+            container=container,
+            job_id=uuid4(),
+            run_id=uuid4(),
+            timeout_ms=2000,
+            cgroup_scope=cgroup_scope,
+            cpu_time_limit_ms=100,
+        )
+
+        self.assertEqual(result.exit_code, 137)
+        self.assertTrue(result.cpu_time_limit_exceeded)
+        self.assertFalse(result.timed_out)
+        self.assertEqual(
+            container.kill.call_args_list,
+            [
+                call(signal="SIGUSR1"),
+                call(),
+            ],
+        )
+
     def test_timeout_kill_race_preserves_natural_exit(self) -> None:
         for exit_code, expected_reason in (
             (139, RunnerReasonCode.RUNTIME_ERROR),

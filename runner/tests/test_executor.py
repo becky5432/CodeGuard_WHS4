@@ -110,6 +110,10 @@ class ExecutorTests(unittest.TestCase):
             execute_program.call_args.kwargs["cgroup_scope"],
             cgroup_scope,
         )
+        self.assertEqual(
+            execute_program.call_args.kwargs["cpu_time_limit_ms"],
+            1000,
+        )
         self.assertIs(
             execute_program.call_args.kwargs["task_tracker"],
             task_tracker,
