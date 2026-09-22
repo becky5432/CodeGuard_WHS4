@@ -3,12 +3,10 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
-#include <time.h>
 #include <unistd.h>
 
 static void usage(const char *program)
@@ -60,26 +58,6 @@ static int read_process_security(
     return 0;
 }
 
-static int drain_pending_start_signals(const sigset_t *start_signal)
-{
-    const struct timespec no_wait = {0, 0};
-
-    for (;;) {
-        int signal_number = sigtimedwait(start_signal, NULL, &no_wait);
-
-        if (signal_number == SIGUSR1) {
-            continue;
-        }
-        if (signal_number < 0 && errno == EINTR) {
-            continue;
-        }
-        if (signal_number < 0 && errno == EAGAIN) {
-            return 0;
-        }
-        return -1;
-    }
-}
-
 static int write_all(int fd, const char *buffer, size_t length)
 {
     size_t written = 0;
@@ -98,9 +76,7 @@ static int write_all(int fd, const char *buffer, size_t length)
     return 0;
 }
 
-static int verify_runtime_security(
-    int security_fd, const sigset_t *start_signal
-)
+static int verify_runtime_security(void)
 {
     static const char zero_capability[] = "0000000000000000";
     char cap_inh[32] = "";
@@ -108,7 +84,6 @@ static int verify_runtime_security(
     char cap_eff[32] = "";
     char cap_bnd[32] = "";
     char cap_amb[32] = "";
-    char evidence[1024];
     gid_t supplementary_groups[32];
     uid_t ruid = (uid_t)-1;
     uid_t euid = (uid_t)-1;
@@ -124,7 +99,6 @@ static int verify_runtime_security(
     int no_new_privileges_prctl = -1;
     int setuid_root_denied;
     int setgid_root_denied;
-    int evidence_length;
     int verified;
 
     if (getresuid(&ruid, &euid, &suid) != 0 ||
@@ -164,32 +138,6 @@ static int verify_runtime_security(
         no_new_privileges == 1 && no_new_privileges_prctl == 1 &&
         setuid_root_denied && setgid_root_denied;
 
-    evidence_length = snprintf(
-            evidence, sizeof(evidence),
-            "status=%s ruid=%lu euid=%lu suid=%lu fsuid=%lu "
-            "rgid=%lu egid=%lu sgid=%lu fsgid=%lu "
-            "supplementary_group_count=%d supplementary_groups_allowed=%d "
-            "cap_inh=%s cap_prm=%s cap_eff=%s cap_bnd=%s cap_amb=%s "
-            "no_new_privileges=%d no_new_privileges_prctl=%d "
-            "setuid_root_denied=%d setgid_root_denied=%d\n",
-            verified ? "verified" : "failed",
-            (unsigned long)ruid, (unsigned long)euid, (unsigned long)suid,
-            fsuid,
-            (unsigned long)rgid, (unsigned long)egid, (unsigned long)sgid,
-            fsgid, supplementary_group_count, supplementary_groups_allowed,
-            cap_inh, cap_prm, cap_eff, cap_bnd, cap_amb,
-            no_new_privileges, no_new_privileges_prctl,
-            setuid_root_denied, setgid_root_denied
-        );
-    if (evidence_length <= 1 || (size_t)evidence_length >= sizeof(evidence) ||
-        write_all(security_fd, evidence, (size_t)evidence_length - 1) != 0 ||
-        fsync(security_fd) != 0 ||
-        drain_pending_start_signals(start_signal) != 0 ||
-        write_all(security_fd, "\n", 1) != 0 ||
-        fsync(security_fd) != 0 || close(security_fd) != 0) {
-        perror("codeguard-init security evidence");
-        return -1;
-    }
     return verified ? 0 : -1;
 }
 
@@ -197,11 +145,9 @@ int main(int argc, char **argv)
 {
     const char *stdin_path = NULL;
     char *end = NULL;
-    sigset_t start_signal;
     long parsed_security_fd;
     int security_fd = -1;
     int stdin_fd = -1;
-    int received_signal = 0;
     int index = 1;
     if (index + 1 >= argc || strcmp(argv[index], "--security-fd") != 0) {
         usage(argv[0]);
@@ -217,13 +163,6 @@ int main(int argc, char **argv)
     security_fd = (int)parsed_security_fd;
     index += 2;
 
-
-    if (sigemptyset(&start_signal) != 0 ||
-        sigaddset(&start_signal, SIGUSR1) != 0 ||
-        sigprocmask(SIG_BLOCK, &start_signal, NULL) != 0) {
-        perror("codeguard-init signal setup");
-        return 126;
-    }
 
     if (index < argc && strcmp(argv[index], "--stdin") == 0) {
         if (index + 1 >= argc) {
@@ -255,19 +194,25 @@ int main(int argc, char **argv)
         close(stdin_fd);
     }
 
-    if (verify_runtime_security(security_fd, &start_signal) != 0) {
+    if (verify_runtime_security() != 0) {
+        static const char failure[] = "SECURITY_VERIFICATION_FAILED\n";
+
+        if (write_all(security_fd, failure, sizeof(failure) - 1) != 0 ||
+            fsync(security_fd) != 0 || close(security_fd) != 0) {
+            perror("codeguard-init security failure status");
+            return 126;
+        }
         fprintf(stderr, "codeguard-init security verification failed\n");
         return 200;
     }
+    {
+        static const char success[] = "SECURITY_VERIFICATION_PASSED\n";
 
-    if (sigwait(&start_signal, &received_signal) != 0 ||
-        received_signal != SIGUSR1) {
-        fprintf(stderr, "codeguard-init start signal wait failed\n");
-        return 126;
-    }
-    if (sigprocmask(SIG_UNBLOCK, &start_signal, NULL) != 0) {
-        perror("codeguard-init signal unblock");
-        return 126;
+        if (write_all(security_fd, success, sizeof(success) - 1) != 0 ||
+            fsync(security_fd) != 0 || close(security_fd) != 0) {
+            perror("codeguard-init security success status");
+            return 126;
+        }
     }
 
     execv(argv[index], &argv[index]);
