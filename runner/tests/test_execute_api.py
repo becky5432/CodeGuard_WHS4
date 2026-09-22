@@ -303,6 +303,7 @@ class ExecuteApiTests(unittest.TestCase):
             run_id=ANY,
             timeout_ms=body["policy"]["timeout_ms"],
             output_limit_bytes=EXECUTION_OUTPUT_LIMIT_BYTES,
+            cpu_time_limit_ms=body["policy"]["cpu_time_limit_ms"],
         )
 
         self.execution_container.remove.assert_called_once_with(
