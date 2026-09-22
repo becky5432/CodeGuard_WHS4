@@ -44,6 +44,12 @@ class StageSummary(BaseModel):
     skipped: list[RunnerStage] = Field(default_factory=list)
     errors: dict[RunnerStage, list[StageError]] = Field(default_factory=dict)
 
+class CpuUsageSample(BaseModel):
+    """실행 중 수집한 CPU 사용량 그래프용 시간 구간 샘플"""
+
+    elapsed_ms: int = Field(ge=0)
+    interval_ms: int = Field(gt=0)
+    cpu_time_delta_ms: int = Field(ge=0)
 
 class ResourceUsage(BaseModel):
     wall_time_ms: int | None = None
@@ -54,6 +60,7 @@ class ResourceUsage(BaseModel):
     user_task_peak: int | None = None
     process_at_user_task_peak: int | None = None
     thread_at_user_task_peak: int | None = None
+    cpu_usage_samples: list[CpuUsageSample] | None = None
 
 
 class RunnerResponse(BaseModel):

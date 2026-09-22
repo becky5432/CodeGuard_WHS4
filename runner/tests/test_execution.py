@@ -570,6 +570,7 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
         cgroup_scope = None
         if cgroup_metrics is not None:
             cgroup_scope = MagicMock()
+            cgroup_scope.read_cpu_usage_usec.return_value = None
             cgroup_scope.snapshot.return_value = cgroup_metrics
 
         with (
