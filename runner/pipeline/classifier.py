@@ -45,6 +45,13 @@ def classify_execution(result) -> Classification:
             stage=RunnerStage.EXECUTE,
             error_message="PID 제한을 초과했습니다.",
         )
+    if result.cpu_time_limit_exceeded:
+        return Classification(
+            status=RunnerStatus.BLOCKED,
+            reason_code=RunnerReasonCode.CPU_TIME_LIMIT,
+            stage=RunnerStage.EXECUTE,
+            error_message="CPU 사용시간 제한을 초과했습니다.",
+        )
     if result.timed_out:
         return Classification(
             status=RunnerStatus.BLOCKED,
