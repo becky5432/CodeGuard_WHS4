@@ -652,6 +652,7 @@ def execute_program(
             system_error=system_error,
             timed_out=timed_out,
             output_limit_exceeded=output.exceeded.is_set(),
+            cpu_time_limit_exceeded=cpu_time_limit_exceeded,
             oom_killed=oom_killed,
             wall_time_ms=int((finished_at - start) * 1000),
             cpu_time_ms=cpu_time_ms,
