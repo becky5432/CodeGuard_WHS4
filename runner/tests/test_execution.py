@@ -771,6 +771,37 @@ class ExecutionTests(unittest.TestCase):
             ],
         )
 
+    @patch("runner.pipeline.execution.PidsLimitMonitor")
+    @patch("runner.pipeline.execution.ResourceMonitor")
+    def test_cpu_time_limit_requires_baseline(
+        self,
+        resource_monitor_class,
+        pids_monitor_class,
+    ) -> None:
+        container = MagicMock()
+        container.attach.return_value = []
+
+        resource_monitor_class.return_value.memory_peak_bytes = None
+        pids_monitor_class.return_value.pids_peak = None
+
+        cgroup_scope = MagicMock()
+        cgroup_scope.read_cpu_usage_usec.side_effect = [
+            10_000,
+            None,
+        ]
+
+        with self.assertRaises(ContainerExecutionError):
+            execute_program(
+                container=container,
+                job_id=uuid4(),
+                run_id=uuid4(),
+                timeout_ms=2000,
+                cgroup_scope=cgroup_scope,
+                cpu_time_limit_ms=100,
+            )
+
+        container.kill.assert_not_called()
+
     def test_timeout_kill_race_preserves_natural_exit(self) -> None:
         for exit_code, expected_reason in (
             (139, RunnerReasonCode.RUNTIME_ERROR),
