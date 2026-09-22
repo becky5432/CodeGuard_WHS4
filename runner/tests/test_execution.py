@@ -95,7 +95,7 @@ class ExecutionTests(unittest.TestCase):
             },
             detach=True,
             read_only=True,
-            network_mode="none",
+            network_mode=settings.execution_network,
             user="0:0",
             cap_drop=["ALL"],
             cap_add=["SYS_PTRACE", "SETUID", "SETGID"],
@@ -559,6 +559,49 @@ class ExecutionTests(unittest.TestCase):
                     classify_execution(result).reason_code,
                     expected_reason,
                 )
+    @patch(
+        "runner.pipeline.execution.detect_network_block",
+        return_value=True,
+    )
+    def test_execute_program_sets_network_blocked(
+        self,
+        detect_network_block_mock,
+    ) -> None:
+        self.container.attrs = {
+            "Config": {"User": "0:0"},
+            "HostConfig": {
+                "CapDrop": ["ALL"],
+                "CapAdd": ["SYS_PTRACE", "SETUID", "SETGID"],
+                "SecurityOpt": ["no-new-privileges=true"],
+            },
+            "Mounts": [{"Destination": "/workspace", "RW": False}],
+            "NetworkSettings": {
+                "Networks": {
+                    "test-net": {
+                        "IPAddress": "172.30.0.2",
+                    },
+                },
+            },
+            "State": {
+                "OOMKilled": False,
+            },
+        }
+
+        result = execute_program(
+            container=self.container,
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            timeout_ms=2000,
+        )
+
+        self.assertTrue(result.network_blocked)
+
+        detect_network_block_mock.assert_called_once()
+
+        self.assertEqual(
+            detect_network_block_mock.call_args.args[0],
+            "172.30.0.2",
+        )
 
 
 class ExecutionTimeoutRaceTests(unittest.TestCase):

@@ -72,6 +72,13 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(result.status, RunnerStatus.BLOCKED)
         self.assertEqual(result.reason_code, RunnerReasonCode.OUTPUT_LIMIT)
 
+    def test_network_block_is_blocked_network(self) -> None:
+        result = classify_execution(
+            ExecutionResult(0, "", "", network_blocked=True),
+        )
+        self.assertEqual(result.status, RunnerStatus.BLOCKED)
+        self.assertEqual(result.reason_code, RunnerReasonCode.NETWORK_BLOCKED)
+        self.assertEqual(result.stage.value, "EXECUTE")
 
     def test_sigsegv_exit_139_is_runtime_error(self) -> None:
         result = classify_execution(ExecutionResult(139, "", ""))

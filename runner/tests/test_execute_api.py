@@ -764,6 +764,41 @@ class ExecuteApiTests(unittest.TestCase):
             payload["exit_code"],
             1,
         )
+    def test_execute_returns_network_blocked(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
+            success=True,
+            stdout="",
+            stderr="",
+            exit_code=0,
+            artifact_ready=True,
+        )
+
+        self.execute_program_mock.return_value = ExecutionResult(
+            exit_code=0,
+            stdout="",
+            stderr="",
+            network_blocked=True,
+        )
+
+        payload = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        ).json()
+
+        self.assertEqual(
+            payload["status"],
+            "BLOCKED",
+        )
+
+        self.assertEqual(
+            payload["reason_code"],
+            "NETWORK_BLOCKED",
+        )
+
+        self.assertEqual(
+            payload["stage_summary"]["failed"],
+            ["EXECUTE"],
+        )
 
 
 if __name__ == "__main__":
