@@ -12,6 +12,7 @@ import unittest
 from uuid import uuid4
 
 from runner.config import settings
+from runner.metrics.cgroup_scope import ExecutionCgroupScope, validate_docker_cgroup_driver
 from runner.models.result import RunnerReasonCode, RunnerStage, RunnerStatus
 from runner.pipeline.classifier import classify_execution
 from runner.pipeline.compiler import (
@@ -67,6 +68,11 @@ class FilesystemIntegrationTests(unittest.TestCase):
         self.assertTrue(compile_mount["RW"])
 
         run_id = uuid4()
+        cgroup_scope = ExecutionCgroupScope.create(
+            root=settings.execution_cgroup_root,
+            run_id=run_id,
+            driver=validate_docker_cgroup_driver(self.client),
+        )
         container = create_execution_container(
             client=self.client,
             workspace=self.workspace,
@@ -76,6 +82,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
             memory_limit_mb=memory_limit_mb,
             cpu_bandwidth=1.0,
             pids_limit=pids_limit,
+            cgroup_scope=cgroup_scope,
         )
         self.addCleanup(container.remove, force=True, v=True)
         container.reload()
@@ -101,6 +108,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
         result = execute_program(
             container, self.workspace.job_id, run_id, timeout_ms=timeout_ms,
             output_limit_bytes=output_limit_bytes,
+            cgroup_scope=cgroup_scope,
         )
         if not allow_system_error:
             self.assertIsNone(result.system_error, result.system_error)

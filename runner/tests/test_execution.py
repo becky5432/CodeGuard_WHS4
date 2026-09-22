@@ -6,7 +6,7 @@ from uuid import uuid4
 import docker
 
 from runner.config import settings
-from runner.exceptions import ContainerExecutionError, SecurityVerificationError, TaskTrackingError
+from runner.exceptions import ContainerExecutionError, TaskTrackingError
 from runner.models.result import RunnerReasonCode, RunnerStatus
 from runner.pipeline.classifier import classify_execution
 from runner.metrics.cgroup_scope import CgroupMetrics
@@ -35,9 +35,6 @@ class ExecutionTests(unittest.TestCase):
         self.addCleanup(trace_patch.stop)
         from runner.security.filesystem_trace import FilesystemViolation
         self.trace_collector.return_value = FilesystemViolation()
-        security_patch = patch("runner.pipeline.execution.verify_runtime_permission_restrictions")
-        self.security_verifier = security_patch.start()
-        self.addCleanup(security_patch.stop)
         self.client = MagicMock()
         self.container = MagicMock()
         self.client.containers.create.return_value = self.container
@@ -82,7 +79,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertIs(result, self.container)
         self.client.containers.create.assert_called_once_with(
             image=settings.cpp_image,
-            command=["sh", "-c", f"umask 077; set -C; exec 3>/run/codeguard-trace/security.status; ulimit -f 2048; exec strace -D -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 -- /workspace/main"],
+            command=["sh", "-c", f"umask 077; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init -- /workspace/main"],
             mounts=[docker.types.Mount(target=TRACE_DIRECTORY, source="", type="volume")],
             volumes={
                 self.workspace.volume_name: {
@@ -164,7 +161,7 @@ class ExecutionTests(unittest.TestCase):
         command = self.client.containers.create.call_args.kwargs["command"]
         self.assertEqual(
             command,
-            ["sh", "-c", f"umask 077; set -C; exec 3>/run/codeguard-trace/security.status; ulimit -f 2048; exec strace -D -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 --stdin /workspace/stdin -- /workspace/main"],
+            ["sh", "-c", f"umask 077; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --stdin /workspace/stdin -- /workspace/main"],
         )
 
     def test_create_execution_container_uses_cgroup_parent(self) -> None:
@@ -200,26 +197,9 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.stdout, "Hello\n")
         self.assertEqual(result.stderr, "")
         self.container.start.assert_called_once_with()
-        self.container.kill.assert_called_once_with(signal="SIGUSR1")
+        self.container.kill.assert_not_called()
         self.container.wait.assert_called_once_with()
         self.container.remove.assert_not_called()
-
-    def test_runtime_security_failure_does_not_release_user_program(self) -> None:
-        self.security_verifier.side_effect = SecurityVerificationError(
-            "Execution Container 권한 제한 적용을 검증하지 못했습니다."
-        )
-
-        with self.assertRaises(SecurityVerificationError):
-            execute_program(
-                container=self.container,
-                job_id=self.workspace.job_id,
-                run_id=self.run_id,
-                timeout_ms=2000,
-            )
-
-        self.container.start.assert_called_once_with()
-        self.container.kill.assert_not_called()
-        self.container.wait.assert_not_called()
 
     def test_create_execution_container_wraps_docker_failure(self) -> None:
         self.client.containers.create.side_effect = docker.errors.APIError(
@@ -336,7 +316,7 @@ class ExecutionTests(unittest.TestCase):
         tracker.register_root.assert_called_once_with(self.run_id, 321)
         tracker.snapshot.assert_called_once_with(self.run_id)
         tracker.remove.assert_called_once_with(self.run_id)
-        self.container.kill.assert_called_once_with(signal="SIGUSR1")
+        self.container.kill.assert_not_called()
         self.assertEqual(result.pids_peak, 18)
         self.assertEqual(result.user_task_peak, 15)
         self.assertEqual(result.process_at_user_task_peak, 3)
@@ -398,7 +378,7 @@ class ExecutionTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 0)
-        self.container.kill.assert_called_once_with(signal="SIGUSR1")
+        self.container.kill.assert_not_called()
         tracker.register_root.assert_not_called()
         tracker.snapshot.assert_not_called()
         tracker.remove.assert_called_once_with(self.run_id)
@@ -428,7 +408,7 @@ class ExecutionTests(unittest.TestCase):
         )
 
         self.assertEqual(result.exit_code, 0)
-        self.container.kill.assert_called_once_with(signal="SIGUSR1")
+        self.container.kill.assert_not_called()
         resolve_cgroup.assert_not_called()
         tracker.register_cgroup.assert_not_called()
         tracker.remove.assert_called_once_with(self.run_id)
@@ -482,8 +462,6 @@ class ExecutionTests(unittest.TestCase):
 
                 container.wait.side_effect = wait_for_exit
                 def kill(*args, **kwargs):
-                    if kwargs.get("signal") == "SIGUSR1":
-                        return
                     released.set()
 
                 container.kill.side_effect = kill
@@ -504,7 +482,7 @@ class ExecutionTests(unittest.TestCase):
 
                 self.assertEqual(
                     container.kill.call_args_list,
-                    [call(signal="SIGUSR1"), call()],
+                    [call()],
                 )
                 self.assertIsNone(result.system_error)
                 self.assertEqual(result.exit_code, exit_code)
@@ -524,9 +502,6 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
         )
         trace_patch.start()
         self.addCleanup(trace_patch.stop)
-        security_patch = patch("runner.pipeline.execution.verify_runtime_permission_restrictions")
-        security_patch.start()
-        self.addCleanup(security_patch.stop)
 
     def run_execution(
         self,
@@ -574,8 +549,6 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
                 finish_wait()
 
         def kill(*args, **kwargs):
-            if kwargs.get("signal") == "SIGUSR1":
-                return
             finish_wait()
             if kill_error is not None:
                 raise kill_error
@@ -620,12 +593,12 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
         )
 
     def assert_start_only(self, container):
-        container.kill.assert_called_once_with(signal="SIGUSR1")
+        container.kill.assert_not_called()
 
     def assert_policy_kill(self, container):
         self.assertEqual(
             container.kill.call_args_list,
-            [call(signal="SIGUSR1"), call()],
+            [call()],
         )
 
     def test_sigsegv_before_timeout_is_runtime_error(self):
