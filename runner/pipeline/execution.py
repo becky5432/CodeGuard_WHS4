@@ -10,6 +10,7 @@ import docker
 from runner.config import settings
 from runner.exceptions import (
     ContainerExecutionError,
+    SecurityVerificationError,
     RunnerError,
     TaskTrackingError,
 )
@@ -33,6 +34,10 @@ from runner.security import (
     SECURITY_OPT,
     SECURITY_UID,
     verify_container_security_config,
+)
+from runner.security.runtime_verification import (
+    SECURITY_STATUS_PATH,
+    collect_runtime_permission_failure,
 )
 from runner.security.filesystem_trace import (
     TRACE_DIRECTORY, TRACE_PATH, TRACE_SYSCALLS, RAW_WRITE_SYSCALLS,
@@ -146,11 +151,12 @@ def create_execution_container(
     # Keep strace as container PID 1 so Docker wait observes the tracer only after
     # it has followed codeguard-init/user exit and completed the trace footer.
     trace_command = (
-        f"umask 077; ulimit -f 2048; "
+        f"umask 077; set -C; exec 3>{SECURITY_STATUS_PATH}; ulimit -f 2048; "
         f"exec strace -f -q -yy -s 4096 "
         f"-u codeguard "
         f"-o {TRACE_PATH} -e trace={TRACE_SYSCALLS} "
-        f"-e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init"
+        f"-e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init "
+        f"--security-fd 3"
     )
     if stdin:
         trace_command += " --stdin /workspace/stdin"
@@ -548,6 +554,11 @@ def execute_program(
         finished_at = wait_state.get("finished_at")
         if not isinstance(finished_at, float):
             finished_at = time.monotonic()
+        if collect_runtime_permission_failure(container):
+            raise SecurityVerificationError(
+                "Execution Container 권한 제한 적용을 검증하지 못했습니다."
+            )
+
         filesystem_violation = FilesystemViolation()
         if system_error is None:
             try:

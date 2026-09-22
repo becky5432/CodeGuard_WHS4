@@ -48,9 +48,10 @@ Task의 측정 오류가 사용자 코드 계보의 Snapshot을 무효화하지 
 ## 3. 측정 흐름
 
 1. Execution Container의 PID 1인 `strace`가 `codeguard-init`과 사용자 프로그램을 추적한다.
-2. `codeguard-init`은 별도 승인 signal이나 자식 프로세스 없이 기존 사용자 프로그램을 `exec`한다.
-3. `strace`는 사용자 프로그램 종료와 trace footer 기록을 마친 뒤 종료한다.
-4. Runner는 Execution cgroup과 Root TID를 native tracker에 등록하고 종료 후 Snapshot을 회수한다.
+2. `codeguard-init`은 별도 승인 signal이나 자식 프로세스 없이 runtime permission을 검사한다.
+3. 검증 성공 시 보호된 고정 PASS 토큰을 기록하고 FD를 닫은 뒤 사용자 프로그램을 `exec`한다. 검증 실패 시 FAIL 토큰을 기록하고 사용자 프로그램을 실행하지 않는다.
+4. `strace`는 사용자 프로그램 종료와 trace footer 기록을 마친 뒤 종료한다.
+5. Runner는 Execution cgroup과 Root TID를 native tracker에 등록하고 종료 후 Snapshot을 회수한다.
 
 `codeguard-init`은 사용자 프로그램 직전의 작은 trusted entrypoint로 유지한다.
 filesystem tracer의 종료 lifecycle과 별도의 실행 승인 gate를 만들지 않는다.
