@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     volume_name_prefix: str = "codeguard-job-"
     cpp_image: str = "codeguard-cpp:dev"
+    execution_network: str = "bridge"
     execution_cgroup_enabled: bool = True
     execution_cgroup_root: Path = Path("/sys/fs/cgroup/codeguard")
     task_tracker_enabled: bool = True

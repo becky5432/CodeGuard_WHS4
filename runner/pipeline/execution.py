@@ -14,6 +14,7 @@ from runner.exceptions import (
     RunnerError,
     TaskTrackingError,
 )
+from runner.metrics.network_detector import detect_network_block
 from runner.metrics.cgroup_scope import CgroupMetrics, ExecutionCgroupScope
 from runner.metrics.resource_monitor import ResourceMonitor
 from runner.metrics.pids_monitor import PidsLimitMonitor
@@ -77,6 +78,7 @@ class ExecutionResult:
     filesystem_violation_syscall: str | None = None
     filesystem_violation_path: str | None = None
     cpu_usage_samples: list[CpuUsageSample] | None = None
+    network_blocked: bool = False
 
 
 class _BoundedOutput:
@@ -182,8 +184,8 @@ def create_execution_container(
         },
         "detach": True,
         "read_only": True,
-      
-        "network_mode": "none",
+        
+        "network_mode": settings.execution_network,
         "user": "0:0",
         "cap_drop": list(EXECUTION_CAP_DROP),
         "cap_add": list(TRACER_CAP_ADD),
@@ -255,6 +257,7 @@ def execute_program(
     """제한을 감시하며 실행 컨테이너의 종료 정보와 출력을 수집한다."""
 
     start = time.monotonic()
+    network_start = time.time()
     output = _BoundedOutput(output_limit_bytes)
     monitor = ResourceMonitor(container)
     pids_monitor = PidsLimitMonitor(container)
@@ -273,6 +276,8 @@ def execute_program(
     task_metrics: PidsPeakSnapshot | None = None
     cpu_start_usec: int | None = None
     cpu_sampler: CpuUsageSampler | None = None
+    container_ip = None
+    network_blocked = False
 
     def wait_for_container() -> None:
         try:
@@ -313,6 +318,18 @@ def execute_program(
 
             start = time.monotonic()
             container.start()
+
+            container.reload()
+
+            networks = container.attrs.get(
+                "NetworkSettings", {}
+            ).get("Networks", {})
+
+            for network in networks.values():
+                ip = network.get("IPAddress")
+                if ip:
+                    container_ip = ip
+                    break
 
             if task_tracker is not None:
                 try:
@@ -615,6 +632,13 @@ def execute_program(
                     "event=filesystem_trace_error job_id=%s run_id=%s error=%s",
                     job_id, run_id, exc,
                 )
+
+        if container_ip:
+            network_blocked = detect_network_block(
+                container_ip,
+                network_start,
+            )
+
         return ExecutionResult(
             exit_code=exit_code,
             stdout=stdout,
@@ -639,6 +663,7 @@ def execute_program(
             filesystem_limit_exceeded=filesystem_violation.detected,
             filesystem_violation_syscall=filesystem_violation.syscall,
             filesystem_violation_path=filesystem_violation.path,
+            network_blocked=network_blocked,
         )
     except docker.errors.DockerException as exc:
         logger.error(
@@ -655,6 +680,7 @@ def execute_program(
             wall_time_ms=int((time.monotonic() - start) * 1000),
             memory_peak_bytes=monitor.memory_peak_bytes,
             pids_peak=pids_monitor.pids_peak,
+            network_blocked=network_blocked,
         )
     finally:
         if task_tracker is not None:

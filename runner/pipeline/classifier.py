@@ -17,7 +17,13 @@ class Classification:
 
 def classify_execution(result) -> Classification:
     """Execution 증거를 우선순위에 따라 대표 결과 하나로 변환한다."""
-
+    if result.network_blocked:
+        return Classification(
+            status=RunnerStatus.BLOCKED,
+            reason_code=RunnerReasonCode.NETWORK_BLOCKED,
+            stage=RunnerStage.EXECUTE,
+            error_message="네트워크 접근이 차단되었습니다.",
+        )
     if result.system_error:
         return Classification(
             status=RunnerStatus.ERROR,
