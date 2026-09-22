@@ -56,6 +56,15 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(result.status, RunnerStatus.BLOCKED)
         self.assertEqual(result.reason_code, RunnerReasonCode.TIME_LIMIT)
 
+    def test_cpu_time_limit_is_blocked_cpu_time_limit(self) -> None:
+        result = classify_execution(
+            ExecutionResult(137, "", "", cpu_time_limit_exceeded=True),
+        )
+
+        self.assertEqual(result.status, RunnerStatus.BLOCKED)
+        self.assertEqual(result.reason_code, RunnerReasonCode.CPU_TIME_LIMIT)
+        self.assertEqual(result.stage.value, "EXECUTE")
+
     def test_oom_kill_is_blocked_memory_limit(self) -> None:
         result = classify_execution(
             ExecutionResult(137, "", "", oom_killed=True),
