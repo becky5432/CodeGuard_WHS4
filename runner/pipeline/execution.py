@@ -437,6 +437,10 @@ def execute_program(
                     container.kill()
                     if timeout_reached:
                         timeout_kill_requested = True
+
+                    if cpu_time_limit_reached:
+                        cpu_time_kill_requested = True 
+                    
                 except docker.errors.DockerException as exc:
                     logger.warning(
                         "event=execution_container_kill_error "
@@ -468,7 +472,7 @@ def execute_program(
                     )
             pids_monitor.sample()
 
-        final_policy_kill = timeout_reached or output.exceeded.is_set() or pids_limit_exceeded
+        final_policy_kill = timeout_reached or output.exceeded.is_set() or pids_limit_exceeded or cpu_time_limit_reached
         if not output_thread_stopped:
             system_error = "실행 출력 수집기를 종료하지 못했습니다."
             logger.error(
