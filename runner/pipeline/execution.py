@@ -11,6 +11,7 @@ from runner.exceptions import ContainerExecutionError
 from runner.metrics.cgroup_scope import CgroupMetrics, ExecutionCgroupScope
 from runner.metrics.resource_monitor import ResourceMonitor
 from runner.metrics.pids_monitor import PidsLimitMonitor
+from runner.metrics.network_detector import detect_network_block
 from runner.pipeline.workspace import VolumeWorkspace
 from runner.policies import EXECUTION_OUTPUT_LIMIT_BYTES
 
@@ -36,6 +37,7 @@ class ExecutionResult:
     memory_peak_bytes: int | None = None
     pids_peak: int | None = None
     pids_limit_exceeded: bool = False
+    network_blocked: bool = False
 
 
 class _BoundedOutput:
@@ -179,6 +181,7 @@ def execute_program(
     """제한을 감시하며 실행 컨테이너의 종료 정보와 출력을 수집한다."""
 
     start = time.monotonic()
+    network_start = time.time()
     output = _BoundedOutput(output_limit_bytes)
     monitor = ResourceMonitor(container)
     pids_monitor = PidsLimitMonitor(container)
@@ -191,6 +194,8 @@ def execute_program(
     output_thread = None
     monitor_started = False
     output_thread_stopped = True
+    container_ip = None
+    network_blocked = False
 
     def wait_for_container() -> None:
         try:
@@ -217,6 +222,18 @@ def execute_program(
         try:
             start = time.monotonic()
             container.start()
+
+            container.reload()
+
+            networks = container.attrs.get(
+                "NetworkSettings", {}
+            ).get("Networks", {})
+
+            for network in networks.values():
+                ip = network.get("IPAddress")
+                if ip:
+                    container_ip = ip
+                    break
 
             pids_monitor.start()
 
@@ -400,6 +417,13 @@ def execute_program(
         finished_at = wait_state.get("finished_at")
         if not isinstance(finished_at, float):
             finished_at = time.monotonic()
+
+        if container_ip:
+            network_blocked = detect_network_block(
+                container_ip,
+                network_start,
+            )
+
         return ExecutionResult(
             exit_code=exit_code,
             stdout=stdout,
@@ -412,6 +436,7 @@ def execute_program(
             memory_peak_bytes=memory_peak_bytes,
             pids_peak=pids_peak,
             pids_limit_exceeded=pids_limit_exceeded,
+            network_blocked=network_blocked,
         )
     except docker.errors.DockerException as exc:
         logger.error(
