@@ -270,7 +270,6 @@ def execute_program(
     timeout_kill_requested = False
     cpu_time_limit_reached = False
     cpu_time_kill_requested = False
-    cpu_time_measurement_failed = False
     pids_limit_exceeded = False
     system_error = None
     output_thread = None
@@ -438,7 +437,17 @@ def execute_program(
                     and cgroup_scope is not None
                     and cpu_start_usec is not None
                 ):
-                    current_cpu_usec = cgroup_scope.read_cpu_usage_usec()
+                    try:
+                        current_cpu_usec = cgroup_scope.read_cpu_usage_usec()
+                    except Exception as exc:
+                        logger.warning(
+                            "event=execution_cpu_time_measurement_error "
+                            "job_id=%s run_id=%s error=%s",
+                            job_id,
+                            run_id,
+                            exc,
+                        )
+                        current_cpu_usec = None
 
                     if current_cpu_usec is not None:
                         cpu_time_used_usec = max(
