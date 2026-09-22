@@ -11,6 +11,7 @@ from runner.pipeline.execution import (
     execute_program,
 )
 from runner.pipeline.workspace import VolumeWorkspace
+from runner.config import settings
 
 
 class ExecutionTests(unittest.TestCase):
@@ -49,7 +50,7 @@ class ExecutionTests(unittest.TestCase):
                 }
             },
             detach=True,
-            network_mode="none",
+            network_mode=settings.execution_network,
             user="10001:10001",
             cap_drop=["ALL"],
             security_opt=["no-new-privileges=true"],
@@ -177,7 +178,43 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.memory_peak_bytes, 16 * 1024 * 1024)
         self.assertEqual(result.pids_peak, 18)
         cgroup_scope.snapshot.assert_called_once_with()
+        
+    @patch(
+        "runner.pipeline.execution.detect_network_block",
+        return_value=True,
+    )
+    def test_execute_program_sets_network_blocked(
+        self,
+        detect_network_block_mock,
+    ) -> None:
+        self.container.attrs = {
+            "NetworkSettings": {
+                "Networks": {
+                    "codeguard-net": {
+                        "IPAddress": "172.30.0.2",
+                    },
+                },
+            },
+            "State": {
+                "OOMKilled": False,
+            },
+        }
 
+        result = execute_program(
+            container=self.container,
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            timeout_ms=2000,
+        )
+
+        self.assertTrue(result.network_blocked)
+
+        detect_network_block_mock.assert_called_once()
+
+        self.assertEqual(
+            detect_network_block_mock.call_args.args[0],
+            "172.30.0.2",
+        )
 
 if __name__ == "__main__":
     unittest.main()
