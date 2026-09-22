@@ -35,6 +35,12 @@ class ExecutionTests(unittest.TestCase):
         self.addCleanup(trace_patch.stop)
         from runner.security.filesystem_trace import FilesystemViolation
         self.trace_collector.return_value = FilesystemViolation()
+        security_patch = patch(
+            "runner.pipeline.execution.collect_runtime_permission_failure",
+            return_value=False,
+        )
+        self.security_collector = security_patch.start()
+        self.addCleanup(security_patch.stop)
         self.client = MagicMock()
         self.container = MagicMock()
         self.client.containers.create.return_value = self.container
@@ -79,7 +85,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertIs(result, self.container)
         self.client.containers.create.assert_called_once_with(
             image=settings.cpp_image,
-            command=["sh", "-c", f"umask 077; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init -- /workspace/main"],
+            command=["sh", "-c", f"umask 077; set -C; exec 3>/run/codeguard-trace/security.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 -- /workspace/main"],
             mounts=[docker.types.Mount(target=TRACE_DIRECTORY, source="", type="volume")],
             volumes={
                 self.workspace.volume_name: {
@@ -161,7 +167,7 @@ class ExecutionTests(unittest.TestCase):
         command = self.client.containers.create.call_args.kwargs["command"]
         self.assertEqual(
             command,
-            ["sh", "-c", f"umask 077; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --stdin /workspace/stdin -- /workspace/main"],
+            ["sh", "-c", f"umask 077; set -C; exec 3>/run/codeguard-trace/security.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 --stdin /workspace/stdin -- /workspace/main"],
         )
 
     def test_create_execution_container_uses_cgroup_parent(self) -> None:
@@ -502,6 +508,12 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
         )
         trace_patch.start()
         self.addCleanup(trace_patch.stop)
+        security_patch = patch(
+            "runner.pipeline.execution.collect_runtime_permission_failure",
+            return_value=False,
+        )
+        security_patch.start()
+        self.addCleanup(security_patch.stop)
 
     def run_execution(
         self,
