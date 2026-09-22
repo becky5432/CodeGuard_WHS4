@@ -93,6 +93,8 @@ class ClassifierTests(unittest.TestCase):
              RunnerStatus.BLOCKED, RunnerReasonCode.MEMORY_LIMIT),
             ({"pids_limit_exceeded": True},
              RunnerStatus.BLOCKED, RunnerReasonCode.PIDS_LIMIT),
+            ({"cpu_time_limit_exceeded": True},
+             RunnerStatus.BLOCKED, RunnerReasonCode.CPU_TIME_LIMIT),
             ({}, RunnerStatus.BLOCKED, RunnerReasonCode.TIME_LIMIT),
         )
         for evidence, status, reason in cases:
@@ -113,6 +115,7 @@ class ClassifierTests(unittest.TestCase):
             ({"system_error": "trace failed"}, RunnerReasonCode.INTERNAL_ERROR),
             ({"oom_killed": True}, RunnerReasonCode.MEMORY_LIMIT),
             ({"pids_limit_exceeded": True}, RunnerReasonCode.PIDS_LIMIT),
+            ({"cpu_time_limit_exceeded": True}, RunnerReasonCode.CPU_TIME_LIMIT),
             ({"timed_out": True}, RunnerReasonCode.TIME_LIMIT),
             ({"output_limit_exceeded": True}, RunnerReasonCode.OUTPUT_LIMIT),
         ):
