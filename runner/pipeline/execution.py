@@ -251,6 +251,7 @@ def execute_program(
     output_limit_bytes: int = EXECUTION_OUTPUT_LIMIT_BYTES,
     cgroup_scope: ExecutionCgroupScope | None = None,
     task_tracker: TaskTrackerClient | None = None,
+    cpu_time_limit_ms: int | None = None,
 ) -> ExecutionResult:
     """제한을 감시하며 실행 컨테이너의 종료 정보와 출력을 수집한다."""
 
