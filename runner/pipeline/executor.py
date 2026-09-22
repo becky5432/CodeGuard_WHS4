@@ -3,17 +3,21 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from runner.config import settings
-from runner.exceptions import RunnerError, WorkspaceError
+from runner.exceptions import (
+    RunnerError,
+    SecurityVerificationError,
+    WorkspaceError,
+)
 from runner.metrics.cgroup_scope import (
     ExecutionCgroupScope,
     validate_docker_cgroup_driver,
 )
+from runner.metrics.task_tracker import TaskTrackerClient
 from runner.models.job import RunnerRequest
 from runner.models.result import (
     RunnerReasonCode,
     RunnerResponse,
     ResourceUsage,
-    SecurityContext,
     RunnerStage,
     RunnerStatus,
     StageError,
@@ -25,14 +29,7 @@ from runner.pipeline.compiler import (
     create_compile_container,
     get_docker_client,
 )
-from runner.pipeline.execution import (
-    EXECUTION_CAP_DROP,
-    EXECUTION_GID,
-    EXECUTION_NO_NEW_PRIVILEGES,
-    EXECUTION_UID,
-    create_execution_container,
-    execute_program,
-)
+from runner.pipeline.execution import create_execution_container, execute_program
 from runner.pipeline.workspace import create_workspace, remove_workspace
 
 
@@ -76,7 +73,10 @@ def _remove_container(container, stage: str, job_id, run_id) -> bool:
         return True
 
     try:
-        container.remove(force=True)
+        if stage == "execute":
+            container.remove(force=True, v=True)
+        else:
+            container.remove(force=True)
         return True
     except Exception as exc:
         logger.error(
@@ -104,6 +104,11 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
     current_stage = RunnerStage.WORKSPACE
     stage_summary = StageSummary()
     cleanup_failed = False
+    task_tracker = (
+        TaskTrackerClient.from_settings(settings)
+        if settings.task_tracker_enabled
+        else None
+    )
 
     try:
         client = get_docker_client()
@@ -215,7 +220,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 "job_id": job.job_id,
                 "run_id": run_id,
                 "memory_limit_mb": job.policy.memory_limit_mb,
-                "cpu_limit": job.policy.cpu_limit,
+                "cpu_bandwidth": job.policy.cpu_bandwidth,
                 "pids_limit": job.policy.pids_limit,
             }
             if execution_cgroup_scope is not None:
@@ -236,6 +241,8 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             }
             if execution_cgroup_scope is not None:
                 execute_options["cgroup_scope"] = execution_cgroup_scope
+            if task_tracker is not None:
+                execute_options["task_tracker"] = task_tracker
 
             execution_result = execute_program(**execute_options)
 
@@ -271,6 +278,8 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 compile_log=compile_log,
                 resource_usage=ResourceUsage(
                     wall_time_ms=execution_result.wall_time_ms,
+                    cpu_time_ms=execution_result.cpu_time_ms,
+                    cpu_usage_samples=execution_result.cpu_usage_samples,
                     memory_peak_bytes=(
                         execution_result.memory_peak_bytes
                     ),
@@ -279,13 +288,13 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                         len(execution_result.stdout.encode("utf-8"))
                         + len(execution_result.stderr.encode("utf-8"))
                     ),
-                ),
-                security_context=SecurityContext(
-                    non_root=EXECUTION_UID != 0,
-                    uid=EXECUTION_UID,
-                    gid=EXECUTION_GID,
-                    cap_drop=list(EXECUTION_CAP_DROP),
-                    no_new_privileges=EXECUTION_NO_NEW_PRIVILEGES,
+                    user_task_peak=execution_result.user_task_peak,
+                    process_at_user_task_peak=(
+                        execution_result.process_at_user_task_peak
+                    ),
+                    thread_at_user_task_peak=(
+                        execution_result.thread_at_user_task_peak
+                    ),
                 ),
             )
 
@@ -295,6 +304,11 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             RunnerStage.WORKSPACE
             if isinstance(exc, WorkspaceError)
             else current_stage
+        )
+        failure_reason = (
+            RunnerReasonCode.SECURITY_VERIFICATION_FAILED
+            if isinstance(exc, SecurityVerificationError)
+            else RunnerReasonCode.INTERNAL_ERROR
         )
 
         logger.error(
@@ -310,7 +324,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
         _mark_failed(
             stage_summary,
             error_stage,
-            RunnerReasonCode.INTERNAL_ERROR,
+            failure_reason,
             exc.message,
         )
         if error_stage == RunnerStage.WORKSPACE:
@@ -322,7 +336,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             job_id=job.job_id,
             run_id=run_id,
             status=RunnerStatus.ERROR,
-            reason_code=RunnerReasonCode.INTERNAL_ERROR,
+            reason_code=failure_reason,
             error_message=exc.message,
             compile_log=compile_log,
         )

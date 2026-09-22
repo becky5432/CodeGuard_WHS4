@@ -7,10 +7,21 @@ from runner.config import settings
 from runner.exceptions import (
     ContainerExecutionError,
     DockerUnavailableError,
+    RunnerError,
     WorkspaceError,
 )
 from runner.pipeline.workspace import VolumeWorkspace, build_source_archive
 from runner.policies import COMPILE_TIMEOUT_SECONDS
+from runner.security import (
+    SECURITY_CAP_DROP,
+    SECURITY_GID,
+    SECURITY_OPT,
+    SECURITY_PREFLIGHT_PATH,
+    SECURITY_UID,
+    parse_security_preflight,
+    security_environment,
+    verify_container_security_config,
+)
 
 
 @dataclass
@@ -92,9 +103,10 @@ def create_compile_container(
     source_filename = config["source_filename"]
 
     try:
-        return client.containers.create(
+        container = client.containers.create(
             image=settings.cpp_image,
             command=[
+                SECURITY_PREFLIGHT_PATH,
                 config["compiler"],
                 config["standard"],
                 *COMMON_COMPILE_FLAGS,
@@ -109,13 +121,30 @@ def create_compile_container(
                 }
             },
             detach=True,
-            network_mode = "none",
+            network_mode="none",
+            user=f"{SECURITY_UID}:{SECURITY_GID}",
+            cap_drop=list(SECURITY_CAP_DROP),
+            security_opt=[SECURITY_OPT],
+            environment=security_environment(),
             labels={
                 "codeguard.managed": "true",
                 "codeguard.job_id": str(workspace.job_id),
                 "codeguard.stage": "compile",
             },
         )
+        try:
+            verify_container_security_config(
+                container,
+                stage="compile",
+                workspace_mode="rw",
+            )
+        except RunnerError:
+            try:
+                container.remove(force=True)
+            except docker.errors.DockerException:
+                pass
+            raise
+        return container
     except docker.errors.ImageNotFound as exc:
         raise ContainerExecutionError(
             "컴파일용 Docker 이미지를 찾을 수 없습니다.",
@@ -189,6 +218,7 @@ def compile_source(
         stderr_bytes = container.logs(stdout=False, stderr=True)
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
+        stderr = parse_security_preflight(stderr, stage="compile")
 
         artifact_ready = exit_code == 0 and _artifact_exists(container)
 

@@ -38,6 +38,13 @@ class ContainerExecutionError(RunnerError):
     status_code = 500
 
 
+class SecurityVerificationError(RunnerError):
+    """컨테이너 보안 제한의 설정 또는 실제 적용 검증 실패."""
+
+    error_code = "SECURITY_VERIFICATION_ERROR"
+    status_code = 500
+
+
 class CleanupError(RunnerError):
     """컨테이너 또는 작업공간 정리에 실패한 경우."""
 
@@ -50,3 +57,7 @@ class CgroupScopeError(RunnerError):
 
     error_code = "CGROUP_SCOPE_ERROR"
     status_code = 500
+
+
+class TaskTrackingError(Exception):
+    """사용자 Task 분리 측정의 등록·조회·정리 실패."""

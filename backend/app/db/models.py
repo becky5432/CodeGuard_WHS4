@@ -24,7 +24,8 @@ class Execution(Base):
     timeout_ms = Column(Integer)                               # 최대 실행 시간(ms)
     memory_limit_mb = Column(Integer)                          # 최대 메모리(MB)
     pids_limit = Column(Integer)                               # 최대 프로세스·스레드 수
-    cpu_limit = Column(Float)                                  # CPU 자원 할당 한도
+    cpu_bandwidth = Column(Float)                              # CPU 할당 한도(대역폭)
+    cpu_time_limit_ms = Column(Integer)                        # 최대 CPU 시간(ms)
     output_limit_bytes= Column(Integer)                        # 최대 출력 크기(bytes)
 
     # --- Runner 결과 수신 후 갱신 ---
@@ -40,7 +41,8 @@ class Execution(Base):
 
     # --- 자원 사용량 (제한값 대비 비교용) ---
     wall_time_ms = Column(Integer)                             # 전체 실행 시간 ↔ timeout_ms
-    cpu_time_ms = Column(Integer)                              # CPU 누적 사용 시간 (제한 없음, 참고 지표)
+    cpu_time_ms = Column(Integer)                              # CPU 누적 사용 시간 (참고 지표)
+    cpu_usage_samples = Column(JSON, nullable=True)            # 구간별 CPU 사용량 샘플(없을 수 있음)
     memory_peak_bytes = Column(Integer)                        # 최대 메모리 ↔ memory_limit_mb
     pids_peak = Column(Integer)                                # 최대 프로세스·스레드 수 ↔ pids_limit
     output_bytes = Column(Integer)                             # 출력 크기 ↔ output_limit_bytes

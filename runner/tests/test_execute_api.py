@@ -6,10 +6,21 @@ from uuid import UUID, uuid4
 from fastapi.testclient import TestClient
 
 from runner.config import Settings
-from runner.exceptions import CleanupError, ContainerExecutionError
+from runner.exceptions import (
+    CleanupError,
+    ContainerExecutionError,
+    RunnerError,
+    TaskTrackingError,
+    SecurityVerificationError,
+)
 from runner.main import app
 from runner.models.job import PolicyLimits, RunnerLanguage, RunnerRequest
-from runner.models.result import RunnerReasonCode, RunnerStatus
+from runner.models.result import (
+    CpuUsageSample,
+    ResourceUsage,
+    RunnerReasonCode,
+    RunnerStatus,
+)
 from runner.pipeline.compiler import CompileResult
 from runner.pipeline.execution import ExecutionResult
 from runner.pipeline.workspace import VolumeWorkspace
@@ -28,7 +39,6 @@ class ExecuteApiTests(unittest.TestCase):
         "stderr",
         "compile_log",
         "resource_usage",
-        "security_context",
         "finished_at",
         "stage_summary",
     }
@@ -81,6 +91,10 @@ class ExecuteApiTests(unittest.TestCase):
             "runner.pipeline.executor.settings.execution_cgroup_enabled",
             False,
         )
+        self.task_tracker_enabled_patcher = patch(
+            "runner.pipeline.executor.settings.task_tracker_enabled",
+            False,
+        )
 
         self.get_client_mock = self.get_client_patcher.start()
         self.create_workspace_mock = self.create_workspace_patcher.start()
@@ -97,6 +111,7 @@ class ExecuteApiTests(unittest.TestCase):
 
         self.execute_program_mock = self.execute_program_patcher.start()
         self.execution_cgroup_enabled_patcher.start()
+        self.task_tracker_enabled_patcher.start()
 
     def tearDown(self) -> None:
         patch.stopall()
@@ -111,7 +126,8 @@ class ExecuteApiTests(unittest.TestCase):
                 "timeout_ms": 2000,
                 "memory_limit_mb": 128,
                 "pids_limit": 10,
-                "cpu_limit": 1.0,
+                "cpu_bandwidth": 1.0,
+                "cpu_time_limit_ms": 2000,
             },
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
@@ -125,8 +141,9 @@ class ExecuteApiTests(unittest.TestCase):
                 "timeout_ms",
                 "memory_limit_mb",
                 "pids_limit",
-                "cpu_limit",
+                "cpu_bandwidth",
                 "output_limit_bytes",
+                "cpu_time_limit_ms",
             },
         )
 
@@ -136,12 +153,15 @@ class ExecuteApiTests(unittest.TestCase):
             set(RunnerReasonCode.__members__),
             {
                 "TIME_LIMIT",
+                "CPU_TIME_LIMIT",
                 "MEMORY_LIMIT",
                 "PIDS_LIMIT",
                 "OUTPUT_LIMIT",
+                "FILESYSTEM_LIMIT",
                 "NETWORK_BLOCKED",
                 "COMPILE_ERROR",
                 "COMPILE_TIMEOUT",
+                "SECURITY_VERIFICATION_FAILED",
                 "RUNTIME_ERROR",
                 "INTERNAL_ERROR",
             },
@@ -161,6 +181,30 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertIn("execution_cgroup_enabled", Settings.model_fields)
         self.assertIn("execution_cgroup_root", Settings.model_fields)
         self.assertTrue(Settings().execution_cgroup_enabled)
+
+    def test_settings_include_task_tracker_configuration(self) -> None:
+        self.assertTrue(Settings().task_tracker_enabled)
+        self.assertEqual(
+            Settings().task_tracker_socket.as_posix(),
+            "/run/codeguard/task-tracker.sock",
+        )
+        self.assertEqual(Settings().task_tracker_timeout_seconds, 0.2)
+
+    def test_task_tracking_error_is_nonfatal_measurement_error(self) -> None:
+        self.assertFalse(issubclass(TaskTrackingError, RunnerError))
+
+    def test_resource_usage_separates_cgroup_and_user_task_peaks(self) -> None:
+        usage = ResourceUsage(
+            pids_peak=7,
+            user_task_peak=6,
+            process_at_user_task_peak=1,
+            thread_at_user_task_peak=5,
+        )
+
+        self.assertEqual(usage.pids_peak, 7)
+        self.assertEqual(usage.user_task_peak, 6)
+        self.assertEqual(usage.process_at_user_task_peak, 1)
+        self.assertEqual(usage.thread_at_user_task_peak, 5)
 
     def test_execute_compiles_cpp_with_job_volume(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
@@ -202,16 +246,10 @@ class ExecuteApiTests(unittest.TestCase):
                 "memory_peak_bytes": None,
                 "pids_peak": None,
                 "output_bytes": 6,
-            },
-        )
-        self.assertEqual(
-            payload["security_context"],
-            {
-                "non_root": True,
-                "uid": 10001,
-                "gid": 10001,
-                "cap_drop": ["ALL"],
-                "no_new_privileges": True,
+                "user_task_peak": None,
+                "process_at_user_task_peak": None,
+                "thread_at_user_task_peak": None,
+                "cpu_usage_samples": None,
             },
         )
         self.assertEqual(
@@ -250,7 +288,7 @@ class ExecuteApiTests(unittest.TestCase):
             job_id=UUID(body["job_id"]),
             run_id=ANY,
             memory_limit_mb=body["policy"]["memory_limit_mb"],
-            cpu_limit=body["policy"]["cpu_limit"],
+            cpu_bandwidth=body["policy"]["cpu_bandwidth"],
             pids_limit=body["policy"]["pids_limit"],
         )
 
@@ -268,7 +306,7 @@ class ExecuteApiTests(unittest.TestCase):
         )
 
         self.execution_container.remove.assert_called_once_with(
-            force=True,
+            force=True, v=True,
         )
 
         self.compile_container.remove.assert_called_once_with(
@@ -309,6 +347,19 @@ class ExecuteApiTests(unittest.TestCase):
             stdin="",
         )
 
+    def test_execute_returns_filesystem_limit_and_backend_accepts_response(self) -> None:
+        from app.schemas.runner_schema import RunnerResponse as BackendRunnerResponse
+        self.compile_source_mock.return_value = CompileResult(success=True, stdout="", stderr="", exit_code=0, artifact_ready=True)
+        self.execute_program_mock.return_value = ExecutionResult(0, "user output", "", filesystem_limit_exceeded=True)
+        response = self.client.post("/execute", json=self.make_request_body())
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "BLOCKED")
+        self.assertEqual(payload["reason_code"], "FILESYSTEM_LIMIT")
+        self.assertEqual(payload["stdout"], "user output")
+        self.assertEqual(payload["stage_summary"]["failed"], ["EXECUTE"])
+        BackendRunnerResponse.model_validate(payload)
+
     def test_execute_returns_compile_error(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
             success=False,
@@ -329,7 +380,7 @@ class ExecuteApiTests(unittest.TestCase):
         )
         self.assertEqual(payload["stage_summary"]["failed"], ["COMPILE"])
         self.assertEqual(payload["stage_summary"]["skipped"], ["EXECUTE"])
-        self.assertIsNone(payload["security_context"])
+        self.assertNotIn("security_context", payload)
         self.assertEqual(
             payload["stage_summary"]["errors"]["COMPILE"][0],
             {
@@ -350,6 +401,65 @@ class ExecuteApiTests(unittest.TestCase):
         )
 
         self.execution_container.remove.assert_not_called()
+
+    def test_compile_security_failure_returns_security_error(self) -> None:
+        self.create_compile_container_mock.side_effect = SecurityVerificationError(
+            "Compile Container 보안 설정 검증에 실패했습니다."
+        )
+
+        payload = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        ).json()
+
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertEqual(payload["reason_code"], "SECURITY_VERIFICATION_FAILED")
+        self.assertEqual(
+            payload["stage_summary"]["succeeded"],
+            ["WORKSPACE", "CLEANUP"],
+        )
+        self.assertEqual(
+            payload["stage_summary"]["errors"]["COMPILE"][0]["reason_code"],
+            "SECURITY_VERIFICATION_FAILED",
+        )
+        self.assertEqual(payload["stage_summary"]["failed"], ["COMPILE"])
+        self.assertEqual(payload["stage_summary"]["skipped"], ["EXECUTE"])
+        self.assertNotIn("security_context", payload)
+        self.compile_source_mock.assert_not_called()
+        self.execute_program_mock.assert_not_called()
+
+    def test_execution_security_failure_returns_security_error(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
+            success=True,
+            stdout="",
+            stderr="",
+            exit_code=0,
+            artifact_ready=True,
+        )
+        self.create_execution_container_mock.side_effect = (
+            SecurityVerificationError(
+                "Execution Container 보안 설정 검증에 실패했습니다."
+            )
+        )
+
+        payload = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        ).json()
+
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertEqual(payload["reason_code"], "SECURITY_VERIFICATION_FAILED")
+        self.assertEqual(
+            payload["stage_summary"]["succeeded"],
+            ["WORKSPACE", "COMPILE", "CLEANUP"],
+        )
+        self.assertEqual(
+            payload["stage_summary"]["errors"]["EXECUTE"][0]["reason_code"],
+            "SECURITY_VERIFICATION_FAILED",
+        )
+        self.assertEqual(payload["stage_summary"]["failed"], ["EXECUTE"])
+        self.assertNotIn("security_context", payload)
+        self.execute_program_mock.assert_not_called()
 
     def test_execute_returns_compile_timeout_and_skips_execution(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
@@ -388,6 +498,19 @@ class ExecuteApiTests(unittest.TestCase):
             wall_time_ms=25,
             memory_peak_bytes=200,
             pids_peak=5,
+            cpu_time_ms=18,
+            cpu_usage_samples=[
+                CpuUsageSample(
+                    elapsed_ms=100,
+                    interval_ms=100,
+                    cpu_time_delta_ms=38,
+                ),
+                CpuUsageSample(
+                    elapsed_ms=199,
+                    interval_ms=99,
+                    cpu_time_delta_ms=72,
+                ),
+            ],
         )
 
         payload = self.client.post(
@@ -399,10 +522,25 @@ class ExecuteApiTests(unittest.TestCase):
             payload["resource_usage"],
             {
                 "wall_time_ms": 25,
-                "cpu_time_ms": None,
+                "cpu_time_ms": 18,
                 "memory_peak_bytes": 200,
                 "pids_peak": 5,
                 "output_bytes": 11,
+                "user_task_peak": None,
+                "process_at_user_task_peak": None,
+                "thread_at_user_task_peak": None,
+                "cpu_usage_samples": [
+                    {
+                        "elapsed_ms": 100,
+                        "interval_ms": 100,
+                        "cpu_time_delta_ms": 38,
+                    },
+                    {
+                        "elapsed_ms": 199,
+                        "interval_ms": 99,
+                        "cpu_time_delta_ms": 72,
+                    },
+                ],
             },
         )
 

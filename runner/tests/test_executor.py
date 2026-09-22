@@ -20,6 +20,7 @@ class ExecutorTests(unittest.TestCase):
         client.info.return_value = {"CgroupDriver": "cgroupfs"}
         compile_container = MagicMock()
         execution_container = MagicMock()
+        task_tracker = MagicMock()
         cgroup_scope = MagicMock()
         workspace = VolumeWorkspace(job_id, "codeguard-job-test")
         delegated_root = Path("/sys/fs/cgroup/codeguard")
@@ -31,14 +32,20 @@ class ExecutorTests(unittest.TestCase):
                 timeout_ms=1000,
                 memory_limit_mb=64,
                 pids_limit=8,
-                cpu_limit=1.0,
+                cpu_bandwidth=1.0,
+                cpu_time_limit_ms=1000,
             ),
             created_at=datetime.now(timezone.utc),
         )
 
         with (
             patch.object(settings, "execution_cgroup_enabled", True),
+            patch.object(settings, "task_tracker_enabled", True),
             patch.object(settings, "execution_cgroup_root", delegated_root),
+            patch(
+                "runner.pipeline.executor.TaskTrackerClient.from_settings",
+                return_value=task_tracker,
+            ),
             patch(
                 "runner.metrics.cgroup_scope.ExecutionCgroupScope.create",
                 return_value=cgroup_scope,
@@ -75,6 +82,11 @@ class ExecutorTests(unittest.TestCase):
                     exit_code=0,
                     stdout="",
                     stderr="",
+                    cpu_time_ms=75,
+                    pids_peak=18,
+                    user_task_peak=15,
+                    process_at_user_task_peak=3,
+                    thread_at_user_task_peak=12,
                 ),
             ) as execute_program,
             patch("runner.pipeline.executor.remove_workspace"),
@@ -90,9 +102,28 @@ class ExecutorTests(unittest.TestCase):
             create_execution.call_args.kwargs["cgroup_scope"],
             cgroup_scope,
         )
+        self.assertEqual(
+            create_execution.call_args.kwargs["cpu_bandwidth"],
+            1.0,
+        )
         self.assertIs(
             execute_program.call_args.kwargs["cgroup_scope"],
             cgroup_scope,
+        )
+        self.assertIs(
+            execute_program.call_args.kwargs["task_tracker"],
+            task_tracker,
+        )
+        self.assertEqual(response.resource_usage.pids_peak, 18)
+        self.assertEqual(response.resource_usage.user_task_peak, 15)
+        self.assertEqual(response.resource_usage.cpu_time_ms, 75)
+        self.assertEqual(
+            response.resource_usage.process_at_user_task_peak,
+            3,
+        )
+        self.assertEqual(
+            response.resource_usage.thread_at_user_task_peak,
+            12,
         )
         cgroup_scope.remove.assert_called_once_with()
 
@@ -133,7 +164,8 @@ class ExecutorTests(unittest.TestCase):
                 timeout_ms=1000,
                 memory_limit_mb=64,
                 pids_limit=8,
-                cpu_limit=1.0,
+                cpu_bandwidth=1.0,
+                cpu_time_limit_ms=1000,
             ),
             created_at=datetime.now(timezone.utc),
         )

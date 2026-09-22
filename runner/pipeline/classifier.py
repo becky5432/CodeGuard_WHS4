@@ -59,6 +59,13 @@ def classify_execution(result) -> Classification:
             stage=RunnerStage.EXECUTE,
             error_message="출력 제한을 초과했습니다.",
         )
+    if result.filesystem_limit_exceeded:
+        return Classification(
+            status=RunnerStatus.BLOCKED,
+            reason_code=RunnerReasonCode.FILESYSTEM_LIMIT,
+            stage=RunnerStage.EXECUTE,
+            error_message="허용되지 않은 파일시스템 쓰기 시도가 감지되었습니다.",
+        )
     if result.exit_code == 0:
         return Classification(
             status=RunnerStatus.SUCCESS,

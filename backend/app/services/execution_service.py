@@ -46,7 +46,7 @@ class ExecutionService:
         if request.policy is not None:
             return request.policy
 
-        return PolicyLimits.model_validate(DEFAULT_POLICY)    
+        return PolicyLimits.model_validate(DEFAULT_POLICY)
 
     # 프론트의 실행 요청 접수
     def submit(
@@ -119,7 +119,7 @@ class ExecutionService:
                     status=ExecutionStatus.ERROR.value,
                     reason_code=ExecutionReasonCode.INTERNAL_ERROR.value,
                     error_message="Runner 서버로부터 실행 결과를 "
-                            "받지 못했습니다.", 
+                            "받지 못했습니다.",
                 )
 
                 return
@@ -139,6 +139,14 @@ class ExecutionService:
                 )
 
             usage = runner_response.resource_usage
+            cpu_usage_samples = (
+                [
+                    sample.model_dump(mode="json")
+                    for sample in usage.cpu_usage_samples
+                ]
+                if usage and usage.cpu_usage_samples is not None
+                else None
+            )
 
             stage_summary = self.convert_stage_summary(
                 runner_response.stage_summary
@@ -186,6 +194,7 @@ class ExecutionService:
                     if usage
                     else None
                 ),
+                cpu_usage_samples=cpu_usage_samples,
             )
 
         # DB 오류, 응답 변환 오류 등 Backend 내부 오류
@@ -230,6 +239,8 @@ class ExecutionService:
             execution.output_bytes,
         )
 
+        has_cpu_samples = execution.cpu_usage_samples is not None
+
         resource_usage = (
             ResourceUsage(
                 wall_time_ms=execution.wall_time_ms,
@@ -237,8 +248,10 @@ class ExecutionService:
                 memory_peak_bytes=execution.memory_peak_bytes,
                 pids_peak=execution.pids_peak,
                 output_bytes=execution.output_bytes,
+                cpu_usage_samples=execution.cpu_usage_samples,
             )
             if any(value is not None for value in metric_values)
+            or has_cpu_samples
             else None
         )
 

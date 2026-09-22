@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     execution_network: str = "bridge"
     execution_cgroup_enabled: bool = True
     execution_cgroup_root: Path = Path("/sys/fs/cgroup/codeguard")
+    task_tracker_enabled: bool = True
+    task_tracker_socket: Path = Path("/run/codeguard/task-tracker.sock")
+    task_tracker_timeout_seconds: float = Field(default=0.2, gt=0)
 
     model_config = SettingsConfigDict(  # Pydantic 설정
         case_sensitive=False,

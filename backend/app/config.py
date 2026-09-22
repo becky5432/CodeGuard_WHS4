@@ -18,9 +18,10 @@ settings = Settings()
 
  
 DEFAULT_POLICY = {
-    "timeout_ms": 20000,
+    "timeout_ms": 2000,
     "memory_limit_mb": 128,
     "pids_limit": 32,
-    "cpu_limit": 1.0,
+    "cpu_bandwidth": 1.0,
+    "cpu_time_limit_ms": 1000,
     "output_limit_bytes": 1048576,
 }

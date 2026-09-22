@@ -78,8 +78,11 @@ class WorkspaceTests(unittest.TestCase):
 
         with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as archive:
             self.assertEqual(archive.getnames(), ["main.cpp", "stdin"])
+            source_member = archive.getmember("main.cpp")
+            self.assertEqual((source_member.uid, source_member.gid), (10001, 10001))
             stdin_member = archive.getmember("stdin")
             self.assertEqual(stdin_member.mode, 0o444)
+            self.assertEqual((stdin_member.uid, stdin_member.gid), (10001, 10001))
             extracted = archive.extractfile(stdin_member)
             self.assertIsNotNone(extracted)
             self.assertEqual(extracted.read().decode("utf-8"), "21\n")

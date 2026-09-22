@@ -20,13 +20,16 @@ class RunnerStage(str, Enum):
 
 class RunnerReasonCode(str, Enum):
     TIME_LIMIT = "TIME_LIMIT"
+    CPU_TIME_LIMIT = "CPU_TIME_LIMIT"
     MEMORY_LIMIT = "MEMORY_LIMIT"
     PIDS_LIMIT = "PIDS_LIMIT"
     OUTPUT_LIMIT = "OUTPUT_LIMIT"
+    FILESYSTEM_LIMIT = "FILESYSTEM_LIMIT"
     NETWORK_BLOCKED = "NETWORK_BLOCKED"
     COMPILE_ERROR = "COMPILE_ERROR"
     COMPILE_TIMEOUT = "COMPILE_TIMEOUT"
     RUNTIME_ERROR = "RUNTIME_ERROR"
+    SECURITY_VERIFICATION_FAILED = "SECURITY_VERIFICATION_FAILED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -41,6 +44,12 @@ class StageSummary(BaseModel):
     skipped: list[RunnerStage] = Field(default_factory=list)
     errors: dict[RunnerStage, list[StageError]] = Field(default_factory=dict)
 
+class CpuUsageSample(BaseModel):
+    """실행 중 수집한 CPU 사용량 그래프용 시간 구간 샘플"""
+
+    elapsed_ms: int = Field(ge=0)
+    interval_ms: int = Field(gt=0)
+    cpu_time_delta_ms: int = Field(ge=0)
 
 class ResourceUsage(BaseModel):
     wall_time_ms: int | None = None
@@ -48,14 +57,10 @@ class ResourceUsage(BaseModel):
     memory_peak_bytes: int | None = None
     pids_peak: int | None = None
     output_bytes: int | None = None
-
-
-class SecurityContext(BaseModel):
-    non_root: bool
-    uid: int
-    gid: int
-    cap_drop: list[str]
-    no_new_privileges: bool
+    user_task_peak: int | None = None
+    process_at_user_task_peak: int | None = None
+    thread_at_user_task_peak: int | None = None
+    cpu_usage_samples: list[CpuUsageSample] | None = None
 
 
 class RunnerResponse(BaseModel):
@@ -69,6 +74,5 @@ class RunnerResponse(BaseModel):
     stderr: str = ""
     compile_log: str | None = None
     resource_usage: ResourceUsage | None = None
-    security_context: SecurityContext | None = None
     finished_at: datetime | None = None
     stage_summary: StageSummary = Field(default_factory=StageSummary)
