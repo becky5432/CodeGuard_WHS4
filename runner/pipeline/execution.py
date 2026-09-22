@@ -431,7 +431,7 @@ def execute_program(
                     break
                 wait_done.wait(timeout=min(remaining, 0.01))
 
-            policy_kill = timeout_reached or output.exceeded.is_set() or pids_limit_exceeded
+            policy_kill = timeout_reached or output.exceeded.is_set() or pids_limit_exceeded or cpu_time_limit_reached
             if policy_kill and not wait_done.is_set():
                 try:
                     container.kill()
