@@ -449,6 +449,422 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.filesystem_violation_syscall, "unlink")
         self.assertEqual(result.filesystem_violation_path, "/workspace/main")
 
+    @patch("runner.pipeline.execution.CpuUsageSampler")
+    @patch("runner.pipeline.execution.PidsLimitMonitor")
+    @patch("runner.pipeline.execution.ResourceMonitor")
+    def test_cpu_time_limit_kills_container_and_sets_evidence(
+        self,
+        resource_monitor_class,
+        pids_monitor_class,
+        cpu_sampler_class,
+    ) -> None:
+        released = threading.Event()
+        container = MagicMock()
+        container.attrs = {"State": {"OOMKilled": False}}
+        container.attach.return_value = []
+
+        def wait_for_exit():
+            if not released.wait(timeout=1):
+                raise RuntimeError("cpu time kill did not release wait")
+            return {"StatusCode": 137}
+
+        def kill(*args, **kwargs):
+            if kwargs.get("signal") == "SIGUSR1":
+                return
+            released.set()
+
+        container.wait.side_effect = wait_for_exit
+        container.kill.side_effect = kill
+
+        resource_monitor_class.return_value.memory_peak_bytes = None
+        pids_monitor_class.return_value.exceeded.return_value = False
+        pids_monitor_class.return_value.pids_peak = None
+
+        cgroup_scope = MagicMock()
+        cgroup_scope.read_cpu_usage_usec.side_effect = [
+            10_000,
+            10_000,
+            111_000,
+        ]
+        cgroup_scope.snapshot.return_value = CgroupMetrics(
+            cpu_time_usec=111_000,
+        )
+
+        result = execute_program(
+            container=container,
+            job_id=uuid4(),
+            run_id=uuid4(),
+            timeout_ms=2000,
+            cgroup_scope=cgroup_scope,
+            cpu_time_limit_ms=100,
+        )
+
+        self.assertEqual(result.exit_code, 137)
+        self.assertTrue(result.cpu_time_limit_exceeded)
+        self.assertFalse(result.timed_out)
+        self.assertEqual(result.cpu_time_ms, 101)
+        self.assertEqual(
+            container.kill.call_args_list,
+            [
+                call(signal="SIGUSR1"),
+                call(),
+            ],
+        )
+
+    @patch("runner.pipeline.execution.CpuUsageSampler")
+    @patch("runner.pipeline.execution.PidsLimitMonitor")
+    @patch("runner.pipeline.execution.ResourceMonitor")
+    def test_cpu_time_below_limit_does_not_kill_container(
+        self,
+        resource_monitor_class,
+        pids_monitor_class,
+        cpu_sampler_class,
+    ) -> None:
+        released = threading.Event()
+        container = MagicMock()
+        container.attrs = {"State": {"OOMKilled": False}}
+        container.attach.return_value = []
+
+        def wait_for_exit():
+            if not released.wait(timeout=1):
+                raise RuntimeError("natural exit did not release wait")
+            return {"StatusCode": 0}
+
+        def kill(*args, **kwargs):
+            if kwargs.get("signal") == "SIGUSR1":
+                return
+            raise AssertionError("CPU time below limit must not request policy kill")
+
+        container.wait.side_effect = wait_for_exit
+        container.kill.side_effect = kill
+
+        resource_monitor_class.return_value.memory_peak_bytes = None
+        pids_monitor_class.return_value.exceeded.return_value = False
+        pids_monitor_class.return_value.pids_peak = None
+
+        cgroup_scope = MagicMock()
+
+        read_count = 0
+
+        def read_cpu_usage():
+            nonlocal read_count
+            read_count += 1
+
+            # 기존 baseline 측정들
+            if read_count <= 2:
+                return 10_000
+
+            # 실행 중 사용량: 40ms < limit 100ms
+            released.set()
+            return 50_000
+
+        cgroup_scope.read_cpu_usage_usec.side_effect = read_cpu_usage
+        cgroup_scope.snapshot.return_value = CgroupMetrics(
+            cpu_time_usec=50_000,
+        )
+
+        result = execute_program(
+            container=container,
+            job_id=uuid4(),
+            run_id=uuid4(),
+            timeout_ms=2000,
+            cgroup_scope=cgroup_scope,
+            cpu_time_limit_ms=100,
+        )
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertFalse(result.cpu_time_limit_exceeded)
+        self.assertFalse(result.timed_out)
+        self.assertEqual(result.cpu_time_ms, 40)
+        self.assertEqual(
+            container.kill.call_args_list,
+            [
+                call(signal="SIGUSR1"),
+            ],
+        )
+
+    @patch("runner.pipeline.execution.CpuUsageSampler")
+    @patch("runner.pipeline.execution.PidsLimitMonitor")
+    @patch("runner.pipeline.execution.ResourceMonitor")
+    def test_cpu_time_limit_kill_race_preserves_natural_exit(
+        self,
+        resource_monitor_class,
+        pids_monitor_class,
+        cpu_sampler_class,
+    ) -> None:
+        released = threading.Event()
+        container = MagicMock()
+        container.attrs = {"State": {"OOMKilled": False}}
+        container.attach.return_value = []
+
+        def wait_for_exit():
+            if not released.wait(timeout=1):
+                raise RuntimeError("cpu time kill did not release wait")
+            # CPU kill 요청과 경쟁해서 자연 종료가 먼저 확정된 상황
+            return {"StatusCode": 0}
+
+        def kill(*args, **kwargs):
+            if kwargs.get("signal") == "SIGUSR1":
+                return
+            released.set()
+
+        container.wait.side_effect = wait_for_exit
+        container.kill.side_effect = kill
+
+        resource_monitor_class.return_value.memory_peak_bytes = None
+        pids_monitor_class.return_value.exceeded.return_value = False
+        pids_monitor_class.return_value.pids_peak = None
+
+        cgroup_scope = MagicMock()
+        cgroup_scope.read_cpu_usage_usec.side_effect = [
+            10_000,
+            10_000,
+            111_000,
+        ]
+        cgroup_scope.snapshot.return_value = CgroupMetrics(
+            cpu_time_usec=111_000,
+        )
+
+        result = execute_program(
+            container=container,
+            job_id=uuid4(),
+            run_id=uuid4(),
+            timeout_ms=2000,
+            cgroup_scope=cgroup_scope,
+            cpu_time_limit_ms=100,
+        )
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertFalse(result.cpu_time_limit_exceeded)
+        self.assertFalse(result.timed_out)
+        self.assertEqual(result.cpu_time_ms, 101)
+        self.assertEqual(
+            container.kill.call_args_list,
+            [
+                call(signal="SIGUSR1"),
+                call(),
+            ],
+        )
+
+    @patch("runner.pipeline.execution.CpuUsageSampler")
+    @patch("runner.pipeline.execution.PidsLimitMonitor")
+    @patch("runner.pipeline.execution.ResourceMonitor")
+    def test_failed_cpu_time_kill_does_not_claim_exit_137(
+        self,
+        resource_monitor_class,
+        pids_monitor_class,
+        cpu_sampler_class,
+    ) -> None:
+        released = threading.Event()
+        container = MagicMock()
+        container.attrs = {"State": {"OOMKilled": False}}
+        container.attach.return_value = []
+
+        def wait_for_exit():
+            if not released.wait(timeout=1):
+                raise RuntimeError("container wait was not released")
+            return {"StatusCode": 137}
+
+        def kill(*args, **kwargs):
+            if kwargs.get("signal") == "SIGUSR1":
+                return
+
+            released.set()
+            raise docker.errors.APIError("kill failed")
+
+        container.wait.side_effect = wait_for_exit
+        container.kill.side_effect = kill
+
+        resource_monitor_class.return_value.memory_peak_bytes = None
+        pids_monitor_class.return_value.exceeded.return_value = False
+        pids_monitor_class.return_value.pids_peak = None
+
+        cgroup_scope = MagicMock()
+        cgroup_scope.read_cpu_usage_usec.side_effect = [
+            10_000,
+            10_000,
+            111_000,
+        ]
+        cgroup_scope.snapshot.return_value = CgroupMetrics(
+            cpu_time_usec=111_000,
+        )
+
+        result = execute_program(
+            container=container,
+            job_id=uuid4(),
+            run_id=uuid4(),
+            timeout_ms=2000,
+            cgroup_scope=cgroup_scope,
+            cpu_time_limit_ms=100,
+        )
+
+        self.assertEqual(result.exit_code, 137)
+        self.assertFalse(result.cpu_time_limit_exceeded)
+        self.assertFalse(result.timed_out)
+        self.assertEqual(
+            container.kill.call_args_list,
+            [
+                call(signal="SIGUSR1"),
+                call(),
+            ],
+        )
+
+    @patch("runner.pipeline.execution.CpuUsageSampler")
+    @patch("runner.pipeline.execution.PidsLimitMonitor")
+    @patch("runner.pipeline.execution.ResourceMonitor")
+    def test_cpu_time_exact_limit_kills_container(
+        self,
+        resource_monitor_class,
+        pids_monitor_class,
+        cpu_sampler_class,
+    ) -> None:
+        released = threading.Event()
+        container = MagicMock()
+        container.attrs = {"State": {"OOMKilled": False}}
+        container.attach.return_value = []
+
+        def wait_for_exit():
+            if not released.wait(timeout=1):
+                raise RuntimeError("cpu time kill did not release wait")
+            return {"StatusCode": 137}
+
+        def kill(*args, **kwargs):
+            if kwargs.get("signal") == "SIGUSR1":
+                return
+            released.set()
+
+        container.wait.side_effect = wait_for_exit
+        container.kill.side_effect = kill
+
+        resource_monitor_class.return_value.memory_peak_bytes = None
+        pids_monitor_class.return_value.exceeded.return_value = False
+        pids_monitor_class.return_value.pids_peak = None
+
+        cgroup_scope = MagicMock()
+        cgroup_scope.read_cpu_usage_usec.side_effect = [
+            10_000,
+            10_000,
+            110_000,
+        ]
+        cgroup_scope.snapshot.return_value = CgroupMetrics(
+            cpu_time_usec=110_000,
+        )
+
+        result = execute_program(
+            container=container,
+            job_id=uuid4(),
+            run_id=uuid4(),
+            timeout_ms=2000,
+            cgroup_scope=cgroup_scope,
+            cpu_time_limit_ms=100,
+        )
+
+        self.assertEqual(result.exit_code, 137)
+        self.assertTrue(result.cpu_time_limit_exceeded)
+        self.assertFalse(result.timed_out)
+        self.assertEqual(result.cpu_time_ms, 100)
+        self.assertEqual(
+            container.kill.call_args_list,
+            [
+                call(signal="SIGUSR1"),
+                call(),
+            ],
+        )
+
+    @patch("runner.pipeline.execution.PidsLimitMonitor")
+    @patch("runner.pipeline.execution.ResourceMonitor")
+    def test_cpu_time_limit_requires_baseline(
+        self,
+        resource_monitor_class,
+        pids_monitor_class,
+    ) -> None:
+        container = MagicMock()
+        container.attach.return_value = []
+
+        resource_monitor_class.return_value.memory_peak_bytes = None
+        pids_monitor_class.return_value.pids_peak = None
+
+        cgroup_scope = MagicMock()
+        cgroup_scope.read_cpu_usage_usec.side_effect = [
+            10_000,
+            None,
+        ]
+
+        with self.assertRaises(ContainerExecutionError):
+            execute_program(
+                container=container,
+                job_id=uuid4(),
+                run_id=uuid4(),
+                timeout_ms=2000,
+                cgroup_scope=cgroup_scope,
+                cpu_time_limit_ms=100,
+            )
+
+        container.kill.assert_not_called()
+
+    @patch("runner.pipeline.execution.CpuUsageSampler")
+    @patch("runner.pipeline.execution.PidsLimitMonitor")
+    @patch("runner.pipeline.execution.ResourceMonitor")
+    def test_cpu_time_measurement_recovers_after_transient_failure(
+        self,
+        resource_monitor_class,
+        pids_monitor_class,
+        cpu_sampler_class,
+    ) -> None:
+        released = threading.Event()
+        container = MagicMock()
+        container.attrs = {"State": {"OOMKilled": False}}
+        container.attach.return_value = []
+
+        def wait_for_exit():
+            if not released.wait(timeout=1):
+                raise RuntimeError("cpu time kill did not release wait")
+            return {"StatusCode": 137}
+
+        def kill(*args, **kwargs):
+            if kwargs.get("signal") == "SIGUSR1":
+                return
+            released.set()
+
+        container.wait.side_effect = wait_for_exit
+        container.kill.side_effect = kill
+
+        resource_monitor_class.return_value.memory_peak_bytes = None
+        pids_monitor_class.return_value.exceeded.return_value = False
+        pids_monitor_class.return_value.pids_peak = None
+
+        cgroup_scope = MagicMock()
+        cgroup_scope.read_cpu_usage_usec.side_effect = [
+            10_000,                    # 첫 번째 기존 측정
+            10_000,                    # 사용자 코드 직전 baseline
+            Exception("read failed"),  # 실행 중 일시적 실패
+            111_000,                   # 다음 루프에서 복구
+        ]
+        cgroup_scope.snapshot.return_value = CgroupMetrics(
+            cpu_time_usec=111_000,
+        )
+
+        result = execute_program(
+            container=container,
+            job_id=uuid4(),
+            run_id=uuid4(),
+            timeout_ms=2000,
+            cgroup_scope=cgroup_scope,
+            cpu_time_limit_ms=100,
+        )
+
+        self.assertEqual(result.exit_code, 137)
+        self.assertTrue(result.cpu_time_limit_exceeded)
+        self.assertFalse(result.timed_out)
+        self.assertEqual(result.cpu_time_ms, 101)
+        self.assertEqual(
+            container.kill.call_args_list,
+            [
+                call(signal="SIGUSR1"),
+                call(),
+            ],
+        )
+
     def test_timeout_kill_race_preserves_natural_exit(self) -> None:
         for exit_code, expected_reason in (
             (139, RunnerReasonCode.RUNTIME_ERROR),

@@ -303,6 +303,7 @@ class ExecuteApiTests(unittest.TestCase):
             run_id=ANY,
             timeout_ms=body["policy"]["timeout_ms"],
             output_limit_bytes=EXECUTION_OUTPUT_LIMIT_BYTES,
+            cpu_time_limit_ms=body["policy"]["cpu_time_limit_ms"],
         )
 
         self.execution_container.remove.assert_called_once_with(
@@ -764,6 +765,43 @@ class ExecuteApiTests(unittest.TestCase):
             payload["exit_code"],
             1,
         )
+
+    def test_execute_returns_cpu_time_limit(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
+            success=True,
+            stdout="",
+            stderr="",
+            exit_code=0,
+            artifact_ready=True,
+        )
+        self.execute_program_mock.return_value = ExecutionResult(
+            exit_code=137,
+            stdout="",
+            stderr="",
+            cpu_time_limit_exceeded=True,
+            cpu_time_ms=313,
+            wall_time_ms=418,
+        )
+
+        response = self.client.post(
+            "/execute",
+            json=self.make_request_body(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+
+        self.assertEqual(payload["status"], "BLOCKED")
+        self.assertEqual(payload["reason_code"], "CPU_TIME_LIMIT")
+        self.assertEqual(payload["exit_code"], 137)
+        self.assertEqual(payload["resource_usage"]["cpu_time_ms"], 313)
+        self.assertEqual(payload["stage_summary"]["failed"], ["EXECUTE"])
+        self.assertEqual(
+            payload["stage_summary"]["errors"]["EXECUTE"][0]["reason_code"],
+            "CPU_TIME_LIMIT",
+        )
+    
     def test_execute_returns_network_blocked(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
             success=True,
