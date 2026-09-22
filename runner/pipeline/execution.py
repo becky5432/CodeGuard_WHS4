@@ -264,6 +264,8 @@ def execute_program(
     output_state: dict[str, Exception | None] = {}
     timeout_reached = False
     timeout_kill_requested = False
+    cpu_time_limit_reached = False
+    cpu_time_kill_requested = False
     pids_limit_exceeded = False
     system_error = None
     output_thread = None
