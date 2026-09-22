@@ -1,6 +1,6 @@
 """실제 Docker Engine과 settings.cpp_image가 필요한 파일시스템 통합 테스트.
 
-기본 이미지 준비: docker build -t codeguard-cpp:dev runner/container/cpp
+기본 이미지 준비: docker build -t codeguard-cpp:dev -f runner/container/cpp/Dockerfile .
 실행: RUNNER_DOCKER_TESTS=1 python -m unittest runner.tests.test_filesystem_integration -v
 활성화한 경우 Docker 연결/이미지 오류를 건너뛰지 않고 실패로 보고한다.
 PID 판정 테스트는 Docker 호스트의 /proc 및 cgroup v2 접근이 필요하다.
@@ -12,6 +12,7 @@ import unittest
 from uuid import uuid4
 
 from runner.config import settings
+from runner.metrics.cgroup_scope import ExecutionCgroupScope, validate_docker_cgroup_driver
 from runner.models.result import RunnerReasonCode, RunnerStage, RunnerStatus
 from runner.pipeline.classifier import classify_execution
 from runner.pipeline.compiler import (
@@ -67,6 +68,11 @@ class FilesystemIntegrationTests(unittest.TestCase):
         self.assertTrue(compile_mount["RW"])
 
         run_id = uuid4()
+        cgroup_scope = ExecutionCgroupScope.create(
+            root=settings.execution_cgroup_root,
+            run_id=run_id,
+            driver=validate_docker_cgroup_driver(self.client),
+        )
         container = create_execution_container(
             client=self.client,
             workspace=self.workspace,
@@ -74,8 +80,9 @@ class FilesystemIntegrationTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=run_id,
             memory_limit_mb=memory_limit_mb,
-            cpu_limit=1.0,
+            cpu_bandwidth=1.0,
             pids_limit=pids_limit,
+            cgroup_scope=cgroup_scope,
         )
         self.addCleanup(container.remove, force=True, v=True)
         container.reload()
@@ -101,6 +108,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
         result = execute_program(
             container, self.workspace.job_id, run_id, timeout_ms=timeout_ms,
             output_limit_bytes=output_limit_bytes,
+            cgroup_scope=cgroup_scope,
         )
         if not allow_system_error:
             self.assertIsNone(result.system_error, result.system_error)
@@ -450,7 +458,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
                 'job_id': str(uuid4()), 'language': 'C',
                 'code': '#include <stdio.h>\nint main(void) { fopen("/workspace/api_violation", "w"); return 0; }',
                 'stdin': '', 'created_at': datetime.now(timezone.utc).isoformat(),
-                'policy': {'timeout_ms': 3000, 'memory_limit_mb': 128, 'pids_limit': 32, 'cpu_limit': 1.0},
+                'policy': {'timeout_ms': 3000, 'memory_limit_mb': 128, 'pids_limit': 32, 'cpu_bandwidth': 1.0, 'cpu_time_limit_ms': 2000,},
             })
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()

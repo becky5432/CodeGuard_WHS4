@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -7,12 +8,27 @@ from uuid import UUID
 import docker
 
 from runner.config import settings
-from runner.exceptions import ContainerExecutionError, RunnerError
+from runner.exceptions import (
+    ContainerExecutionError,
+    SecurityVerificationError,
+    RunnerError,
+    TaskTrackingError,
+)
 from runner.metrics.cgroup_scope import CgroupMetrics, ExecutionCgroupScope
 from runner.metrics.resource_monitor import ResourceMonitor
 from runner.metrics.pids_monitor import PidsLimitMonitor
+from runner.metrics.task_tracker import (
+    PidsPeakSnapshot,
+    TaskTrackerClient,
+    resolve_execution_cgroup,
+)
+from runner.metrics.cpu_usage_sampler import CpuUsageSampler
+from runner.models.result import CpuUsageSample
 from runner.pipeline.workspace import VolumeWorkspace
-from runner.policies import EXECUTION_OUTPUT_LIMIT_BYTES
+from runner.policies import (
+    EXECUTION_LOGICAL_CPU_LIMIT,
+    EXECUTION_OUTPUT_LIMIT_BYTES,
+)
 from runner.security import (
     SECURITY_CAP_DROP,
     SECURITY_GID,
@@ -20,6 +36,10 @@ from runner.security import (
     SECURITY_OPT,
     SECURITY_UID,
     verify_container_security_config,
+)
+from runner.security.runtime_verification import (
+    SECURITY_STATUS_PATH,
+    collect_runtime_permission_failure,
 )
 from runner.security.filesystem_trace import (
     TRACE_DIRECTORY, TRACE_PATH, TRACE_SYSCALLS, RAW_WRITE_SYSCALLS,
@@ -46,12 +66,17 @@ class ExecutionResult:
     output_limit_exceeded: bool = False
     oom_killed: bool = False
     wall_time_ms: int | None = None
+    cpu_time_ms: int | None = None
     memory_peak_bytes: int | None = None
     pids_peak: int | None = None
+    user_task_peak: int | None = None
+    process_at_user_task_peak: int | None = None
+    thread_at_user_task_peak: int | None = None
     pids_limit_exceeded: bool = False
     filesystem_limit_exceeded: bool = False
     filesystem_violation_syscall: str | None = None
     filesystem_violation_path: str | None = None
+    cpu_usage_samples: list[CpuUsageSample] | None = None
 
 
 class _BoundedOutput:
@@ -101,6 +126,16 @@ def _stop_output_thread(frames, output_thread) -> bool:
         output_thread.join(timeout=1.0)
     return not output_thread.is_alive()
 
+def _resolve_cpuset() -> str:
+    available_cpus = sorted(os.sched_getaffinity(0))
+
+    if not available_cpus:
+        raise ContainerExecutionError(
+            "Runner에서 사용 가능한 논리 CPU를 확인할 수 없습니다.",
+        )
+
+    selected_cpus = available_cpus[:EXECUTION_LOGICAL_CPU_LIMIT]
+    return ",".join(str(cpu) for cpu in selected_cpus)
 
 def create_execution_container(
     client,
@@ -109,26 +144,31 @@ def create_execution_container(
     job_id: UUID,
     run_id: UUID,
     memory_limit_mb: int,
-    cpu_limit: float,
+    cpu_bandwidth: float,
     pids_limit: int,
     cgroup_scope: ExecutionCgroupScope | None = None,
 ):
     """Job Volume을 연결한 실행 컨테이너를 생성하고 반환한다."""
 
     # A persistent anonymous evidence volume survives container exit, unlike tmpfs.
-    # Only the root tracer can traverse the evidence directory. strace -u drops
-    # the tracee's UID/GID and supplementary groups before executing user code.
+    # Keep strace as container PID 1 so Docker wait observes the tracer only after
+    # it has followed codeguard-init/user exit and completed the trace footer.
     trace_command = (
-        f"umask 077; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard "
+        f"umask 077; set -C; exec 3>{SECURITY_STATUS_PATH}; ulimit -f 2048; "
+        f"exec strace -f -q -yy -s 4096 "
+        f"-u codeguard "
         f"-o {TRACE_PATH} -e trace={TRACE_SYSCALLS} "
-        f"-e raw={RAW_WRITE_SYSCALLS} /workspace/main"
+        f"-e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init "
+        f"--security-fd 3"
     )
     if stdin:
-        trace_command += " < /workspace/stdin"
+        trace_command += " --stdin /workspace/stdin"
+    trace_command += " -- /workspace/main"
     command = ["sh", "-c", trace_command]
 
     memory_limit_bytes = memory_limit_mb * 1024 * 1024
-    nano_cpus_limit = int(cpu_limit * 1_000_000_000)
+    nano_cpus_limit = int(cpu_bandwidth * 1_000_000_000)
+    cpuset_cpus = _resolve_cpuset()
 
     container_options = {
         "image": settings.cpp_image,
@@ -151,6 +191,7 @@ def create_execution_container(
         "mem_limit": memory_limit_bytes,
         "memswap_limit": memory_limit_bytes,
         "nano_cpus": nano_cpus_limit,
+        "cpuset_cpus": cpuset_cpus,
         "pids_limit": pids_limit,
         "labels": {
             "codeguard.managed": "true",
@@ -209,6 +250,7 @@ def execute_program(
     timeout_ms: int,
     output_limit_bytes: int = EXECUTION_OUTPUT_LIMIT_BYTES,
     cgroup_scope: ExecutionCgroupScope | None = None,
+    task_tracker: TaskTrackerClient | None = None,
 ) -> ExecutionResult:
     """제한을 감시하며 실행 컨테이너의 종료 정보와 출력을 수집한다."""
 
@@ -226,6 +268,11 @@ def execute_program(
     output_thread = None
     monitor_started = False
     output_thread_stopped = True
+    cgroup_registered = False
+    root_registered = False
+    task_metrics: PidsPeakSnapshot | None = None
+    cpu_start_usec: int | None = None
+    cpu_sampler: CpuUsageSampler | None = None
 
     def wait_for_container() -> None:
         try:
@@ -250,8 +297,78 @@ def execute_program(
             demux=True,
         )
         try:
+            # No post-start execution gate exists in the #112 trace lifecycle.
+            # Capture CPU/wall baselines before starting the container.
+            if cgroup_scope is not None:
+                try:
+                    cpu_start_usec = cgroup_scope.read_cpu_usage_usec()
+                except Exception as exc:
+                    logger.warning(
+                        "event=execution_cpu_baseline_error "
+                        "job_id=%s run_id=%s error=%s",
+                        job_id,
+                        run_id,
+                        exc,
+                    )
+
             start = time.monotonic()
             container.start()
+
+            if task_tracker is not None:
+                try:
+                    container.reload()
+                    root_tid = container.attrs.get("State", {}).get("Pid")
+                    if not isinstance(root_tid, int) or root_tid <= 0:
+                        raise TaskTrackingError(
+                            "Execution Container의 Root TID가 없습니다."
+                        )
+                    identity = resolve_execution_cgroup(root_tid)
+                    task_tracker.register_cgroup(
+                        run_id,
+                        identity.cgroup_id,
+                        identity.pids_current,
+                    )
+                    cgroup_registered = True
+                    task_tracker.register_root(run_id, root_tid)
+                    root_registered = True
+                except (
+                    TaskTrackingError,
+                    docker.errors.DockerException,
+                ) as exc:
+                    logger.warning(
+                        "event=task_tracker_registration_error "
+                        "job_id=%s run_id=%s error=%s",
+                        job_id,
+                        run_id,
+                        exc,
+                    )
+
+
+            # 사용자 코드 실행 직전 execution cgroup의 누적 CPU time을 저장한다.
+            if cgroup_scope is not None:
+                try:
+                    cpu_start_usec = cgroup_scope.read_cpu_usage_usec()
+                except Exception as exc:
+                    logger.warning(
+                        "event=execution_cpu_baseline_error "
+                        "job_id=%s run_id=%s error=%s",
+                        job_id,
+                        run_id,
+                        exc,
+                    )
+
+            container.kill(signal="SIGUSR1")
+            start = time.monotonic()
+
+            if (
+                cgroup_scope is not None
+                and cpu_start_usec is not None
+            ):
+                cpu_sampler = CpuUsageSampler(
+                    cgroup_scope=cgroup_scope,
+                    start_cpu_usec=cpu_start_usec,
+                    start_time=start,
+                )
 
             pids_monitor.start()
 
@@ -283,7 +400,12 @@ def execute_program(
                     pids_limit_exceeded = True
                     break
 
-                remaining = timeout_seconds - (time.monotonic() - start)
+                now = time.monotonic()
+
+                if cpu_sampler is not None:
+                    cpu_sampler.sample_if_due(now)
+
+                remaining = timeout_seconds - (now - start)
                 if remaining <= 0:
                     timeout_reached = True
                     break
@@ -397,6 +519,17 @@ def execute_program(
                     exc,
                 )
 
+        cpu_time_ms: int | None = None
+
+        if (
+            cpu_start_usec is not None
+            and cgroup_metrics.cpu_time_usec is not None
+        ):
+            cpu_time_ms = max(
+                cgroup_metrics.cpu_time_usec - cpu_start_usec,
+                0,
+            ) // 1000
+
         memory_peak_bytes = (
             cgroup_metrics.memory_peak_bytes
             if cgroup_metrics.memory_peak_bytes is not None
@@ -412,6 +545,30 @@ def execute_program(
             pids_limit_exceeded
             or cgroup_metrics.pids_limit_exceeded
         )
+
+        if task_tracker is not None and cgroup_registered and root_registered:
+            try:
+                task_metrics = task_tracker.snapshot(run_id)
+            except TaskTrackingError as exc:
+                logger.warning(
+                    "event=task_tracker_snapshot_error "
+                    "job_id=%s run_id=%s error=%s",
+                    job_id,
+                    run_id,
+                    exc,
+                )
+
+        user_task_peak = None
+        process_at_user_task_peak = None
+        thread_at_user_task_peak = None
+        if task_metrics is not None:
+            user_task_peak = task_metrics.user_task_peak
+            process_at_user_task_peak = (
+                task_metrics.process_at_user_task_peak
+            )
+            thread_at_user_task_peak = (
+                task_metrics.thread_at_user_task_peak
+            )
         if oom_killed:
             memory_limit_bytes = (
                 container.attrs.get("HostConfig", {}).get("Memory")
@@ -433,6 +590,18 @@ def execute_program(
         finished_at = wait_state.get("finished_at")
         if not isinstance(finished_at, float):
             finished_at = time.monotonic()
+
+        if cpu_sampler is not None:
+            cpu_sampler.sample_final(
+                finished_at=finished_at,
+                final_cpu_usec=cgroup_metrics.cpu_time_usec,
+            )
+        
+        if collect_runtime_permission_failure(container):
+            raise SecurityVerificationError(
+                "Execution Container 권한 제한 적용을 검증하지 못했습니다."
+            )
+
         filesystem_violation = FilesystemViolation()
         if system_error is None:
             try:
@@ -455,8 +624,17 @@ def execute_program(
             output_limit_exceeded=output.exceeded.is_set(),
             oom_killed=oom_killed,
             wall_time_ms=int((finished_at - start) * 1000),
+            cpu_time_ms=cpu_time_ms,
+            cpu_usage_samples=(
+                cpu_sampler.samples
+                if cpu_sampler is not None
+                else None
+            ),
             memory_peak_bytes=memory_peak_bytes,
             pids_peak=pids_peak,
+            user_task_peak=user_task_peak,
+            process_at_user_task_peak=process_at_user_task_peak,
+            thread_at_user_task_peak=thread_at_user_task_peak,
             pids_limit_exceeded=pids_limit_exceeded,
             filesystem_limit_exceeded=filesystem_violation.detected,
             filesystem_violation_syscall=filesystem_violation.syscall,
@@ -478,3 +656,15 @@ def execute_program(
             memory_peak_bytes=monitor.memory_peak_bytes,
             pids_peak=pids_monitor.pids_peak,
         )
+    finally:
+        if task_tracker is not None:
+            try:
+                task_tracker.remove(run_id)
+            except TaskTrackingError as exc:
+                logger.warning(
+                    "event=task_tracker_cleanup_error "
+                    "job_id=%s run_id=%s error=%s",
+                    job_id,
+                    run_id,
+                    exc,
+                )

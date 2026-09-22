@@ -1,15 +1,19 @@
 import threading
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 from uuid import uuid4
 
 import docker
 
 from runner.config import settings
-from runner.exceptions import ContainerExecutionError
+from runner.exceptions import ContainerExecutionError, TaskTrackingError
 from runner.models.result import RunnerReasonCode, RunnerStatus
 from runner.pipeline.classifier import classify_execution
 from runner.metrics.cgroup_scope import CgroupMetrics
+from runner.metrics.task_tracker import (
+    ExecutionCgroupIdentity,
+    PidsPeakSnapshot,
+)
 from runner.pipeline.execution import (
     create_execution_container,
     execute_program,
@@ -31,6 +35,12 @@ class ExecutionTests(unittest.TestCase):
         self.addCleanup(trace_patch.stop)
         from runner.security.filesystem_trace import FilesystemViolation
         self.trace_collector.return_value = FilesystemViolation()
+        security_patch = patch(
+            "runner.pipeline.execution.collect_runtime_permission_failure",
+            return_value=False,
+        )
+        self.security_collector = security_patch.start()
+        self.addCleanup(security_patch.stop)
         self.client = MagicMock()
         self.container = MagicMock()
         self.client.containers.create.return_value = self.container
@@ -51,6 +61,14 @@ class ExecutionTests(unittest.TestCase):
             volume_name="codeguard-job-test",
         )
         self.run_id = uuid4()
+        self.affinity_patcher = patch(
+            "runner.pipeline.execution.os.sched_getaffinity",
+            return_value={0, 1},
+        )
+        self.mock_sched_getaffinity = self.affinity_patcher.start()
+        self.addCleanup(self.affinity_patcher.stop)
+
+        
 
     def test_create_execution_container_returns_registered_container(self) -> None:
         result = create_execution_container(
@@ -60,14 +78,14 @@ class ExecutionTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=self.run_id,
             memory_limit_mb=128,
-            cpu_limit=1.0,
+            cpu_bandwidth=1.0,
             pids_limit=10,
         )
 
         self.assertIs(result, self.container)
         self.client.containers.create.assert_called_once_with(
             image=settings.cpp_image,
-            command=["sh", "-c", f"umask 077; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /workspace/main"],
+            command=["sh", "-c", f"umask 077; set -C; exec 3>/run/codeguard-trace/security.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 -- /workspace/main"],
             mounts=[docker.types.Mount(target=TRACE_DIRECTORY, source="", type="volume")],
             volumes={
                 self.workspace.volume_name: {
@@ -85,6 +103,7 @@ class ExecutionTests(unittest.TestCase):
             mem_limit=128 * 1024 * 1024,
             memswap_limit=128 * 1024 * 1024,
             nano_cpus=1_000_000_000,
+            cpuset_cpus="0,1",
             pids_limit=10,
             labels={
                 "codeguard.managed": "true",
@@ -94,6 +113,45 @@ class ExecutionTests(unittest.TestCase):
             },
         )
 
+    def test_create_execution_container_applies_internal_logical_cpu_limit(self) -> None:
+        create_execution_container(
+            client=self.client,
+            workspace=self.workspace,
+            stdin="",
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            memory_limit_mb=128,
+            cpu_bandwidth=1.0,
+            pids_limit=10,
+        )
+
+        cpuset_cpus = self.client.containers.create.call_args.kwargs[
+            "cpuset_cpus"
+        ]
+        self.assertEqual(cpuset_cpus, "0,1")
+
+    def test_create_execution_container_uses_available_cpus_below_internal_limit(
+        self,
+    ) -> None:
+        self.mock_sched_getaffinity.return_value = {0}
+
+        create_execution_container(
+            client=self.client,
+            workspace=self.workspace,
+            stdin="",
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            memory_limit_mb=128,
+            cpu_bandwidth=1.0,
+            pids_limit=10,
+        )
+
+        cpuset_cpus = self.client.containers.create.call_args.kwargs[
+            "cpuset_cpus"
+        ]
+        self.assertEqual(cpuset_cpus, "0")
+
+
     def test_create_execution_container_uses_stdin_file(self) -> None:
         create_execution_container(
             client=self.client,
@@ -102,14 +160,14 @@ class ExecutionTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=self.run_id,
             memory_limit_mb=128,
-            cpu_limit=1.0,
+            cpu_bandwidth=1.0,
             pids_limit=10,
         )
 
         command = self.client.containers.create.call_args.kwargs["command"]
         self.assertEqual(
             command,
-            ["sh", "-c", f"umask 077; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /workspace/main < /workspace/stdin"],
+            ["sh", "-c", f"umask 077; set -C; exec 3>/run/codeguard-trace/security.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 --stdin /workspace/stdin -- /workspace/main"],
         )
 
     def test_create_execution_container_uses_cgroup_parent(self) -> None:
@@ -123,7 +181,7 @@ class ExecutionTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=self.run_id,
             memory_limit_mb=128,
-            cpu_limit=1.0,
+            cpu_bandwidth=1.0,
             pids_limit=10,
             cgroup_scope=cgroup_scope,
         )
@@ -145,6 +203,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.stdout, "Hello\n")
         self.assertEqual(result.stderr, "")
         self.container.start.assert_called_once_with()
+        self.container.kill.assert_not_called()
         self.container.wait.assert_called_once_with()
         self.container.remove.assert_not_called()
 
@@ -161,7 +220,7 @@ class ExecutionTests(unittest.TestCase):
                 job_id=self.workspace.job_id,
                 run_id=self.run_id,
                 memory_limit_mb=128,
-                cpu_limit=1.0,
+                cpu_bandwidth=1.0,
                 pids_limit=10,
             )
 
@@ -190,6 +249,7 @@ class ExecutionTests(unittest.TestCase):
         pids_monitor_class.return_value.pids_peak = 2
         pids_monitor_class.return_value.exceeded.return_value = False
         cgroup_scope = MagicMock()
+        cgroup_scope.read_cpu_usage_usec.return_value = None
         cgroup_scope.snapshot.return_value = CgroupMetrics(
             memory_peak_bytes=16 * 1024 * 1024,
             pids_peak=18,
@@ -205,7 +265,159 @@ class ExecutionTests(unittest.TestCase):
 
         self.assertEqual(result.memory_peak_bytes, 16 * 1024 * 1024)
         self.assertEqual(result.pids_peak, 18)
+        cgroup_scope.read_cpu_usage_usec.assert_called_once_with()
         cgroup_scope.snapshot.assert_called_once_with()
+
+    def test_execute_program_calculates_cpu_time_from_cgroup_usage(self) -> None:
+        cgroup_scope = MagicMock()
+        cgroup_scope.read_cpu_usage_usec.return_value = 10_000
+        cgroup_scope.snapshot.return_value = CgroupMetrics(
+            cpu_time_usec=85_000,
+        )
+
+        result = execute_program(
+            container=self.container,
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            timeout_ms=2000,
+            cgroup_scope=cgroup_scope,
+        )
+
+        self.assertEqual(result.cpu_time_ms, 75)
+        cgroup_scope.read_cpu_usage_usec.assert_called_once_with()
+        cgroup_scope.snapshot.assert_called_once_with()
+
+    @patch("runner.pipeline.execution.resolve_execution_cgroup")
+    def test_execute_program_returns_user_task_peak_snapshot(
+        self,
+        resolve_cgroup,
+    ) -> None:
+        self.container.attrs = {
+            "State": {"Pid": 321, "OOMKilled": False},
+            "HostConfig": {"Memory": 128 * 1024 * 1024},
+        }
+        resolve_cgroup.return_value = ExecutionCgroupIdentity(
+            cgroup_id=999,
+            pids_current=1,
+        )
+        tracker = MagicMock()
+        tracker.snapshot.return_value = PidsPeakSnapshot(
+            user_task_peak=15,
+            process_at_user_task_peak=3,
+            thread_at_user_task_peak=12,
+        )
+        cgroup_scope = MagicMock()
+        cgroup_scope.snapshot.return_value = CgroupMetrics(pids_peak=18)
+
+        result = execute_program(
+            container=self.container,
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            timeout_ms=2000,
+            cgroup_scope=cgroup_scope,
+            task_tracker=tracker,
+        )
+
+        tracker.register_cgroup.assert_called_once_with(self.run_id, 999, 1)
+        tracker.register_root.assert_called_once_with(self.run_id, 321)
+        tracker.snapshot.assert_called_once_with(self.run_id)
+        tracker.remove.assert_called_once_with(self.run_id)
+        self.container.kill.assert_not_called()
+        self.assertEqual(result.pids_peak, 18)
+        self.assertEqual(result.user_task_peak, 15)
+        self.assertEqual(result.process_at_user_task_peak, 3)
+        self.assertEqual(result.thread_at_user_task_peak, 12)
+
+    @patch("runner.pipeline.execution.resolve_execution_cgroup")
+    def test_execute_program_keeps_user_snapshot_when_cgroup_peak_differs(
+        self,
+        resolve_cgroup,
+    ) -> None:
+        self.container.attrs = {
+            "State": {"Pid": 321, "OOMKilled": False},
+            "HostConfig": {},
+        }
+        resolve_cgroup.return_value = ExecutionCgroupIdentity(999, 1)
+        tracker = MagicMock()
+        tracker.snapshot.return_value = PidsPeakSnapshot(
+            user_task_peak=1,
+            process_at_user_task_peak=1,
+            thread_at_user_task_peak=0,
+        )
+        cgroup_scope = MagicMock()
+        cgroup_scope.snapshot.return_value = CgroupMetrics(pids_peak=18)
+
+        result = execute_program(
+            container=self.container,
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            timeout_ms=2000,
+            cgroup_scope=cgroup_scope,
+            task_tracker=tracker,
+        )
+
+        self.assertEqual(result.pids_peak, 18)
+        self.assertEqual(result.user_task_peak, 1)
+        self.assertEqual(result.process_at_user_task_peak, 1)
+        self.assertEqual(result.thread_at_user_task_peak, 0)
+        tracker.remove.assert_called_once_with(self.run_id)
+
+    @patch("runner.pipeline.execution.resolve_execution_cgroup")
+    def test_tracker_registration_failure_does_not_block_execution(
+        self,
+        resolve_cgroup,
+    ) -> None:
+        self.container.attrs = {
+            "State": {"Pid": 321, "OOMKilled": False},
+            "HostConfig": {},
+        }
+        resolve_cgroup.return_value = ExecutionCgroupIdentity(999, 1)
+        tracker = MagicMock()
+        tracker.register_cgroup.side_effect = TaskTrackingError("offline")
+
+        result = execute_program(
+            container=self.container,
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            timeout_ms=2000,
+            task_tracker=tracker,
+        )
+
+        self.assertEqual(result.exit_code, 0)
+        self.container.kill.assert_not_called()
+        tracker.register_root.assert_not_called()
+        tracker.snapshot.assert_not_called()
+        tracker.remove.assert_called_once_with(self.run_id)
+
+    @patch("runner.pipeline.execution.resolve_execution_cgroup")
+    def test_tracker_pid_reload_failure_does_not_block_execution(
+        self,
+        resolve_cgroup,
+    ) -> None:
+        self.container.reload.side_effect = [
+            docker.errors.APIError("tracking reload failed"),
+            None,
+            None,
+        ]
+        self.container.attrs = {
+            "State": {"Pid": 321, "OOMKilled": False},
+            "HostConfig": {},
+        }
+        tracker = MagicMock()
+
+        result = execute_program(
+            container=self.container,
+            job_id=self.workspace.job_id,
+            run_id=self.run_id,
+            timeout_ms=2000,
+            task_tracker=tracker,
+        )
+
+        self.assertEqual(result.exit_code, 0)
+        self.container.kill.assert_not_called()
+        resolve_cgroup.assert_not_called()
+        tracker.register_cgroup.assert_not_called()
+        tracker.remove.assert_called_once_with(self.run_id)
 
     def test_trace_failure_is_system_error(self) -> None:
         self.trace_collector.side_effect = ValueError("trace corrupt")
@@ -255,7 +467,10 @@ class ExecutionTests(unittest.TestCase):
                     return {"StatusCode": exit_code}
 
                 container.wait.side_effect = wait_for_exit
-                container.kill.side_effect = released.set
+                def kill(*args, **kwargs):
+                    released.set()
+
+                container.kill.side_effect = kill
                 with patch(
                     "runner.pipeline.execution.ResourceMonitor",
                 ) as resource, patch(
@@ -271,7 +486,10 @@ class ExecutionTests(unittest.TestCase):
                         timeout_ms=5,
                     )
 
-                container.kill.assert_called_once_with()
+                self.assertEqual(
+                    container.kill.call_args_list,
+                    [call()],
+                )
                 self.assertIsNone(result.system_error)
                 self.assertEqual(result.exit_code, exit_code)
                 self.assertEqual(result.timed_out, exit_code == 137)
@@ -290,6 +508,12 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
         )
         trace_patch.start()
         self.addCleanup(trace_patch.stop)
+        security_patch = patch(
+            "runner.pipeline.execution.collect_runtime_permission_failure",
+            return_value=False,
+        )
+        security_patch.start()
+        self.addCleanup(security_patch.stop)
 
     def run_execution(
         self,
@@ -336,7 +560,7 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
             elif output is None and not pids_exceeded:
                 finish_wait()
 
-        def kill():
+        def kill(*args, **kwargs):
             finish_wait()
             if kill_error is not None:
                 raise kill_error
@@ -346,6 +570,7 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
         cgroup_scope = None
         if cgroup_metrics is not None:
             cgroup_scope = MagicMock()
+            cgroup_scope.read_cpu_usage_usec.return_value = None
             cgroup_scope.snapshot.return_value = cgroup_metrics
 
         with (
@@ -380,22 +605,31 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
             and classification.reason_code == RunnerReasonCode.TIME_LIMIT,
         )
 
+    def assert_start_only(self, container):
+        container.kill.assert_not_called()
+
+    def assert_policy_kill(self, container):
+        self.assertEqual(
+            container.kill.call_args_list,
+            [call()],
+        )
+
     def test_sigsegv_before_timeout_is_runtime_error(self):
         result, container = self.run_execution(139)
         self.assertFalse(result.timed_out)
-        container.kill.assert_not_called()
+        self.assert_start_only(container)
         self.assert_classification(result, RunnerReasonCode.RUNTIME_ERROR, RunnerStatus.ERROR)
 
     def test_timeout_kill_exit_137_is_time_limit(self):
         result, container = self.run_execution(137, timeout_reached=True, finished_at=1.1)
         self.assertTrue(result.timed_out)
-        container.kill.assert_called_once_with()
+        self.assert_policy_kill(container)
         self.assert_classification(result, RunnerReasonCode.TIME_LIMIT, RunnerStatus.BLOCKED)
 
     def test_sigsegv_wins_race_with_successful_timeout_kill_request(self):
         result, container = self.run_execution(139, timeout_reached=True, finished_at=1.1)
         self.assertFalse(result.timed_out)
-        container.kill.assert_called_once_with()
+        self.assert_policy_kill(container)
         self.assert_classification(result, RunnerReasonCode.RUNTIME_ERROR, RunnerStatus.ERROR)
 
     def test_timeout_kill_of_already_stopped_sigsegv_is_runtime_error(self):
@@ -410,27 +644,27 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
             139, timeout_reached=True, finished_at=1.1, kill_error=error,
         )
         self.assertFalse(result.timed_out)
-        container.kill.assert_called_once_with()
+        self.assert_policy_kill(container)
         self.assert_classification(result, RunnerReasonCode.RUNTIME_ERROR, RunnerStatus.ERROR)
 
     def test_delayed_sigsegv_result_exceeding_wall_timeout_is_runtime_error(self):
         result, container = self.run_execution(139, finished_at=1.5)
         self.assertGreater(result.wall_time_ms, 1000)
         self.assertFalse(result.timed_out)
-        container.kill.assert_not_called()
+        self.assert_start_only(container)
         self.assert_classification(result, RunnerReasonCode.RUNTIME_ERROR, RunnerStatus.ERROR)
 
     def test_delayed_success_result_exceeding_wall_timeout_is_success(self):
         result, container = self.run_execution(0, finished_at=1.5)
         self.assertGreater(result.wall_time_ms, 1000)
         self.assertFalse(result.timed_out)
-        container.kill.assert_not_called()
+        self.assert_start_only(container)
         self.assert_classification(result, None, RunnerStatus.SUCCESS)
 
     def test_exit_137_without_timeout_kill_is_runtime_error(self):
         result, container = self.run_execution(137, finished_at=1.5)
         self.assertFalse(result.timed_out)
-        container.kill.assert_not_called()
+        self.assert_start_only(container)
         self.assert_classification(result, RunnerReasonCode.RUNTIME_ERROR, RunnerStatus.ERROR)
 
     def test_failed_timeout_kill_does_not_claim_exit_137(self):
@@ -439,7 +673,7 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
             kill_error=docker.errors.APIError("kill failed"),
         )
         self.assertFalse(result.timed_out)
-        container.kill.assert_called_once_with()
+        self.assert_policy_kill(container)
         self.assert_classification(result, RunnerReasonCode.RUNTIME_ERROR, RunnerStatus.ERROR)
 
     def test_oom_evidence_keeps_priority_over_timeout(self):
@@ -465,14 +699,14 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
     def test_output_kill_exit_137_is_output_limit(self):
         result, container = self.run_execution(137, output=[(b"x" * 17, None)])
         self.assertFalse(result.timed_out)
-        container.kill.assert_called_once_with()
+        self.assert_policy_kill(container)
         self.assertTrue(result.output_limit_exceeded)
         self.assert_classification(result, RunnerReasonCode.OUTPUT_LIMIT, RunnerStatus.BLOCKED)
 
     def test_pids_kill_exit_137_is_pids_limit(self):
         result, container = self.run_execution(137, pids_exceeded=True)
         self.assertFalse(result.timed_out)
-        container.kill.assert_called_once_with()
+        self.assert_policy_kill(container)
         self.assertTrue(result.pids_limit_exceeded)
         self.assert_classification(result, RunnerReasonCode.PIDS_LIMIT, RunnerStatus.BLOCKED)
 if __name__ == "__main__":

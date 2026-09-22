@@ -24,7 +24,8 @@ def create_execution(
         timeout_ms=limits["timeout_ms"],
         memory_limit_mb=limits["memory_limit_mb"],
         pids_limit=limits["pids_limit"],
-        cpu_limit=limits["cpu_limit"],
+        cpu_bandwidth=limits["cpu_bandwidth"],
+        cpu_time_limit_ms=limits["cpu_time_limit_ms"],
         output_limit_bytes=limits["output_limit_bytes"],
     )
 
@@ -95,6 +96,7 @@ def save_result(
     memory_peak_bytes: int | None = None,
     pids_peak: int | None = None,
     output_bytes: int | None = None,
+    cpu_usage_samples: list[dict[str, int]] | None = None,
     finished_at: datetime | None = None,
 ) -> Execution | None:
     """Runner 결과를 실행 기록에 반영하고 최종 상태로 갱신
@@ -124,6 +126,7 @@ def save_result(
     execution.memory_peak_bytes = memory_peak_bytes
     execution.pids_peak = pids_peak
     execution.output_bytes = output_bytes
+    execution.cpu_usage_samples = cpu_usage_samples
 
     db.commit()
     db.refresh(execution)

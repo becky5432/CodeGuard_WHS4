@@ -31,6 +31,7 @@ class ResultContractTests(unittest.TestCase):
             {reason.value for reason in RunnerReasonCode},
             {
                 "TIME_LIMIT",
+                "CPU_TIME_LIMIT",
                 "MEMORY_LIMIT",
                 "PIDS_LIMIT",
                 "OUTPUT_LIMIT",
@@ -40,6 +41,7 @@ class ResultContractTests(unittest.TestCase):
                 "COMPILE_TIMEOUT",
                 "RUNTIME_ERROR",
                 "INTERNAL_ERROR",
+                "SECURITY_VERIFICATION_FAILED",
             },
         )
 
