@@ -424,6 +424,13 @@ def execute_program(
                 network_start,
             )
 
+        logger.info(
+            "event=network_detection "
+            "container_ip=%s network_blocked=%s",
+            container_ip,
+            network_blocked,
+        )
+
         return ExecutionResult(
             exit_code=exit_code,
             stdout=stdout,
