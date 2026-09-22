@@ -270,6 +270,7 @@ def execute_program(
     timeout_kill_requested = False
     cpu_time_limit_reached = False
     cpu_time_kill_requested = False
+    cpu_time_measurement_failed = False
     pids_limit_exceeded = False
     system_error = None
     output_thread = None
@@ -366,6 +367,7 @@ def execute_program(
 
 
             # 사용자 코드 실행 직전 execution cgroup의 누적 CPU time을 저장한다.
+            cpu_start_usec = None
             if cgroup_scope is not None:
                 try:
                     cpu_start_usec = cgroup_scope.read_cpu_usage_usec()
@@ -377,6 +379,11 @@ def execute_program(
                         run_id,
                         exc,
                     )
+
+            if cpu_time_limit_ms is not None and cpu_start_usec is None:
+                raise ContainerExecutionError(
+                    "CPU 사용시간 제한 적용을 위한 기준값을 측정하지 못했습니다."
+                )
 
             container.kill(signal="SIGUSR1")
             start = time.monotonic()
