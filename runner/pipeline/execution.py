@@ -65,6 +65,7 @@ class ExecutionResult:
     timed_out: bool = False
     output_limit_exceeded: bool = False
     oom_killed: bool = False
+    cpu_time_limit_exceeded: bool = False
     wall_time_ms: int | None = None
     cpu_time_ms: int | None = None
     memory_peak_bytes: int | None = None
@@ -512,6 +513,11 @@ def execute_program(
         # Reaching the deadline does not prove timeout caused the exit: a natural
         # exit (e.g. SIGSEGV/139) can win the race with a successful kill request.
         timed_out = timeout_kill_requested and exit_code == 137
+
+        cpu_time_limit_exceeded = (
+            cpu_time_kill_requested
+            and exit_code == 137
+        )
 
         oom_killed = False
         try:
