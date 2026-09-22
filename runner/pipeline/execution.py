@@ -408,6 +408,23 @@ def execute_program(
                 if cpu_sampler is not None:
                     cpu_sampler.sample_if_due(now)
 
+                if (
+                    cpu_time_limit_ms is not None
+                    and cgroup_scope is not None
+                    and cpu_start_usec is not None
+                ):
+                    current_cpu_usec = cgroup_scope.read_cpu_usage_usec()
+
+                    if current_cpu_usec is not None:
+                        cpu_time_used_usec = max(
+                            current_cpu_usec - cpu_start_usec,
+                            0,
+                        )
+
+                        if cpu_time_used_usec >= cpu_time_limit_ms * 1000:
+                            cpu_time_limit_reached = True
+                            break
+
                 remaining = timeout_seconds - (now - start)
                 if remaining <= 0:
                     timeout_reached = True
