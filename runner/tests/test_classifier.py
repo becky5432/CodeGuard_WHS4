@@ -56,6 +56,15 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(result.status, RunnerStatus.BLOCKED)
         self.assertEqual(result.reason_code, RunnerReasonCode.TIME_LIMIT)
 
+    def test_cpu_time_limit_is_blocked_cpu_time_limit(self) -> None:
+        result = classify_execution(
+            ExecutionResult(137, "", "", cpu_time_limit_exceeded=True),
+        )
+
+        self.assertEqual(result.status, RunnerStatus.BLOCKED)
+        self.assertEqual(result.reason_code, RunnerReasonCode.CPU_TIME_LIMIT)
+        self.assertEqual(result.stage.value, "EXECUTE")
+
     def test_oom_kill_is_blocked_memory_limit(self) -> None:
         result = classify_execution(
             ExecutionResult(137, "", "", oom_killed=True),
@@ -72,6 +81,13 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(result.status, RunnerStatus.BLOCKED)
         self.assertEqual(result.reason_code, RunnerReasonCode.OUTPUT_LIMIT)
 
+    def test_network_block_is_blocked_network(self) -> None:
+        result = classify_execution(
+            ExecutionResult(0, "", "", network_blocked=True),
+        )
+        self.assertEqual(result.status, RunnerStatus.BLOCKED)
+        self.assertEqual(result.reason_code, RunnerReasonCode.NETWORK_BLOCKED)
+        self.assertEqual(result.stage.value, "EXECUTE")
 
     def test_sigsegv_exit_139_is_runtime_error(self) -> None:
         result = classify_execution(ExecutionResult(139, "", ""))
@@ -86,6 +102,8 @@ class ClassifierTests(unittest.TestCase):
              RunnerStatus.BLOCKED, RunnerReasonCode.MEMORY_LIMIT),
             ({"pids_limit_exceeded": True},
              RunnerStatus.BLOCKED, RunnerReasonCode.PIDS_LIMIT),
+            ({"cpu_time_limit_exceeded": True},
+             RunnerStatus.BLOCKED, RunnerReasonCode.CPU_TIME_LIMIT),
             ({}, RunnerStatus.BLOCKED, RunnerReasonCode.TIME_LIMIT),
         )
         for evidence, status, reason in cases:
@@ -106,6 +124,7 @@ class ClassifierTests(unittest.TestCase):
             ({"system_error": "trace failed"}, RunnerReasonCode.INTERNAL_ERROR),
             ({"oom_killed": True}, RunnerReasonCode.MEMORY_LIMIT),
             ({"pids_limit_exceeded": True}, RunnerReasonCode.PIDS_LIMIT),
+            ({"cpu_time_limit_exceeded": True}, RunnerReasonCode.CPU_TIME_LIMIT),
             ({"timed_out": True}, RunnerReasonCode.TIME_LIMIT),
             ({"output_limit_exceeded": True}, RunnerReasonCode.OUTPUT_LIMIT),
         ):

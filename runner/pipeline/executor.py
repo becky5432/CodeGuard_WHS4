@@ -238,6 +238,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 "run_id": run_id,
                 "timeout_ms": job.policy.timeout_ms,
                 "output_limit_bytes": job.policy.output_limit_bytes,
+                "cpu_time_limit_ms": job.policy.cpu_time_limit_ms,
             }
             if execution_cgroup_scope is not None:
                 execute_options["cgroup_scope"] = execution_cgroup_scope

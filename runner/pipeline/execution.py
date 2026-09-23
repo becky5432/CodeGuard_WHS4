@@ -14,6 +14,7 @@ from runner.exceptions import (
     RunnerError,
     TaskTrackingError,
 )
+from runner.metrics.network_detector import detect_network_block
 from runner.metrics.cgroup_scope import CgroupMetrics, ExecutionCgroupScope
 from runner.metrics.resource_monitor import ResourceMonitor
 from runner.metrics.pids_monitor import PidsLimitMonitor
@@ -65,6 +66,7 @@ class ExecutionResult:
     timed_out: bool = False
     output_limit_exceeded: bool = False
     oom_killed: bool = False
+    cpu_time_limit_exceeded: bool = False
     wall_time_ms: int | None = None
     cpu_time_ms: int | None = None
     memory_peak_bytes: int | None = None
@@ -77,6 +79,7 @@ class ExecutionResult:
     filesystem_violation_syscall: str | None = None
     filesystem_violation_path: str | None = None
     cpu_usage_samples: list[CpuUsageSample] | None = None
+    network_blocked: bool = False
 
 
 class _BoundedOutput:
@@ -182,8 +185,8 @@ def create_execution_container(
         },
         "detach": True,
         "read_only": True,
-      
-        "network_mode": "none",
+        
+        "network_mode": settings.execution_network,
         "user": "0:0",
         "cap_drop": list(EXECUTION_CAP_DROP),
         "cap_add": list(TRACER_CAP_ADD),
@@ -251,10 +254,12 @@ def execute_program(
     output_limit_bytes: int = EXECUTION_OUTPUT_LIMIT_BYTES,
     cgroup_scope: ExecutionCgroupScope | None = None,
     task_tracker: TaskTrackerClient | None = None,
+    cpu_time_limit_ms: int | None = None,
 ) -> ExecutionResult:
     """제한을 감시하며 실행 컨테이너의 종료 정보와 출력을 수집한다."""
 
     start = time.monotonic()
+    network_start = time.time()
     output = _BoundedOutput(output_limit_bytes)
     monitor = ResourceMonitor(container)
     pids_monitor = PidsLimitMonitor(container)
@@ -263,6 +268,8 @@ def execute_program(
     output_state: dict[str, Exception | None] = {}
     timeout_reached = False
     timeout_kill_requested = False
+    cpu_time_limit_reached = False
+    cpu_time_kill_requested = False
     pids_limit_exceeded = False
     system_error = None
     output_thread = None
@@ -273,6 +280,8 @@ def execute_program(
     task_metrics: PidsPeakSnapshot | None = None
     cpu_start_usec: int | None = None
     cpu_sampler: CpuUsageSampler | None = None
+    container_ip = None
+    network_blocked = False
 
     def wait_for_container() -> None:
         try:
@@ -314,6 +323,18 @@ def execute_program(
             start = time.monotonic()
             container.start()
 
+            container.reload()
+
+            networks = container.attrs.get(
+                "NetworkSettings", {}
+            ).get("Networks", {})
+
+            for network in networks.values():
+                ip = network.get("IPAddress")
+                if ip:
+                    container_ip = ip
+                    break
+
             if task_tracker is not None:
                 try:
                     container.reload()
@@ -345,6 +366,7 @@ def execute_program(
 
 
             # 사용자 코드 실행 직전 execution cgroup의 누적 CPU time을 저장한다.
+            cpu_start_usec = None
             if cgroup_scope is not None:
                 try:
                     cpu_start_usec = cgroup_scope.read_cpu_usage_usec()
@@ -356,6 +378,11 @@ def execute_program(
                         run_id,
                         exc,
                     )
+
+            if cpu_time_limit_ms is not None and cpu_start_usec is None:
+                raise ContainerExecutionError(
+                    "CPU 사용시간 제한 적용을 위한 기준값을 측정하지 못했습니다."
+                )
 
             container.kill(signal="SIGUSR1")
             start = time.monotonic()
@@ -405,18 +432,49 @@ def execute_program(
                 if cpu_sampler is not None:
                     cpu_sampler.sample_if_due(now)
 
+                if (
+                    cpu_time_limit_ms is not None
+                    and cgroup_scope is not None
+                    and cpu_start_usec is not None
+                ):
+                    try:
+                        current_cpu_usec = cgroup_scope.read_cpu_usage_usec()
+                    except Exception as exc:
+                        logger.warning(
+                            "event=execution_cpu_time_measurement_error "
+                            "job_id=%s run_id=%s error=%s",
+                            job_id,
+                            run_id,
+                            exc,
+                        )
+                        current_cpu_usec = None
+
+                    if current_cpu_usec is not None:
+                        cpu_time_used_usec = max(
+                            current_cpu_usec - cpu_start_usec,
+                            0,
+                        )
+
+                        if cpu_time_used_usec >= cpu_time_limit_ms * 1000:
+                            cpu_time_limit_reached = True
+                            break
+
                 remaining = timeout_seconds - (now - start)
                 if remaining <= 0:
                     timeout_reached = True
                     break
                 wait_done.wait(timeout=min(remaining, 0.01))
 
-            policy_kill = timeout_reached or output.exceeded.is_set() or pids_limit_exceeded
+            policy_kill = timeout_reached or output.exceeded.is_set() or pids_limit_exceeded or cpu_time_limit_reached
             if policy_kill and not wait_done.is_set():
                 try:
                     container.kill()
                     if timeout_reached:
                         timeout_kill_requested = True
+
+                    if cpu_time_limit_reached:
+                        cpu_time_kill_requested = True 
+                    
                 except docker.errors.DockerException as exc:
                     logger.warning(
                         "event=execution_container_kill_error "
@@ -448,7 +506,7 @@ def execute_program(
                     )
             pids_monitor.sample()
 
-        final_policy_kill = timeout_reached or output.exceeded.is_set() or pids_limit_exceeded
+        final_policy_kill = timeout_reached or output.exceeded.is_set() or pids_limit_exceeded or cpu_time_limit_reached
         if not output_thread_stopped:
             system_error = "실행 출력 수집기를 종료하지 못했습니다."
             logger.error(
@@ -488,6 +546,11 @@ def execute_program(
         # Reaching the deadline does not prove timeout caused the exit: a natural
         # exit (e.g. SIGSEGV/139) can win the race with a successful kill request.
         timed_out = timeout_kill_requested and exit_code == 137
+
+        cpu_time_limit_exceeded = (
+            cpu_time_kill_requested
+            and exit_code == 137
+        )
 
         oom_killed = False
         try:
@@ -615,6 +678,13 @@ def execute_program(
                     "event=filesystem_trace_error job_id=%s run_id=%s error=%s",
                     job_id, run_id, exc,
                 )
+
+        if container_ip:
+            network_blocked = detect_network_block(
+                container_ip,
+                network_start,
+            )
+
         return ExecutionResult(
             exit_code=exit_code,
             stdout=stdout,
@@ -622,6 +692,7 @@ def execute_program(
             system_error=system_error,
             timed_out=timed_out,
             output_limit_exceeded=output.exceeded.is_set(),
+            cpu_time_limit_exceeded=cpu_time_limit_exceeded,
             oom_killed=oom_killed,
             wall_time_ms=int((finished_at - start) * 1000),
             cpu_time_ms=cpu_time_ms,
@@ -639,6 +710,7 @@ def execute_program(
             filesystem_limit_exceeded=filesystem_violation.detected,
             filesystem_violation_syscall=filesystem_violation.syscall,
             filesystem_violation_path=filesystem_violation.path,
+            network_blocked=network_blocked,
         )
     except docker.errors.DockerException as exc:
         logger.error(
@@ -655,6 +727,7 @@ def execute_program(
             wall_time_ms=int((time.monotonic() - start) * 1000),
             memory_peak_bytes=monitor.memory_peak_bytes,
             pids_peak=pids_monitor.pids_peak,
+            network_blocked=network_blocked,
         )
     finally:
         if task_tracker is not None:
