@@ -441,7 +441,7 @@ function MainPage() {
   const isPidsLimitExceeded = executionResult?.reason_code === "PIDS_LIMIT";
   const isOutputLimitExceeded = executionResult?.reason_code === "OUTPUT_LIMIT";
   const isCpuTimeLimitExceeded =
-    executionResult?.reason_code === "CPUTIME_LIMIT";
+    executionResult?.reason_code === "CPU_TIME_LIMIT";
 
   // 실제 Runner 응답 기반 자원 사용량
   const resourceUsage = executionResult?.resource_usage;
@@ -858,7 +858,7 @@ function MainPage() {
 
                   <div
                     className={`environment-limit-card ${
-                      isLimitTriggered("CPUTIME_LIMIT") ? "limit-triggered" : ""
+                      isLimitTriggered("CPU_TIME_LIMIT") ? "limit-triggered" : ""
                     }`}
                   >
                     <span className="environment-limit-icon metric-cputime">
