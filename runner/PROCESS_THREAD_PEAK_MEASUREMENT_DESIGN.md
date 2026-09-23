@@ -102,9 +102,9 @@ Runner
   ├─ Execution 전용 cgroup 생성
   │    └─ pids.max = pids_limit
   ├─ Execution Container 생성
-  │    └─ codeguard-init이 시작 신호 대기
-  ├─ eBPF Controller에 run_id · Root TID 등록
-  ├─ 사용자 실행파일 시작
+  │    └─ strace의 자식 codeguard-init이 시작 파일 대기
+  ├─ eBPF Controller에 run_id · codeguard-init TID 등록
+  ├─ start.ready 생성 후 사용자 실행파일 시작
   ├─ fork/clone/exit 이벤트 추적
   ├─ process_peak · thread_peak · task_peak 회수
   ├─ cgroup의 pids_peak · pids.events 회수 및 결과 판정
@@ -116,10 +116,10 @@ Runner
 컨테이너 초기화 Task를 사용자 지표에서 제외하기 위해 최소 실행기인 `codeguard-init`을 사용한다.
 
 1. Runner가 Execution Container를 생성한다.
-2. `codeguard-init`은 사용자 코드를 즉시 실행하지 않고 시작 신호를 기다린다.
-3. Runner가 컨테이너의 Root TID를 eBPF Controller에 `run_id`와 함께 등록한다.
+2. 컨테이너 PID 1인 `strace`가 `codeguard-init`을 실행하고, `codeguard-init`은 권한 검증 후 시작 파일을 기다린다.
+3. Runner가 `codeguard-init`의 호스트 TID를 eBPF Controller에 `run_id`와 함께 등록한다.
 4. 초기 상태를 프로세스 1개, 추가 스레드 0개, 전체 Task 1개로 설정한다.
-5. 등록이 끝나면 `codeguard-init`이 같은 PID에서 사용자 실행파일로 `execve()`한다.
+5. Runner가 시작 파일을 생성하면 `codeguard-init`이 같은 TID에서 사용자 실행파일로 `execve()`한다.
 6. 이후 Root Task와 그 자손의 생성·종료 이벤트만 집계한다.
 
 실행 제한 시간은 추적 등록을 마치고 사용자 실행파일을 시작하는 시점부터 계산한다.
@@ -221,13 +221,13 @@ eBPF 프로그램은 Runner 시작 시 호스트에 미리 연결해 두지만, 
 
 따라서 다음 조건을 구현의 필수 전제로 둔다.
 
-1. Execution Container의 최초 명령은 사용자 프로그램이 아니라 `codeguard-init`이다.
-2. `codeguard-init`은 시작 신호를 받을 때까지 대기한다.
-3. Runner가 컨테이너의 호스트 Root TID와 `run_id`를 BPF Map에 먼저 등록한다.
-4. 등록 성공 후에만 시작 신호를 전달한다.
-5. `codeguard-init`은 자식 프로세스를 만들지 않고 같은 PID에서 `/workspace/main`으로 `execve()`한다.
+1. Execution Container의 PID 1은 `strace`이고, 사용자 프로그램 대신 `codeguard-init`을 자식으로 실행한다.
+2. `codeguard-init`은 권한 검증 후 시작 파일을 기다린다.
+3. Runner는 `codeguard-init`의 호스트 TID와 `run_id`를 BPF Map에 등록한다. 등록에 실패하면 사용자 측정값을 비워 두고 실행은 계속한다.
+4. Runner가 감시기를 준비하고 시작 파일을 생성한다.
+5. `codeguard-init`은 자식 프로세스를 만들지 않고 같은 TID에서 `/workspace/main`으로 `execve()`한다.
 
-이 순서를 지키면 사용자 코드가 실행되기 전에 추적 준비가 끝나므로 짧은 실행도 시작부터 집계할 수 있다. 현재 Runner에는 `codeguard-init`과 eBPF Controller가 구현되어 있지 않으며, 이 문서는 해당 구성요소를 추가하기 위한 설계 문서다.
+현재 실행 컨테이너의 PID 1은 파일시스템 증거를 수집하는 `strace`다. `codeguard-init`은 그 자식으로 권한 검증을 완료한 뒤 `start.ready` 파일을 기다린다. Runner는 해당 자식의 호스트 TID를 등록하고 감시기를 준비한 다음 Docker `put_archive()`로 시작 파일을 생성한다. 따라서 사용자 코드가 실행되기 전에 추적 준비를 끝낼 수 있다. 구체적인 순서는 [Runner 사용자 코드 시작 동기화 설계](../docs/superpowers/specs/2026-09-23-runner-start-gate-design.md)를 따른다.
 
 ## 7. API 변경
 

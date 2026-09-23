@@ -7,7 +7,47 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
+
+#ifndef START_READY_PATH
+#define START_READY_PATH "/run/codeguard-trace/start.ready"
+#endif
+#ifndef START_WAIT_SECONDS
+#define START_WAIT_SECONDS 15
+#endif
+
+static int wait_for_start_file(void)
+{
+    struct timespec start;
+    struct timespec now;
+    struct timespec pause_time = { .tv_sec = 0, .tv_nsec = 10000000 };
+    struct stat marker;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
+        return -1;
+    }
+    for (;;) {
+        if (lstat(START_READY_PATH, &marker) == 0) {
+            return S_ISREG(marker.st_mode) ? 0 : -1;
+        }
+        if (errno != ENOENT || clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+            return -1;
+        }
+        if (now.tv_sec - start.tv_sec >= START_WAIT_SECONDS) {
+            errno = ETIMEDOUT;
+            return -1;
+        }
+        while (nanosleep(&pause_time, &pause_time) != 0) {
+            if (errno != EINTR) {
+                return -1;
+            }
+        }
+        pause_time.tv_sec = 0;
+        pause_time.tv_nsec = 10000000;
+    }
+}
 
 static void usage(const char *program)
 {
@@ -213,6 +253,11 @@ int main(int argc, char **argv)
             perror("codeguard-init security success status");
             return 126;
         }
+    }
+
+    if (wait_for_start_file() != 0) {
+        perror("codeguard-init start gate");
+        return 126;
     }
 
     execv(argv[index], &argv[index]);
