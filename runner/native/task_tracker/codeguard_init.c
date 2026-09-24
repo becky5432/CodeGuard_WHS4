@@ -22,12 +22,15 @@ static int wait_for_start_file(void)
 {
     struct timespec start;
     struct timespec now;
+    struct timespec deadline;
     struct timespec pause_time = { .tv_sec = 0, .tv_nsec = 10000000 };
     struct stat marker;
 
     if (clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
         return -1;
     }
+    deadline = start;
+    deadline.tv_sec += START_WAIT_SECONDS;
     for (;;) {
         if (lstat(START_READY_PATH, &marker) == 0) {
             return S_ISREG(marker.st_mode) ? 0 : -1;
@@ -35,7 +38,8 @@ static int wait_for_start_file(void)
         if (errno != ENOENT || clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
             return -1;
         }
-        if (now.tv_sec - start.tv_sec >= START_WAIT_SECONDS) {
+        if (now.tv_sec > deadline.tv_sec ||
+            (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec)) {
             errno = ETIMEDOUT;
             return -1;
         }
