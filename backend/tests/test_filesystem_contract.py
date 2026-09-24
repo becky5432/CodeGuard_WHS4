@@ -94,6 +94,7 @@ def test_security_verification_reason_round_trips_string_column():
     limits = {
         "timeout_ms": 3000, "memory_limit_mb": 128,
         "pids_limit": 32, "cpu_bandwidth": 1.0,
+        "cpu_time_limit_ms": 2000,
         "output_limit_bytes": 1024,
     }
     try:

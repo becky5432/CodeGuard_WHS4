@@ -6,7 +6,7 @@ from uuid import uuid4
 import docker
 
 from runner.config import settings
-from runner.exceptions import ContainerExecutionError, TaskTrackingError
+from runner.exceptions import ContainerExecutionError, SecurityVerificationError, TaskTrackingError
 from runner.models.result import RunnerReasonCode, RunnerStatus
 from runner.pipeline.classifier import classify_execution
 from runner.metrics.cgroup_scope import CgroupMetrics
@@ -41,11 +41,24 @@ class ExecutionTests(unittest.TestCase):
         )
         self.security_collector = security_patch.start()
         self.addCleanup(security_patch.stop)
+        for target in (
+            "runner.pipeline.execution.wait_for_security_evidence",
+            "runner.pipeline.execution.release_start_gate",
+        ):
+            gate_patch = patch(target)
+            gate_patch.start()
+            self.addCleanup(gate_patch.stop)
+        root_patch = patch(
+            "runner.pipeline.execution.find_codeguard_init_tid", return_value=456,
+        )
+        root_patch.start()
+        self.addCleanup(root_patch.stop)
         self.client = MagicMock()
         self.container = MagicMock()
         self.client.containers.create.return_value = self.container
         self.container.wait.return_value = {"StatusCode": 0}
         self.container.attach.return_value = [(b"Hello\n", None)]
+        self.container.put_archive.return_value = True
         self.container.attrs = {
             "Config": {"User": "0:0"},
             "HostConfig": {
@@ -64,6 +77,7 @@ class ExecutionTests(unittest.TestCase):
         self.affinity_patcher = patch(
             "runner.pipeline.execution.os.sched_getaffinity",
             return_value={0, 1},
+            create=True,
         )
         self.mock_sched_getaffinity = self.affinity_patcher.start()
         self.addCleanup(self.affinity_patcher.stop)
@@ -207,6 +221,71 @@ class ExecutionTests(unittest.TestCase):
         self.container.wait.assert_called_once_with()
         self.container.remove.assert_not_called()
 
+    def test_execution_opens_start_file_after_security_and_tracker_registration(self) -> None:
+        tracker = MagicMock()
+        tracker.snapshot.return_value = PidsPeakSnapshot(1, 1, 0)
+        self.container.attrs["State"]["Pid"] = 321
+        with (
+            patch("runner.pipeline.execution.find_codeguard_init_tid", return_value=456),
+            patch("runner.pipeline.execution.resolve_execution_cgroup", return_value=ExecutionCgroupIdentity(999, 2)),
+            patch("runner.pipeline.execution.wait_for_security_evidence") as evidence,
+            patch("runner.pipeline.execution.release_start_gate") as release,
+        ):
+            order = MagicMock()
+            order.attach_mock(evidence, "evidence")
+            order.attach_mock(tracker.register_root, "register_root")
+            order.attach_mock(release, "release")
+            execute_program(
+                self.container, self.workspace.job_id, self.run_id,
+                timeout_ms=2000, task_tracker=tracker,
+            )
+        self.assertEqual(
+            [entry[0] for entry in order.mock_calls],
+            ["evidence", "register_root", "release"],
+        )
+        tracker.register_root.assert_called_once_with(self.run_id, 456)
+        self.container.kill.assert_not_called()
+
+    def test_start_file_failure_aborts_without_running_user_code(self) -> None:
+        with patch(
+            "runner.pipeline.execution.release_start_gate",
+            side_effect=ContainerExecutionError("failed"),
+        ):
+            with self.assertRaises(ContainerExecutionError):
+                execute_program(
+                    self.container, self.workspace.job_id, self.run_id,
+                    timeout_ms=2000,
+                )
+        self.container.kill.assert_called_once_with()
+
+    def test_failed_security_evidence_never_opens_start_gate(self) -> None:
+        with (
+            patch(
+                "runner.pipeline.execution.wait_for_security_evidence",
+                side_effect=SecurityVerificationError("failed"),
+            ),
+            patch("runner.pipeline.execution.release_start_gate") as release,
+        ):
+            with self.assertRaises(SecurityVerificationError):
+                execute_program(
+                    self.container, self.workspace.job_id, self.run_id,
+                    timeout_ms=2000,
+                )
+        release.assert_not_called()
+        self.container.kill.assert_called_once_with()
+
+    @patch("runner.pipeline.execution.ResourceMonitor")
+    def test_monitor_setup_failure_aborts_before_opening_gate(self, monitor_class) -> None:
+        monitor_class.return_value.start.side_effect = RuntimeError("monitor failed")
+        with patch("runner.pipeline.execution.release_start_gate") as release:
+            with self.assertRaisesRegex(RuntimeError, "monitor failed"):
+                execute_program(
+                    self.container, self.workspace.job_id, self.run_id,
+                    timeout_ms=2000,
+                )
+        release.assert_not_called()
+        self.container.kill.assert_called_once_with()
+
     def test_create_execution_container_wraps_docker_failure(self) -> None:
         self.client.containers.create.side_effect = docker.errors.APIError(
             "create failed",
@@ -319,7 +398,7 @@ class ExecutionTests(unittest.TestCase):
         )
 
         tracker.register_cgroup.assert_called_once_with(self.run_id, 999, 1)
-        tracker.register_root.assert_called_once_with(self.run_id, 321)
+        tracker.register_root.assert_called_once_with(self.run_id, 456)
         tracker.snapshot.assert_called_once_with(self.run_id)
         tracker.remove.assert_called_once_with(self.run_id)
         self.container.kill.assert_not_called()
@@ -395,7 +474,9 @@ class ExecutionTests(unittest.TestCase):
         resolve_cgroup,
     ) -> None:
         self.container.reload.side_effect = [
+            None,
             docker.errors.APIError("tracking reload failed"),
+            None,
             None,
             None,
         ]
@@ -469,8 +550,6 @@ class ExecutionTests(unittest.TestCase):
             return {"StatusCode": 137}
 
         def kill(*args, **kwargs):
-            if kwargs.get("signal") == "SIGUSR1":
-                return
             released.set()
 
         container.wait.side_effect = wait_for_exit
@@ -482,7 +561,6 @@ class ExecutionTests(unittest.TestCase):
 
         cgroup_scope = MagicMock()
         cgroup_scope.read_cpu_usage_usec.side_effect = [
-            10_000,
             10_000,
             111_000,
         ]
@@ -505,10 +583,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.cpu_time_ms, 101)
         self.assertEqual(
             container.kill.call_args_list,
-            [
-                call(signal="SIGUSR1"),
-                call(),
-            ],
+            [call()],
         )
 
     @patch("runner.pipeline.execution.CpuUsageSampler")
@@ -531,8 +606,6 @@ class ExecutionTests(unittest.TestCase):
             return {"StatusCode": 0}
 
         def kill(*args, **kwargs):
-            if kwargs.get("signal") == "SIGUSR1":
-                return
             raise AssertionError("CPU time below limit must not request policy kill")
 
         container.wait.side_effect = wait_for_exit
@@ -551,7 +624,7 @@ class ExecutionTests(unittest.TestCase):
             read_count += 1
 
             # 기존 baseline 측정들
-            if read_count <= 2:
+            if read_count <= 1:
                 return 10_000
 
             # 실행 중 사용량: 40ms < limit 100ms
@@ -576,12 +649,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertFalse(result.cpu_time_limit_exceeded)
         self.assertFalse(result.timed_out)
         self.assertEqual(result.cpu_time_ms, 40)
-        self.assertEqual(
-            container.kill.call_args_list,
-            [
-                call(signal="SIGUSR1"),
-            ],
-        )
+        container.kill.assert_not_called()
 
     @patch("runner.pipeline.execution.CpuUsageSampler")
     @patch("runner.pipeline.execution.PidsLimitMonitor")
@@ -604,8 +672,6 @@ class ExecutionTests(unittest.TestCase):
             return {"StatusCode": 0}
 
         def kill(*args, **kwargs):
-            if kwargs.get("signal") == "SIGUSR1":
-                return
             released.set()
 
         container.wait.side_effect = wait_for_exit
@@ -617,7 +683,6 @@ class ExecutionTests(unittest.TestCase):
 
         cgroup_scope = MagicMock()
         cgroup_scope.read_cpu_usage_usec.side_effect = [
-            10_000,
             10_000,
             111_000,
         ]
@@ -640,10 +705,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.cpu_time_ms, 101)
         self.assertEqual(
             container.kill.call_args_list,
-            [
-                call(signal="SIGUSR1"),
-                call(),
-            ],
+            [call()],
         )
 
     @patch("runner.pipeline.execution.CpuUsageSampler")
@@ -666,9 +728,6 @@ class ExecutionTests(unittest.TestCase):
             return {"StatusCode": 137}
 
         def kill(*args, **kwargs):
-            if kwargs.get("signal") == "SIGUSR1":
-                return
-
             released.set()
             raise docker.errors.APIError("kill failed")
 
@@ -681,7 +740,6 @@ class ExecutionTests(unittest.TestCase):
 
         cgroup_scope = MagicMock()
         cgroup_scope.read_cpu_usage_usec.side_effect = [
-            10_000,
             10_000,
             111_000,
         ]
@@ -703,10 +761,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertFalse(result.timed_out)
         self.assertEqual(
             container.kill.call_args_list,
-            [
-                call(signal="SIGUSR1"),
-                call(),
-            ],
+            [call()],
         )
 
     @patch("runner.pipeline.execution.CpuUsageSampler")
@@ -729,8 +784,6 @@ class ExecutionTests(unittest.TestCase):
             return {"StatusCode": 137}
 
         def kill(*args, **kwargs):
-            if kwargs.get("signal") == "SIGUSR1":
-                return
             released.set()
 
         container.wait.side_effect = wait_for_exit
@@ -742,7 +795,6 @@ class ExecutionTests(unittest.TestCase):
 
         cgroup_scope = MagicMock()
         cgroup_scope.read_cpu_usage_usec.side_effect = [
-            10_000,
             10_000,
             110_000,
         ]
@@ -765,10 +817,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.cpu_time_ms, 100)
         self.assertEqual(
             container.kill.call_args_list,
-            [
-                call(signal="SIGUSR1"),
-                call(),
-            ],
+            [call()],
         )
 
     @patch("runner.pipeline.execution.PidsLimitMonitor")
@@ -785,10 +834,7 @@ class ExecutionTests(unittest.TestCase):
         pids_monitor_class.return_value.pids_peak = None
 
         cgroup_scope = MagicMock()
-        cgroup_scope.read_cpu_usage_usec.side_effect = [
-            10_000,
-            None,
-        ]
+        cgroup_scope.read_cpu_usage_usec.return_value = None
 
         with self.assertRaises(ContainerExecutionError):
             execute_program(
@@ -800,7 +846,7 @@ class ExecutionTests(unittest.TestCase):
                 cpu_time_limit_ms=100,
             )
 
-        container.kill.assert_not_called()
+        container.kill.assert_called_once_with()
 
     @patch("runner.pipeline.execution.CpuUsageSampler")
     @patch("runner.pipeline.execution.PidsLimitMonitor")
@@ -822,8 +868,6 @@ class ExecutionTests(unittest.TestCase):
             return {"StatusCode": 137}
 
         def kill(*args, **kwargs):
-            if kwargs.get("signal") == "SIGUSR1":
-                return
             released.set()
 
         container.wait.side_effect = wait_for_exit
@@ -835,7 +879,6 @@ class ExecutionTests(unittest.TestCase):
 
         cgroup_scope = MagicMock()
         cgroup_scope.read_cpu_usage_usec.side_effect = [
-            10_000,                    # 첫 번째 기존 측정
             10_000,                    # 사용자 코드 직전 baseline
             Exception("read failed"),  # 실행 중 일시적 실패
             111_000,                   # 다음 루프에서 복구
@@ -859,10 +902,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(result.cpu_time_ms, 101)
         self.assertEqual(
             container.kill.call_args_list,
-            [
-                call(signal="SIGUSR1"),
-                call(),
-            ],
+            [call()],
         )
 
     def test_timeout_kill_race_preserves_natural_exit(self) -> None:
@@ -973,6 +1013,13 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
         )
         security_patch.start()
         self.addCleanup(security_patch.stop)
+        for target in (
+            "runner.pipeline.execution.wait_for_security_evidence",
+            "runner.pipeline.execution.release_start_gate",
+        ):
+            gate_patch = patch(target)
+            gate_patch.start()
+            self.addCleanup(gate_patch.stop)
 
     def run_execution(
         self,
@@ -1014,6 +1061,8 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
 
         def start_monitor():
             workers["runner-output-monitor"].join(timeout=1.0)
+
+        def release_gate(_container):
             if timeout_reached:
                 clock[0] = 1.001
             elif output is None and not pids_exceeded:
@@ -1037,6 +1086,7 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
             patch("runner.pipeline.execution.PidsLimitMonitor") as pids_class,
             patch("runner.pipeline.execution.threading.Thread", side_effect=make_thread),
             patch("runner.pipeline.execution.time.monotonic", side_effect=lambda: clock[0]),
+            patch("runner.pipeline.execution.release_start_gate", side_effect=release_gate),
         ):
             resource_class.return_value.start.side_effect = start_monitor
             resource_class.return_value.memory_peak_bytes = None
