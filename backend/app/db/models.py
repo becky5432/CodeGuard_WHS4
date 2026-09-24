@@ -45,4 +45,7 @@ class Execution(Base):
     cpu_usage_samples = Column(JSON, nullable=True)            # 구간별 CPU 사용량 샘플(없을 수 있음)
     memory_peak_bytes = Column(Integer)                        # 최대 메모리 ↔ memory_limit_mb
     pids_peak = Column(Integer)                                # 최대 프로세스·스레드 수 ↔ pids_limit
+    user_task_peak = Column(Integer, nullable=True)            # 사용자 코드의 최대 task 수
+    process_at_user_task_peak = Column(Integer, nullable=True) # 해당 시점의 프로세스 수
+    thread_at_user_task_peak = Column(Integer, nullable=True)  # 해당 시점의 스레드 수
     output_bytes = Column(Integer)                             # 출력 크기 ↔ output_limit_bytes
