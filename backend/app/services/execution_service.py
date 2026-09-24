@@ -195,6 +195,15 @@ class ExecutionService:
                     else None
                 ),
                 cpu_usage_samples=cpu_usage_samples,
+                user_task_peak=(
+                    usage.user_task_peak if usage else None
+                ),
+                process_at_user_task_peak=(
+                    usage.process_at_user_task_peak if usage else None
+                ),
+                thread_at_user_task_peak=(
+                    usage.thread_at_user_task_peak if usage else None
+                ),
             )
 
         # DB 오류, 응답 변환 오류 등 Backend 내부 오류
@@ -237,6 +246,9 @@ class ExecutionService:
             execution.memory_peak_bytes,
             execution.pids_peak,
             execution.output_bytes,
+            execution.user_task_peak,
+            execution.process_at_user_task_peak,
+            execution.thread_at_user_task_peak,
         )
 
         has_cpu_samples = execution.cpu_usage_samples is not None
@@ -249,6 +261,9 @@ class ExecutionService:
                 pids_peak=execution.pids_peak,
                 output_bytes=execution.output_bytes,
                 cpu_usage_samples=execution.cpu_usage_samples,
+                user_task_peak=execution.user_task_peak,
+                process_at_user_task_peak=execution.process_at_user_task_peak,
+                thread_at_user_task_peak=execution.thread_at_user_task_peak,
             )
             if any(value is not None for value in metric_values)
             or has_cpu_samples

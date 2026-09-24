@@ -65,6 +65,9 @@ class ResourceUsage(BaseModel):
     pids_peak: int | None = None          # 최대 프로세스 및 스레드 수 
     output_bytes: int | None = None       # stdout·stderr 합산 출력 크기
     cpu_usage_samples: list[CpuUsageSample] | None = None
+    user_task_peak: int | None = None                       # 사용자 코드의 최대 task 수
+    process_at_user_task_peak: int | None = None            # 해당 시점의 프로세스 수
+    thread_at_user_task_peak: int | None = None             # 해당 시점의 스레드 수
     
     
 class StageError(BaseModel):
