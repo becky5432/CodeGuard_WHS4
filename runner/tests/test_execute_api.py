@@ -17,6 +17,7 @@ from runner.main import app
 from runner.models.job import PolicyLimits, RunnerLanguage, RunnerRequest
 from runner.models.result import (
     CpuUsageSample,
+    MemoryUsageSample,
     ResourceUsage,
     RunnerReasonCode,
     RunnerStatus,
@@ -250,6 +251,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "process_at_user_task_peak": None,
                 "thread_at_user_task_peak": None,
                 "cpu_usage_samples": None,
+                "memory_usage_samples": None,
             },
         )
         self.assertEqual(
@@ -512,6 +514,16 @@ class ExecuteApiTests(unittest.TestCase):
                     cpu_time_delta_ms=72,
                 ),
             ],
+            memory_usage_samples=[
+                MemoryUsageSample(
+                    elapsed_ms=100,
+                    memory_bytes=10_485_760,
+                ),
+                MemoryUsageSample(
+                    elapsed_ms=199,
+                    memory_bytes=20_971_520,
+                ),
+            ],
         )
 
         payload = self.client.post(
@@ -540,6 +552,16 @@ class ExecuteApiTests(unittest.TestCase):
                         "elapsed_ms": 199,
                         "interval_ms": 99,
                         "cpu_time_delta_ms": 72,
+                    },
+                ],
+                "memory_usage_samples": [
+                    {
+                        "elapsed_ms": 100,
+                        "memory_bytes": 10_485_760,
+                    },
+                    {
+                        "elapsed_ms": 199,
+                        "memory_bytes": 20_971_520,
                     },
                 ],
             },

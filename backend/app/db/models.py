@@ -43,6 +43,7 @@ class Execution(Base):
     wall_time_ms = Column(Integer)                             # 전체 실행 시간 ↔ timeout_ms
     cpu_time_ms = Column(Integer)                              # CPU 누적 사용 시간 (참고 지표)
     cpu_usage_samples = Column(JSON, nullable=True)            # 구간별 CPU 사용량 샘플(없을 수 있음)
+    memory_usage_samples = Column(JSON, nullable=True)         # 시점별 메모리 사용량 샘플(없을 수 있음)
     memory_peak_bytes = Column(Integer)                        # 최대 메모리 ↔ memory_limit_mb
     pids_peak = Column(Integer)                                # 최대 프로세스·스레드 수 ↔ pids_limit
     user_task_peak = Column(Integer, nullable=True)            # 사용자 코드의 최대 task 수

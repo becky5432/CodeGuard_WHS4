@@ -24,7 +24,8 @@ from runner.metrics.task_tracker import (
     resolve_execution_cgroup,
 )
 from runner.metrics.cpu_usage_sampler import CpuUsageSampler
-from runner.models.result import CpuUsageSample
+from runner.metrics.memory_usage_sampler import MemoryUsageSampler
+from runner.models.result import CpuUsageSample, MemoryUsageSample
 from runner.pipeline.workspace import VolumeWorkspace
 from runner.pipeline.start_gate import (
     find_codeguard_init_tid,
@@ -84,6 +85,7 @@ class ExecutionResult:
     filesystem_violation_syscall: str | None = None
     filesystem_violation_path: str | None = None
     cpu_usage_samples: list[CpuUsageSample] | None = None
+    memory_usage_samples: list[MemoryUsageSample] | None = None
     network_blocked: bool = False
 
 
@@ -286,6 +288,7 @@ def execute_program(
     task_metrics: PidsPeakSnapshot | None = None
     cpu_start_usec: int | None = None
     cpu_sampler: CpuUsageSampler | None = None
+    memory_sampler: MemoryUsageSampler | None = None
     container_ip = None
     network_blocked = False
 
@@ -408,6 +411,11 @@ def execute_program(
                     start_cpu_usec=cpu_start_usec,
                     start_time=start,
                 )
+            if cgroup_scope is not None:
+                memory_sampler = MemoryUsageSampler(
+                    cgroup_scope=cgroup_scope,
+                    start_time=start,
+                )
             release_start_gate(container)
 
             timeout_seconds = timeout_ms / 1000
@@ -424,6 +432,8 @@ def execute_program(
 
                 if cpu_sampler is not None:
                     cpu_sampler.sample_if_due(now)
+                if memory_sampler is not None:
+                    memory_sampler.sample_if_due(now)
 
                 if (
                     cpu_time_limit_ms is not None
@@ -662,6 +672,26 @@ def execute_program(
                 finished_at=finished_at,
                 final_cpu_usec=cgroup_metrics.cpu_time_usec,
             )
+        if memory_sampler is not None:
+            try:
+                final_memory_bytes = (
+                    cgroup_scope.read_memory_current_bytes()
+                    if cgroup_scope is not None
+                    else None
+                )
+            except Exception as exc:
+                logger.warning(
+                    "event=execution_memory_final_sample_error "
+                    "job_id=%s run_id=%s error=%s",
+                    job_id,
+                    run_id,
+                    exc,
+                )
+                final_memory_bytes = None
+            memory_sampler.sample_final(
+                finished_at=finished_at,
+                final_memory_bytes=final_memory_bytes,
+            )
         
         if collect_runtime_permission_failure(container):
             raise SecurityVerificationError(
@@ -702,6 +732,11 @@ def execute_program(
             cpu_usage_samples=(
                 cpu_sampler.samples
                 if cpu_sampler is not None
+                else None
+            ),
+            memory_usage_samples=(
+                memory_sampler.samples
+                if memory_sampler is not None
                 else None
             ),
             memory_peak_bytes=memory_peak_bytes,
