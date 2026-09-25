@@ -51,6 +51,14 @@ class CpuUsageSample(BaseModel):
     interval_ms: int = Field(gt=0)
     cpu_time_delta_ms: int = Field(ge=0)
 
+
+class MemoryUsageSample(BaseModel):
+    """실행 중 수집한 메모리 사용량 그래프용 시점 샘플"""
+
+    elapsed_ms: int = Field(ge=0)
+    memory_bytes: int = Field(ge=0)
+
+
 class ResourceUsage(BaseModel):
     wall_time_ms: int | None = None
     cpu_time_ms: int | None = None
@@ -61,6 +69,7 @@ class ResourceUsage(BaseModel):
     process_at_user_task_peak: int | None = None
     thread_at_user_task_peak: int | None = None
     cpu_usage_samples: list[CpuUsageSample] | None = None
+    memory_usage_samples: list[MemoryUsageSample] | None = None
 
 
 class RunnerResponse(BaseModel):

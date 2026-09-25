@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from app.schemas.execution_schema import CpuUsageSample, PolicyLimits
+from app.schemas.execution_schema import CpuUsageSample, MemoryUsageSample, PolicyLimits
 # execution_schema.py에 있는 PolicyLimits를 그대로 전달
 
 
@@ -48,6 +48,7 @@ class ResourceUsage(BaseModel):
     pids_peak: int | None = None          # 최대 프로세스 및 스레드 수
     output_bytes: int | None = None       # stdout·stderr 합산 출력 크기
     cpu_usage_samples: list[CpuUsageSample] | None = None   # 실행 중 수집한 CPU 사용량 구간별 샘플
+    memory_usage_samples: list[MemoryUsageSample] | None = None
     user_task_peak: int | None = None                       # 사용자 코드의 최대 task 수
     process_at_user_task_peak: int | None = None            # 해당 시점의 프로세스 수
     thread_at_user_task_peak: int | None = None             # 해당 시점의 스레드 수

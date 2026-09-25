@@ -112,6 +112,9 @@ class ExecutionCgroupScope:
         cpu_stat = self._read_key_values("cpu.stat")
         return cpu_stat.get("usage_usec")
 
+    def read_memory_current_bytes(self) -> int | None:
+        return self._read_int("memory.current")
+
 
     def snapshot(self) -> CgroupMetrics:
         memory_events = self._read_events("memory.events")

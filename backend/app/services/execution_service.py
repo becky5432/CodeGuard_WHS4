@@ -147,6 +147,14 @@ class ExecutionService:
                 if usage and usage.cpu_usage_samples is not None
                 else None
             )
+            memory_usage_samples = (
+                [
+                    sample.model_dump(mode="json")
+                    for sample in usage.memory_usage_samples
+                ]
+                if usage and usage.memory_usage_samples is not None
+                else None
+            )
 
             stage_summary = self.convert_stage_summary(
                 runner_response.stage_summary
@@ -195,6 +203,7 @@ class ExecutionService:
                     else None
                 ),
                 cpu_usage_samples=cpu_usage_samples,
+                memory_usage_samples=memory_usage_samples,
                 user_task_peak=(
                     usage.user_task_peak if usage else None
                 ),
@@ -252,6 +261,7 @@ class ExecutionService:
         )
 
         has_cpu_samples = execution.cpu_usage_samples is not None
+        has_memory_samples = execution.memory_usage_samples is not None
 
         resource_usage = (
             ResourceUsage(
@@ -261,12 +271,14 @@ class ExecutionService:
                 pids_peak=execution.pids_peak,
                 output_bytes=execution.output_bytes,
                 cpu_usage_samples=execution.cpu_usage_samples,
+                memory_usage_samples=execution.memory_usage_samples,
                 user_task_peak=execution.user_task_peak,
                 process_at_user_task_peak=execution.process_at_user_task_peak,
                 thread_at_user_task_peak=execution.thread_at_user_task_peak,
             )
             if any(value is not None for value in metric_values)
             or has_cpu_samples
+            or has_memory_samples
             else None
         )
 

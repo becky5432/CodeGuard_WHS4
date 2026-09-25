@@ -97,6 +97,7 @@ def save_result(
     pids_peak: int | None = None,
     output_bytes: int | None = None,
     cpu_usage_samples: list[dict[str, int]] | None = None,
+    memory_usage_samples: list[dict[str, int]] | None = None,
     user_task_peak: int | None = None,
     process_at_user_task_peak: int | None = None,
     thread_at_user_task_peak: int | None = None,
@@ -130,6 +131,7 @@ def save_result(
     execution.pids_peak = pids_peak
     execution.output_bytes = output_bytes
     execution.cpu_usage_samples = cpu_usage_samples
+    execution.memory_usage_samples = memory_usage_samples
     execution.user_task_peak = user_task_peak
     execution.process_at_user_task_peak = process_at_user_task_peak
     execution.thread_at_user_task_peak = thread_at_user_task_peak
