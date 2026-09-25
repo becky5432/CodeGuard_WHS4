@@ -60,6 +60,7 @@ def test_memory_samples_round_trip_runner_db_and_lookup_api():
             run_id=uuid4(),
             status=RunnerStatus.SUCCESS,
             resource_usage=ResourceUsage(
+                wall_time_ms=1537,
                 memory_peak_bytes=52_428_800,
                 memory_usage_samples=[
                     MemoryUsageSample(
@@ -81,6 +82,7 @@ def test_memory_samples_round_trip_runner_db_and_lookup_api():
 
         with sessions() as db:
             saved = repository.get_execution(db, str(created.job_id))
+            assert saved.wall_time_ms == 1537
             assert saved.memory_peak_bytes == 52_428_800
             assert saved.memory_usage_samples == [
                 {"elapsed_ms": 100, "memory_bytes": 10_485_760},
@@ -99,7 +101,7 @@ def test_memory_samples_round_trip_runner_db_and_lookup_api():
 
         assert response.status_code == 200
         assert response.json()["resource_usage"] == {
-            "wall_time_ms": None,
+            "wall_time_ms": 1537,
             "cpu_time_ms": None,
             "memory_peak_bytes": 52_428_800,
             "pids_peak": None,

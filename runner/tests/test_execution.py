@@ -1165,7 +1165,7 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
 
     def test_delayed_success_result_exceeding_wall_timeout_is_success(self):
         result, container = self.run_execution(0, finished_at=1.5)
-        self.assertGreater(result.wall_time_ms, 1000)
+        self.assertEqual(result.wall_time_ms, 1500)
         self.assertFalse(result.timed_out)
         self.assert_start_only(container)
         self.assert_classification(result, None, RunnerStatus.SUCCESS)
