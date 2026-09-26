@@ -218,6 +218,24 @@ button {
   gap: 10px;
 }
 
+/* 언어 선택 */
+.language-selector label {
+  color: var(--gray-700);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.language-selector select {
+  box-sizing: border-box;
+  height: 48px;
+  min-width: 90px;
+  padding: 8px 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: 8px;
+  color: var(--gray-950);
+  background-color: var(--white);
+}
+
 .editor-fullscreen-button {
   display: grid;
   box-sizing: border-box;
@@ -370,7 +388,7 @@ button {
 }
 
 .resource-memory .resource-progress span {
-  background-color: #54ad5f;
+  background-color: var(--green-700);
 }
 
 .resource-process .resource-progress span {
@@ -390,7 +408,11 @@ button {
 }
 
 .resource-output .resource-progress span {
-  background-color: #df7440;
+  background-color: #b45309;
+}
+
+.resource-cpu .resource-progress span {
+  background-color: #db2777;
 }
 
 /* 자원 제한 초과 */
@@ -891,7 +913,7 @@ button {
 
 .main-workspace-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(560px, 0.95fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 18px;
   align-items: start;
 }
@@ -994,32 +1016,6 @@ button {
   flex: 1;
   padding: 18px 20px 20px;
 }
-
-.metric-memory {
-  color: var(--green-700);
-  background: var(--green-100);
-}
-
-.metric-process {
-  color: #7545d8;
-  background: #f1ebff;
-}
-
-.metric-cpu {
-  color: #d97706;
-  background: #fff4df;
-}
-
-.metric-cputime {
-  color: #db2777;
-  background: #fdf2f8;
-}
-
-/* 네트워크: 초록 */
-
-/* 권한: 보라 */
-
-/* 출력: 주황 */
 
 .planned-feature-item {
   display: flex;
@@ -1201,31 +1197,6 @@ button {
   background: #fdf2f8;
 }
 
-/* 고정 통제 항목 아이콘 색상 */
-.planned-file-icon {
-  color: #0891b2;
-  background: #ecfeff;
-}
-
-.planned-network-icon {
-  color: #0f766e;
-  background: #f0fdfa;
-}
-
-.planned-permission-icon {
-  color: #475569;
-  background: #f1f5f9;
-}
-
-.planned-output-icon {
-  color: #b45309;
-  background: #fffbeb;
-}
-.environment-limit-icon .metric-icon {
-  width: 30px;
-  height: 30px;
-}
-
 .editor-action-buttons {
   display: flex;
   flex: 0 0 auto;
@@ -1339,11 +1310,6 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.resource-cpu .resource-progress span {
-  background-color: #d7a63d;
-  background: #d97706;
 }
 
 /* 노트북 100% 화면의 우측 패널 가독성 보정 */
@@ -1730,4 +1696,74 @@ body,
   white-space: nowrap;
 
   text-align: left;
+}
+
+/* CPU 사용률 추이 그래프 */
+.cpu-chart-section {
+  margin-top: 20px;
+  padding: 18px 0 6px;
+  border-top: 1px solid var(--gray-200);
+}
+
+.cpu-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.cpu-chart-header h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.cpu-chart-header span {
+  color: var(--gray-600);
+  font-size: 12px;
+}
+
+.cpu-chart-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.cpu-chart {
+  display: block;
+  width: 100%;
+  min-width: 420px;
+  height: auto;
+}
+
+.cpu-chart-grid {
+  stroke: var(--gray-200);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.cpu-chart-label {
+  fill: var(--gray-600);
+  font-size: 12px;
+}
+
+.cpu-chart-line {
+  fill: none;
+  stroke: var(--blue-600);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cpu-chart-point {
+  fill: var(--white);
+  stroke: var(--blue-600);
+  stroke-width: 2;
+}
+
+.cpu-chart-empty {
+  margin: 0;
+  padding: 40px 12px;
+  color: var(--gray-500);
+  font-size: 13px;
+  text-align: center;
 }

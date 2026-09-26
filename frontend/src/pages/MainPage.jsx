@@ -32,7 +32,7 @@ const DEFAULT_POLICY = {
   pids_limit: 32,
   cpu_bandwidth: 1.0,
   output_limit_bytes: 1048576,
-  cpu_time_limit_ms: 2000, //값 변경 필요
+  cpu_time_limit_ms: 1000,
 };
 
 const POLLING_INTERVAL_MS = 1000;
@@ -77,6 +77,27 @@ const EXECUTION_RESULT_PRESENTATION = {
     state: "error",
     label: "권한 제한 실패",
     message: "권한 검증에 실패하여 코드 실행이 중지되었습니다.",
+  },
+  CPU_TIME_LIMIT: {
+    state: "blocked",
+    label: "CPU 시간 제한 초과",
+    message: "CPU 시간 제한을 초과하여 실행이 중지되었습니다.",
+  },
+
+  FILESYSTEM_LIMIT: {
+    state: "blocked",
+    label: "파일 접근 제한",
+    message: "파일시스템 접근 정책을 위반하여 실행이 중지되었습니다.",
+  },
+  NETWORK_BLOCKED: {
+    state: "blocked",
+    label: "네트워크 차단",
+    message: "허용되지 않은 네트워크 접근이 감지되어 실행이 중지되었습니다.",
+  },
+  INTERNAL_ERROR: {
+    state: "error",
+    label: "내부 오류",
+    message: "실행 환경에서 내부 오류가 발생했습니다.",
   },
 };
 
@@ -394,6 +415,118 @@ function getRequestErrorPresentation(error, phase) {
   };
 }
 
+/* 실행 중 구간별 CPU 사용률 그래프 */
+function CpuUsageChart({ samples }) {
+  const points = (samples ?? [])
+    .filter(
+      (sample) =>
+        Number.isFinite(sample.elapsed_ms) &&
+        Number.isFinite(sample.interval_ms) &&
+        Number.isFinite(sample.cpu_time_delta_ms) &&
+        sample.interval_ms > 0,
+    )
+    .map((sample) => ({
+      time: sample.elapsed_ms,
+      usage: (sample.cpu_time_delta_ms / sample.interval_ms) * 100,
+    }))
+    .sort((a, b) => a.time - b.time);
+
+  if (points.length === 0) {
+    return <p className="cpu-chart-empty">CPU 사용률 데이터가 없습니다.</p>;
+  }
+
+  const width = 720;
+  const height = 230;
+  const left = 48;
+  const right = 16;
+  const top = 16;
+  const bottom = 36;
+
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+
+  const maxTime = Math.max(...points.map((p) => p.time), 1);
+  const maxUsage = Math.max(
+    100,
+    Math.ceil(Math.max(...points.map((p) => p.usage)) / 50) * 50,
+  );
+
+  const x = (time) => left + (time / maxTime) * plotWidth;
+  const y = (usage) => top + plotHeight - (usage / maxUsage) * plotHeight;
+
+  const linePoints = points.map((p) => `${x(p.time)},${y(p.usage)}`).join(" ");
+
+  const gridValues = [0, 0.25, 0.5, 0.75, 1];
+
+  return (
+    <div className="cpu-chart-scroll">
+      <svg
+        className="cpu-chart"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label="실행 경과 시간에 따른 CPU 사용률"
+      >
+        {/* 가로 격자 및 CPU 사용률 눈금 */}
+        {gridValues.map((ratio) => {
+          const value = maxUsage * ratio;
+          const posY = y(value);
+
+          return (
+            <g key={ratio}>
+              <line
+                x1={left}
+                y1={posY}
+                x2={width - right}
+                y2={posY}
+                className="cpu-chart-grid"
+              />
+              <text
+                x={left - 10}
+                y={posY + 4}
+                textAnchor="end"
+                className="cpu-chart-label"
+              >
+                {Math.round(value)}%
+              </text>
+            </g>
+          );
+        })}
+
+        {/* 시간축 */}
+        {[0, 0.5, 1].map((ratio) => (
+          <text
+            key={ratio}
+            x={x(maxTime * ratio)}
+            y={height - 12}
+            textAnchor={ratio === 0 ? "start" : ratio === 1 ? "end" : "middle"}
+            className="cpu-chart-label"
+          >
+            {((maxTime * ratio) / 1000).toFixed(2)}s
+          </text>
+        ))}
+
+        {/* 사용률 변화 선 */}
+        <polyline points={linePoints} className="cpu-chart-line" />
+
+        {/* 측정 지점: 마우스를 올리면 수치 표시 */}
+        {points.map((point, index) => (
+          <circle
+            key={`${point.time}-${index}`}
+            cx={x(point.time)}
+            cy={y(point.usage)}
+            r="3"
+            className="cpu-chart-point"
+          >
+            <title>
+              {`${(point.time / 1000).toFixed(3)}초: ${point.usage.toFixed(1)}%`}
+            </title>
+          </circle>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 function MainPage() {
   // 입력 및 화면 상태
   const [language, setLanguage] = useState("CPP");
@@ -401,7 +534,7 @@ function MainPage() {
   const [standardInput, setStandardInput] = useState("");
   const [executionState, setExecutionState] = useState("idle");
   const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
-  const [jobId, setJobId] = useState(null);
+  //const [jobId, setJobId] = useState(null);
   const [executionResult, setExecutionResult] = useState(null);
   const [executionStatusText, setExecutionStatusText] = useState("실행 전");
   const [requestErrorCode, setRequestErrorCode] = useState(null);
@@ -409,8 +542,6 @@ function MainPage() {
     "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
   );
   const [activeOutputTab, setActiveOutputTab] = useState("stdout");
-  const processPeak = null;
-  const threadPeak = null;
 
   // 실행 중복 요청 방지
   const executionLockRef = useRef(false);
@@ -441,7 +572,7 @@ function MainPage() {
   const isPidsLimitExceeded = executionResult?.reason_code === "PIDS_LIMIT";
   const isOutputLimitExceeded = executionResult?.reason_code === "OUTPUT_LIMIT";
   const isCpuTimeLimitExceeded =
-    executionResult?.reason_code === "CPUTIME_LIMIT";
+    executionResult?.reason_code === "CPU_TIME_LIMIT";
 
   // 실제 Runner 응답 기반 자원 사용량
   const resourceUsage = executionResult?.resource_usage;
@@ -451,6 +582,8 @@ function MainPage() {
       ? resourceUsage.memory_peak_bytes / 1024 / 1024
       : null;
   const pidsPeak = resourceUsage?.pids_peak;
+  const processPeak = resourceUsage?.process_at_user_task_peak;
+  const threadPeak = resourceUsage?.thread_at_user_task_peak;
 
   const wallTimePercentage = calculateUsagePercentage(
     wallTimeMs ?? 0,
@@ -468,10 +601,7 @@ function MainPage() {
   );
 
   const cpuTimeMs = resourceUsage?.cpu_time_ms;
-  const cpuUsagePercentage =
-    cpuTimeMs != null && wallTimeMs != null
-      ? calculateUsagePercentage(cpuTimeMs, wallTimeMs)
-      : null;
+
   const cpuTimePercentage =
     cpuTimeMs == null
       ? 0
@@ -572,7 +702,7 @@ function MainPage() {
     executionLockRef.current = true;
     setExecutionState("loading");
     setExecutionStatusText("실행 중");
-    setJobId(null);
+    //setJobId(null);
     setExecutionResult(null);
     setRequestErrorCode(null);
     setMessage("코드 실행을 요청하고 있습니다.");
@@ -592,7 +722,7 @@ function MainPage() {
         throw new Error("실행 요청 응답에서 실행 ID를 확인할 수 없습니다.");
       }
 
-      setJobId(response.job_id);
+      //setJobId(response.job_id);
       setMessage(`실행 요청이 접수되었습니다. (${response.status})`);
 
       errorPhase = "polling";
@@ -614,7 +744,7 @@ function MainPage() {
     setStandardInput("");
     setExecutionState("idle");
     setExecutionStatusText("실행 전");
-    setJobId(null);
+    //setJobId(null);
     setExecutionResult(null);
     setRequestErrorCode(null);
     setMessage("코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.");
@@ -858,7 +988,9 @@ function MainPage() {
 
                   <div
                     className={`environment-limit-card ${
-                      isLimitTriggered("CPUTIME_LIMIT") ? "limit-triggered" : ""
+                      isLimitTriggered("CPU_TIME_LIMIT")
+                        ? "limit-triggered"
+                        : ""
                     }`}
                   >
                     <span className="environment-limit-icon metric-cputime">
@@ -887,7 +1019,7 @@ function MainPage() {
                   </article>
                   <article
                     className={`planned-feature-item ${
-                      isLimitTriggered("FILE_ACCESS_LIMIT")
+                      isLimitTriggered("FILESYSTEM_LIMIT")
                         ? "limit-triggered"
                         : ""
                     }`}
@@ -901,7 +1033,7 @@ function MainPage() {
 
                   <article
                     className={`planned-feature-item ${
-                      isLimitTriggered("NETWORK_ACCESS_LIMIT")
+                      isLimitTriggered("NETWORK_BLOCKED")
                         ? "limit-triggered"
                         : ""
                     }`}
@@ -930,7 +1062,6 @@ function MainPage() {
               </div>
             </div>
           </section>
-
           {/* 실행 결과 영역 */}
           <section className="workspace-panel result-section">
             <div className="workspace-panel-header">
@@ -989,7 +1120,6 @@ function MainPage() {
               </div>
             </div>
           </section>
-
           {/* 자원 사용량 요약 영역 */}
           <section className="workspace-panel resource-section">
             <div className="resource-section-header">
@@ -1153,8 +1283,14 @@ function MainPage() {
                 </div>
               </article>
             </div>
-          </section>
 
+            <div className="cpu-chart-section">
+              <div className="cpu-chart-header">
+                <h3>구간별 CPU 사용률 추이</h3>
+              </div>
+              <CpuUsageChart samples={resourceUsage?.cpu_usage_samples} />
+            </div>
+          </section>
           {/* <section className="workspace-panel summary-section">
             <div className="workspace-panel-header">
               <h2>결과 요약</h2>
