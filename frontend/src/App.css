@@ -1487,7 +1487,7 @@ body,
   display: block;
   margin: 0;
 
-  color: var(--gray-900);
+  color: var(--gray-950);
   font-size: 17px;
   font-weight: 700;
   line-height: 24px;
@@ -1699,30 +1699,34 @@ body,
 }
 
 /* CPU 사용률 추이 그래프 */
-.cpu-chart-section {
+
+/* CPU 및 메모리 사용량 그래프 배치 */
+.resource-charts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  width: 100%;
   margin-top: 20px;
   padding: 18px 0 6px;
   border-top: 1px solid var(--gray-200);
 }
 
-.cpu-chart-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
+/* 개별 그래프 영역 */
+.resource-chart-item {
+  min-width: 0;
 }
 
-.cpu-chart-header h3 {
-  margin: 0;
+.resource-chart-item h3 {
+  margin: 0 0 16px;
   font-size: 15px;
 }
 
-.cpu-chart-header span {
+.resource-chart-item span {
   color: var(--gray-600);
   font-size: 12px;
 }
 
+/* 그래프 스크롤 및 크기 */
 .cpu-chart-scroll {
   width: 100%;
   overflow-x: auto;
@@ -1731,10 +1735,10 @@ body,
 .cpu-chart {
   display: block;
   width: 100%;
-  min-width: 420px;
   height: auto;
 }
 
+/* 그래프 격자 및 눈금 */
 .cpu-chart-grid {
   stroke: var(--gray-200);
   stroke-width: 1;
@@ -1746,6 +1750,7 @@ body,
   font-size: 12px;
 }
 
+/* CPU 그래프 */
 .cpu-chart-line {
   fill: none;
   stroke: var(--blue-600);
@@ -1760,10 +1765,27 @@ body,
   stroke-width: 2;
 }
 
+/* 메모리 그래프 */
+.memory-chart-line {
+  stroke: #10b981;
+}
+
+.memory-chart-point {
+  stroke: #10b981;
+}
+
+/* 데이터가 없을 때 */
 .cpu-chart-empty {
   margin: 0;
   padding: 40px 12px;
   color: var(--gray-500);
   font-size: 13px;
   text-align: center;
+}
+
+/* 반응형 배치 */
+@media (max-width: 650px) {
+  .resource-charts {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
