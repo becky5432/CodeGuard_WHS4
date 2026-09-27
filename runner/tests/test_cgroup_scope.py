@@ -105,6 +105,30 @@ class ExecutionCgroupScopeTests(unittest.TestCase):
         self.assertTrue(metrics.pids_limit_exceeded)
         self.assertEqual(metrics.cpu_time_usec, 123456)
 
+    def test_reads_current_memory_bytes(self) -> None:
+        scope = ExecutionCgroupScope.create(
+            root=self.delegated_root,
+            run_id=uuid4(),
+            driver="cgroupfs",
+            cgroup_mount=self.cgroup_mount,
+        )
+        (scope.path / "memory.current").write_text(
+            "12582912\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(scope.read_memory_current_bytes(), 12582912)
+
+    def test_current_memory_read_failure_returns_none(self) -> None:
+        scope = ExecutionCgroupScope.create(
+            root=self.delegated_root,
+            run_id=uuid4(),
+            driver="cgroupfs",
+            cgroup_mount=self.cgroup_mount,
+        )
+
+        self.assertIsNone(scope.read_memory_current_bytes())
+
     def test_snapshot_returns_none_when_peak_files_are_missing(self) -> None:
         scope = ExecutionCgroupScope.create(
             root=self.delegated_root,

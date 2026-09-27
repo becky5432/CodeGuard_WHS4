@@ -24,8 +24,14 @@ from runner.metrics.task_tracker import (
     resolve_execution_cgroup,
 )
 from runner.metrics.cpu_usage_sampler import CpuUsageSampler
-from runner.models.result import CpuUsageSample
+from runner.metrics.memory_usage_sampler import MemoryUsageSampler
+from runner.models.result import CpuUsageSample, MemoryUsageSample
 from runner.pipeline.workspace import VolumeWorkspace
+from runner.pipeline.start_gate import (
+    find_codeguard_init_tid,
+    release_start_gate,
+    wait_for_security_evidence,
+)
 from runner.policies import (
     EXECUTION_LOGICAL_CPU_LIMIT,
     EXECUTION_OUTPUT_LIMIT_BYTES,
@@ -79,6 +85,7 @@ class ExecutionResult:
     filesystem_violation_syscall: str | None = None
     filesystem_violation_path: str | None = None
     cpu_usage_samples: list[CpuUsageSample] | None = None
+    memory_usage_samples: list[MemoryUsageSample] | None = None
     network_blocked: bool = False
 
 
@@ -275,11 +282,13 @@ def execute_program(
     output_thread = None
     monitor_started = False
     output_thread_stopped = True
+    container_started = False
     cgroup_registered = False
     root_registered = False
     task_metrics: PidsPeakSnapshot | None = None
     cpu_start_usec: int | None = None
     cpu_sampler: CpuUsageSampler | None = None
+    memory_sampler: MemoryUsageSampler | None = None
     container_ip = None
     network_blocked = False
 
@@ -306,22 +315,9 @@ def execute_program(
             demux=True,
         )
         try:
-            # No post-start execution gate exists in the #112 trace lifecycle.
-            # Capture CPU/wall baselines before starting the container.
-            if cgroup_scope is not None:
-                try:
-                    cpu_start_usec = cgroup_scope.read_cpu_usage_usec()
-                except Exception as exc:
-                    logger.warning(
-                        "event=execution_cpu_baseline_error "
-                        "job_id=%s run_id=%s error=%s",
-                        job_id,
-                        run_id,
-                        exc,
-                    )
-
             start = time.monotonic()
             container.start()
+            container_started = True
 
             container.reload()
 
@@ -335,14 +331,19 @@ def execute_program(
                     container_ip = ip
                     break
 
+            # codeguard-init has written trusted evidence and is still waiting
+            # for start.ready; neither user code nor its first fork can run yet.
+            wait_for_security_evidence(container)
+
             if task_tracker is not None:
                 try:
                     container.reload()
-                    root_tid = container.attrs.get("State", {}).get("Pid")
-                    if not isinstance(root_tid, int) or root_tid <= 0:
+                    tracer_tid = container.attrs.get("State", {}).get("Pid")
+                    if not isinstance(tracer_tid, int) or tracer_tid <= 0:
                         raise TaskTrackingError(
-                            "Execution Container의 Root TID가 없습니다."
+                            "Execution Container의 strace TID가 없습니다."
                         )
+                    root_tid = find_codeguard_init_tid(tracer_tid)
                     identity = resolve_execution_cgroup(root_tid)
                     task_tracker.register_cgroup(
                         run_id,
@@ -365,8 +366,7 @@ def execute_program(
                     )
 
 
-            # 사용자 코드 실행 직전 execution cgroup의 누적 CPU time을 저장한다.
-            cpu_start_usec = None
+            # Take the CPU baseline while codeguard-init is still gated.
             if cgroup_scope is not None:
                 try:
                     cpu_start_usec = cgroup_scope.read_cpu_usage_usec()
@@ -382,19 +382,6 @@ def execute_program(
             if cpu_time_limit_ms is not None and cpu_start_usec is None:
                 raise ContainerExecutionError(
                     "CPU 사용시간 제한 적용을 위한 기준값을 측정하지 못했습니다."
-                )
-
-            container.kill(signal="SIGUSR1")
-            start = time.monotonic()
-
-            if (
-                cgroup_scope is not None
-                and cpu_start_usec is not None
-            ):
-                cpu_sampler = CpuUsageSampler(
-                    cgroup_scope=cgroup_scope,
-                    start_cpu_usec=cpu_start_usec,
-                    start_time=start,
                 )
 
             pids_monitor.start()
@@ -417,6 +404,20 @@ def execute_program(
             monitor_started = True
             monitor.start()
 
+            start = time.monotonic()
+            if cgroup_scope is not None and cpu_start_usec is not None:
+                cpu_sampler = CpuUsageSampler(
+                    cgroup_scope=cgroup_scope,
+                    start_cpu_usec=cpu_start_usec,
+                    start_time=start,
+                )
+            if cgroup_scope is not None:
+                memory_sampler = MemoryUsageSampler(
+                    cgroup_scope=cgroup_scope,
+                    start_time=start,
+                )
+            release_start_gate(container)
+
             timeout_seconds = timeout_ms / 1000
             while not wait_done.is_set():
 
@@ -431,6 +432,8 @@ def execute_program(
 
                 if cpu_sampler is not None:
                     cpu_sampler.sample_if_due(now)
+                if memory_sampler is not None:
+                    memory_sampler.sample_if_due(now)
 
                 if (
                     cpu_time_limit_ms is not None
@@ -488,6 +491,16 @@ def execute_program(
                     system_error = "실행 컨테이너를 종료하지 못했습니다."
 
             wait_done.wait(timeout=1.0)
+        except Exception:
+            if container_started:
+                try:
+                    container.kill()
+                except docker.errors.DockerException as exc:
+                    logger.warning(
+                        "event=execution_start_abort_error job_id=%s run_id=%s error=%s",
+                        job_id, run_id, exc,
+                    )
+            raise
         finally:
             output_thread_stopped = _stop_output_thread(
                 frames,
@@ -659,6 +672,26 @@ def execute_program(
                 finished_at=finished_at,
                 final_cpu_usec=cgroup_metrics.cpu_time_usec,
             )
+        if memory_sampler is not None:
+            try:
+                final_memory_bytes = (
+                    cgroup_scope.read_memory_current_bytes()
+                    if cgroup_scope is not None
+                    else None
+                )
+            except Exception as exc:
+                logger.warning(
+                    "event=execution_memory_final_sample_error "
+                    "job_id=%s run_id=%s error=%s",
+                    job_id,
+                    run_id,
+                    exc,
+                )
+                final_memory_bytes = None
+            memory_sampler.sample_final(
+                finished_at=finished_at,
+                final_memory_bytes=final_memory_bytes,
+            )
         
         if collect_runtime_permission_failure(container):
             raise SecurityVerificationError(
@@ -699,6 +732,11 @@ def execute_program(
             cpu_usage_samples=(
                 cpu_sampler.samples
                 if cpu_sampler is not None
+                else None
+            ),
+            memory_usage_samples=(
+                memory_sampler.samples
+                if memory_sampler is not None
                 else None
             ),
             memory_peak_bytes=memory_peak_bytes,

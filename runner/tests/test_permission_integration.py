@@ -1,7 +1,9 @@
 """Docker integration tests for the minimal pre-exec permission check."""
 
 import os
+import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -18,6 +20,11 @@ from runner.pipeline.execution import create_execution_container, execute_progra
 from runner.pipeline.workspace import create_workspace, remove_workspace
 from runner.security.filesystem_trace import FilesystemViolation, TRACE_DIRECTORY
 from runner.security.runtime_verification import SECURITY_STATUS_PATH
+from runner.pipeline.start_gate import (
+    find_codeguard_init_tid,
+    release_start_gate,
+    wait_for_security_evidence,
+)
 
 
 @unittest.skipUnless(
@@ -90,6 +97,57 @@ class PermissionVerificationIntegrationTests(unittest.TestCase):
             "parent_create=denied\nparent_symlink=denied\nuser-ran\n",
         )
         self.assertIsNone(result.system_error)
+
+    def test_user_program_waits_for_start_file(self) -> None:
+        workspace = create_workspace(self.client, uuid4())
+        self.addCleanup(remove_workspace, self.client, workspace)
+        compiler = create_compile_container(self.client, workspace, "C")
+        self.addCleanup(compiler.remove, force=True)
+        compiled = compile_source(
+            compiler, workspace, "C",
+            '#define _DEFAULT_SOURCE\n#include <stdio.h>\n#include <unistd.h>\n'
+            'int main(void) { puts("USER_RAN"); fflush(stdout); usleep(300000); return 0; }',
+        )
+        self.assertTrue(compiled.success, compiled.stderr)
+
+        container = create_execution_container(
+            self.client, workspace, "", workspace.job_id, uuid4(), 128, 1.0, 32,
+        )
+        self.addCleanup(container.remove, force=True, v=True)
+        container.start()
+        wait_for_security_evidence(container)
+        container.reload()
+        tracer_tid = container.attrs["State"]["Pid"]
+        host_proc_available = os.path.exists(
+            f"/proc/{tracer_tid}/task/{tracer_tid}/children"
+        )
+        root_tid = find_codeguard_init_tid(tracer_tid) if host_proc_available else None
+        time.sleep(0.05)
+        container.reload()
+        self.assertTrue(container.attrs["State"]["Running"])
+        self.assertNotIn(b"USER_RAN", container.logs())
+
+        release_start_gate(container)
+        if root_tid is not None:
+            deadline = time.monotonic() + 1
+            executable = None
+            while time.monotonic() < deadline:
+                try:
+                    executable = os.readlink(f"/proc/{root_tid}/exe")
+                except PermissionError:
+                    argv0 = (
+                        (Path("/proc") / str(root_tid) / "cmdline")
+                        .read_bytes().split(b"\0", 1)[0]
+                    )
+                    executable = os.fsdecode(argv0)
+                except FileNotFoundError:
+                    break
+                if os.path.basename(executable) == "main":
+                    break
+                time.sleep(0.01)
+            self.assertEqual(os.path.basename(executable or ""), "main")
+        self.assertEqual(container.wait(timeout=3)["StatusCode"], 0)
+        self.assertIn(b"USER_RAN", container.logs())
 
     def test_failed_runtime_verification_never_releases_user_code(self) -> None:
         command = (

@@ -15,11 +15,12 @@ RUN apt-get update \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin codeguard \
     && mkdir -p /run/codeguard-trace \
     && chown 0:0 /run/codeguard-trace \
-    && chmod 700 /run/codeguard-trace
+    && chmod 711 /run/codeguard-trace
 
 WORKDIR /workspace
 
 RUN chown 10001:10001 /workspace
 
 COPY runner/container/cpp/security-preflight.sh /usr/local/bin/codeguard-security-preflight
-RUN chmod 0555 /usr/local/bin/codeguard-security-preflight
+RUN sed -i 's/\r$//' /usr/local/bin/codeguard-security-preflight \
+    && chmod 0555 /usr/local/bin/codeguard-security-preflight
