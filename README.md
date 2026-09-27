@@ -16,46 +16,27 @@
 [`runner/native/task_tracker/README.md`](runner/native/task_tracker/README.md)를
 참고한다.
 
-### Ubuntu 의존성
+### Ubuntu 호스트 설치
+
+`apt`와 `systemd`를 사용하는 x86_64 Ubuntu Linux 호스트에서, 저장소 루트 기준으로 실행한다.
+Windows나 실행 컨테이너 내부에서는 실행하지 않는다. 설치 스크립트가
+cgroup v2·BTF를 확인하고, 시스템 패키지, `.venv-runner`의 Python 패키지,
+native tracker 바이너리 및 systemd 서비스를 설치한다.
 
 ```bash
-sudo apt update
-sudo apt install -y \
-  clang llvm libbpf-dev bpftool \
-  linux-headers-$(uname -r) build-essential pkg-config
+bash runner/native/task_tracker/install.sh
 ```
 
-다음 파일이 있어야 CO-RE 프로그램을 빌드할 수 있다.
-
-```bash
-test -r /sys/kernel/btf/vmlinux
-test -r /sys/fs/cgroup/cgroup.controllers
-```
-
-### 빌드 및 서비스 설치
-
-```bash
-make -C runner/native/task_tracker
-
-sudo groupadd -f codeguard
-sudo install -d -m 0755 /usr/local/libexec
-sudo install -m 0755 \
-  runner/native/task_tracker/codeguard-task-tracker \
-  /usr/local/libexec/codeguard-task-tracker
-sudo install -m 0644 \
-  runner/native/task_tracker/codeguard-task-tracker.service \
-  /etc/systemd/system/codeguard-task-tracker.service
-
-sudo usermod -aG codeguard "$USER"
-sudo systemctl daemon-reload
-sudo systemctl enable --now codeguard-task-tracker
-```
+기존 설치를 업데이트할 때도 같은 명령을 재실행하면 빌드·설치 후 서비스를
+재시작한다. 설치 스크립트는 방화벽 규칙이나 Runner 네트워크 설정을 변경하지
+않는다. Python 패키지 목록은 `runner/requirements.txt`에만 유지한다.
 
 서비스는 `CAP_BPF`, `CAP_PERFMON`만 사용한다. 대상 커널에서 tracepoint
 attach가 권한 오류로 실패할 때만 원인을 확인한 뒤 systemd unit에
 `CAP_SYS_ADMIN`을 추가한다.
 
-그룹 변경을 반영하려면 다시 로그인한 뒤 상태를 확인한다.
+처음 설치했다면 `codeguard` 그룹 변경을 반영하기 위해 다시 로그인한다.
+그 후 서비스 상태와 소켓을 확인한다.
 
 ```bash
 systemctl status codeguard-task-tracker --no-pager
