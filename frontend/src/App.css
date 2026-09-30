@@ -54,7 +54,7 @@ button {
   align-items: center;
   justify-content: flex-end;
   flex-wrap: nowrap;
-  gap: 10px;
+  gap: 8px;
   margin-left: auto;
 }
 
@@ -213,7 +213,7 @@ button {
 .language-selector {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 /* 언어 선택 */
@@ -225,9 +225,9 @@ button {
 
 .language-selector select {
   box-sizing: border-box;
-  height: 48px;
-  min-width: 90px;
-  padding: 8px 12px;
+  height: 34px;
+  min-width: 70px;
+  padding: 4px 10px;
   border: 1px solid var(--gray-300);
   border-radius: 8px;
   color: var(--gray-950);
@@ -237,16 +237,16 @@ button {
 .editor-fullscreen-button {
   display: grid;
   box-sizing: border-box;
-  flex: 0 0 48px;
-  width: 48px;
-  height: 48px;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
   padding: 0;
   place-items: center;
   border: 1px solid var(--gray-300);
   border-radius: 8px;
   color: var(--gray-700);
   background-color: var(--white);
-  font-size: 18px;
+  font-size: 15px;
   line-height: 1;
 }
 
@@ -867,7 +867,9 @@ button {
 .editor-action-buttons .io-reset-button {
   width: auto;
   margin: 0;
-  height: 48px;
+  height: 34px;
+  padding: 6px 10px;
+  font-size: 13px;
 }
 
 .standard-input,
@@ -1096,19 +1098,19 @@ button {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 10px;
-  margin-left: 8px;
+  gap: 8px;
+  margin-left: 4px;
 }
 
 .run-button {
   box-sizing: border-box;
-  height: 48px;
-  padding: 10px 20px;
+  height: 34px;
+  padding: 6px 10px;
   border: 1px solid var(--blue-600);
   border-radius: 8px;
   color: var(--white);
   background-color: var(--blue-600);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   display: inline-flex;
   align-items: center;
