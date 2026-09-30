@@ -32,8 +32,59 @@ const DEFAULT_POLICY = {
   pids_limit: 32,
   cpu_bandwidth: 1.0,
   output_limit_bytes: 1048576,
-  cpu_time_limit_ms: 2000, //값 변경 필요
+  cpu_time_limit_ms: 1000,
 };
+
+const POLICY_FIELDS = [
+  {
+    key: "timeout_ms",
+    label: "실행 시간",
+    unit: "ms",
+    type: "time",
+    step: 1,
+    reasonCode: "TIME_LIMIT",
+  },
+  {
+    key: "memory_limit_mb",
+    label: "메모리 제한",
+    unit: "MB",
+    type: "memory",
+    step: 1,
+    reasonCode: "MEMORY_LIMIT",
+  },
+  {
+    key: "pids_limit",
+    label: "PID 제한",
+    unit: "개",
+    type: "process",
+    step: 1,
+    reasonCode: "PIDS_LIMIT",
+  },
+  {
+    key: "cpu_bandwidth",
+    label: "CPU 처리량",
+    unit: "CPU",
+    type: "cpu",
+    step: "any",
+    reasonCode: null,
+  },
+  {
+    key: "cpu_time_limit_ms",
+    label: "CPU 시간",
+    unit: "ms",
+    type: "cputime",
+    step: 1,
+    reasonCode: "CPU_TIME_LIMIT",
+  },
+  {
+    key: "output_limit_bytes",
+    label: "출력 제한",
+    unit: "bytes",
+    type: "output",
+    step: 1,
+    reasonCode: "OUTPUT_LIMIT",
+  },
+];
 
 const POLLING_INTERVAL_MS = 1000;
 
@@ -77,6 +128,27 @@ const EXECUTION_RESULT_PRESENTATION = {
     state: "error",
     label: "권한 제한 실패",
     message: "권한 검증에 실패하여 코드 실행이 중지되었습니다.",
+  },
+  CPU_TIME_LIMIT: {
+    state: "blocked",
+    label: "CPU 시간 제한 초과",
+    message: "CPU 시간 제한을 초과하여 실행이 중지되었습니다.",
+  },
+
+  FILESYSTEM_LIMIT: {
+    state: "blocked",
+    label: "파일 접근 제한",
+    message: "파일시스템 접근 정책을 위반하여 실행이 중지되었습니다.",
+  },
+  NETWORK_BLOCKED: {
+    state: "blocked",
+    label: "네트워크 차단",
+    message: "허용되지 않은 네트워크 접근이 감지되어 실행이 중지되었습니다.",
+  },
+  INTERNAL_ERROR: {
+    state: "error",
+    label: "내부 오류",
+    message: "실행 환경에서 내부 오류가 발생했습니다.",
   },
 };
 
@@ -239,24 +311,6 @@ function ResultMessageIcon({ status }) {
   );
 }
 
-function ArrowIcon() {
-  return (
-    <svg
-      className="stage-arrow-icon"
-      viewBox="0 0 42 28"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="3.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M3 14h31" />
-      <path d="m26 7 7 7-7 7" />
-    </svg>
-  );
-}
-
 function calculateUsagePercentage(value, limit) {
   if (!value || !limit) {
     return 0;
@@ -394,6 +448,233 @@ function getRequestErrorPresentation(error, phase) {
   };
 }
 
+/* 실행 중 구간별 CPU 사용률 그래프 */
+function CpuUsageChart({ samples }) {
+  const points = (samples ?? [])
+    .filter(
+      (sample) =>
+        Number.isFinite(sample.elapsed_ms) &&
+        Number.isFinite(sample.interval_ms) &&
+        Number.isFinite(sample.cpu_time_delta_ms) &&
+        sample.interval_ms > 0,
+    )
+    .map((sample) => ({
+      time: sample.elapsed_ms,
+      usage: (sample.cpu_time_delta_ms / sample.interval_ms) * 100,
+    }))
+    .sort((a, b) => a.time - b.time);
+
+  if (points.length === 0) {
+    return <p className="cpu-chart-empty">CPU 사용률 데이터가 없습니다.</p>;
+  }
+
+  const width = 720;
+  const height = 230;
+  const left = 48;
+  const right = 16;
+  const top = 16;
+  const bottom = 36;
+
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+
+  const maxTime = Math.max(...points.map((p) => p.time), 1);
+  const maxUsage = Math.max(
+    100,
+    Math.ceil(Math.max(...points.map((p) => p.usage)) / 50) * 50,
+  );
+
+  const x = (time) => left + (time / maxTime) * plotWidth;
+  const y = (usage) => top + plotHeight - (usage / maxUsage) * plotHeight;
+
+  const linePoints = points.map((p) => `${x(p.time)},${y(p.usage)}`).join(" ");
+
+  const gridValues = [0, 0.25, 0.5, 0.75, 1];
+
+  return (
+    <div className="cpu-chart-scroll">
+      <svg
+        className="cpu-chart"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label="실행 경과 시간에 따른 CPU 사용률"
+      >
+        {/* 가로 격자 및 CPU 사용률 눈금 */}
+        {gridValues.map((ratio) => {
+          const value = maxUsage * ratio;
+          const posY = y(value);
+
+          return (
+            <g key={ratio}>
+              <line
+                x1={left}
+                y1={posY}
+                x2={width - right}
+                y2={posY}
+                className="cpu-chart-grid"
+              />
+              <text
+                x={left - 10}
+                y={posY + 4}
+                textAnchor="end"
+                className="cpu-chart-label"
+              >
+                {Math.round(value)}%
+              </text>
+            </g>
+          );
+        })}
+
+        {/* 시간축 */}
+        {[0, 0.5, 1].map((ratio) => (
+          <text
+            key={ratio}
+            x={x(maxTime * ratio)}
+            y={height - 12}
+            textAnchor={ratio === 0 ? "start" : ratio === 1 ? "end" : "middle"}
+            className="cpu-chart-label"
+          >
+            {((maxTime * ratio) / 1000).toFixed(2)}s
+          </text>
+        ))}
+
+        {/* 사용률 변화 선 */}
+        <polyline points={linePoints} className="cpu-chart-line" />
+
+        {/* 측정 지점: 마우스를 올리면 수치 표시 */}
+        {points.map((point, index) => (
+          <circle
+            key={`${point.time}-${index}`}
+            cx={x(point.time)}
+            cy={y(point.usage)}
+            r="3"
+            className="cpu-chart-point"
+          >
+            <title>
+              {`${(point.time / 1000).toFixed(3)}초: ${point.usage.toFixed(1)}%`}
+            </title>
+          </circle>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+/* 실행 중 구간별 메모리 사용량 그래프 */
+function MemoryUsageChart({ samples }) {
+  const points = (samples ?? [])
+    .filter(
+      (sample) =>
+        Number.isFinite(sample.elapsed_ms) &&
+        Number.isFinite(sample.memory_bytes) &&
+        sample.elapsed_ms >= 0 &&
+        sample.memory_bytes >= 0,
+    )
+    .map((sample) => ({
+      time: sample.elapsed_ms,
+      usage: sample.memory_bytes / (1024 * 1024),
+    }))
+    .sort((a, b) => a.time - b.time);
+
+  if (points.length === 0) {
+    return <p className="cpu-chart-empty">메모리 사용량 데이터가 없습니다.</p>;
+  }
+
+  const width = 720;
+  const height = 230;
+  const left = 48;
+  const right = 16;
+  const top = 16;
+  const bottom = 36;
+
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+
+  const maxTime = Math.max(...points.map((p) => p.time), 1);
+  const maxMemory = Math.max(
+    16,
+    Math.ceil(Math.max(...points.map((p) => p.usage)) / 16) * 16,
+  );
+
+  const x = (time) => left + (time / maxTime) * plotWidth;
+  const y = (usage) => top + plotHeight - (usage / maxMemory) * plotHeight;
+
+  const linePoints = points.map((p) => `${x(p.time)},${y(p.usage)}`).join(" ");
+
+  const gridValues = [0, 0.25, 0.5, 0.75, 1];
+
+  return (
+    <div className="cpu-chart-scroll">
+      <svg
+        className="cpu-chart"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label="실행 경과 시간에 따른 메모리 사용량"
+      >
+        {/* 가로 격자 및 메모리 사용량 눈금 */}
+        {gridValues.map((ratio) => {
+          const value = maxMemory * ratio;
+          const posY = y(value);
+
+          return (
+            <g key={ratio}>
+              <line
+                x1={left}
+                y1={posY}
+                x2={width - right}
+                y2={posY}
+                className="cpu-chart-grid"
+              />
+              <text
+                x={left - 10}
+                y={posY + 4}
+                textAnchor="end"
+                className="cpu-chart-label"
+              >
+                {Math.round(value)} MiB
+              </text>
+            </g>
+          );
+        })}
+
+        {/* 시간축 */}
+        {[0, 0.5, 1].map((ratio) => (
+          <text
+            key={ratio}
+            x={x(maxTime * ratio)}
+            y={height - 12}
+            textAnchor={ratio === 0 ? "start" : ratio === 1 ? "end" : "middle"}
+            className="cpu-chart-label"
+          >
+            {((maxTime * ratio) / 1000).toFixed(2)}s
+          </text>
+        ))}
+
+        {/* 메모리 사용량 변화 선 */}
+        <polyline
+          points={linePoints}
+          className="cpu-chart-line memory-chart-line"
+        />
+
+        {/* 측정 지점: 마우스를 올리면 수치 표시 */}
+        {points.map((point, index) => (
+          <circle
+            key={`${point.time}-${index}`}
+            cx={x(point.time)}
+            cy={y(point.usage)}
+            r="3"
+            className="cpu-chart-point memory-chart-point"
+          >
+            <title>
+              {`${(point.time / 1000).toFixed(3)}초: ${point.usage.toFixed(2)} MiB`}
+            </title>
+          </circle>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 function MainPage() {
   // 입력 및 화면 상태
   const [language, setLanguage] = useState("CPP");
@@ -401,7 +682,7 @@ function MainPage() {
   const [standardInput, setStandardInput] = useState("");
   const [executionState, setExecutionState] = useState("idle");
   const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
-  const [jobId, setJobId] = useState(null);
+  //const [jobId, setJobId] = useState(null);
   const [executionResult, setExecutionResult] = useState(null);
   const [executionStatusText, setExecutionStatusText] = useState("실행 전");
   const [requestErrorCode, setRequestErrorCode] = useState(null);
@@ -409,15 +690,24 @@ function MainPage() {
     "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
   );
   const [activeOutputTab, setActiveOutputTab] = useState("stdout");
-  const processPeak = null;
-  const threadPeak = null;
 
   // 실행 중복 요청 방지
   const executionLockRef = useRef(false);
 
   // 선택값 및 실행 상태 파생 데이터
   const isExecuting = executionState === "loading";
-  const selectedPolicy = DEFAULT_POLICY;
+  const [selectedPolicy, setSelectedPolicy] = useState(DEFAULT_POLICY);
+
+  const handlePolicyChange = (key, value) => {
+    setSelectedPolicy((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
+  const handlePolicyReset = () => {
+    setSelectedPolicy(DEFAULT_POLICY);
+  };
 
   const outputByTab = {
     stdout: executionResult?.stdout,
@@ -441,7 +731,7 @@ function MainPage() {
   const isPidsLimitExceeded = executionResult?.reason_code === "PIDS_LIMIT";
   const isOutputLimitExceeded = executionResult?.reason_code === "OUTPUT_LIMIT";
   const isCpuTimeLimitExceeded =
-    executionResult?.reason_code === "CPUTIME_LIMIT";
+    executionResult?.reason_code === "CPU_TIME_LIMIT";
 
   // 실제 Runner 응답 기반 자원 사용량
   const resourceUsage = executionResult?.resource_usage;
@@ -451,6 +741,8 @@ function MainPage() {
       ? resourceUsage.memory_peak_bytes / 1024 / 1024
       : null;
   const pidsPeak = resourceUsage?.pids_peak;
+  const processPeak = resourceUsage?.process_at_user_task_peak;
+  const threadPeak = resourceUsage?.thread_at_user_task_peak;
 
   const wallTimePercentage = calculateUsagePercentage(
     wallTimeMs ?? 0,
@@ -468,10 +760,7 @@ function MainPage() {
   );
 
   const cpuTimeMs = resourceUsage?.cpu_time_ms;
-  const cpuUsagePercentage =
-    cpuTimeMs != null && wallTimeMs != null
-      ? calculateUsagePercentage(cpuTimeMs, wallTimeMs)
-      : null;
+
   const cpuTimePercentage =
     cpuTimeMs == null
       ? 0
@@ -569,10 +858,37 @@ function MainPage() {
       return;
     }
 
+    const integerPolicyKeys = [
+      "timeout_ms",
+      "memory_limit_mb",
+      "pids_limit",
+      "cpu_time_limit_ms",
+      "output_limit_bytes",
+    ];
+
+    const hasInvalidPolicy = POLICY_FIELDS.some(({ key }) => {
+      const value = Number(selectedPolicy[key]);
+
+      return (
+        selectedPolicy[key] === "" ||
+        !Number.isFinite(value) ||
+        value <= 0 ||
+        (integerPolicyKeys.includes(key) && !Number.isInteger(value))
+      );
+    });
+
+    if (hasInvalidPolicy) {
+      setExecutionState("error");
+      setExecutionStatusText("입력 오류");
+      setRequestErrorCode("INVALID_POLICY");
+      setMessage("정책 값은 0보다 큰 정수로 입력해주세요. (CPU 처리량 제외)");
+      return;
+    }
+
     executionLockRef.current = true;
     setExecutionState("loading");
     setExecutionStatusText("실행 중");
-    setJobId(null);
+    //setJobId(null);
     setExecutionResult(null);
     setRequestErrorCode(null);
     setMessage("코드 실행을 요청하고 있습니다.");
@@ -581,6 +897,14 @@ function MainPage() {
       language,
       code,
       stdin: standardInput,
+      policy: {
+        timeout_ms: Number(selectedPolicy.timeout_ms),
+        memory_limit_mb: Number(selectedPolicy.memory_limit_mb),
+        pids_limit: Number(selectedPolicy.pids_limit),
+        cpu_bandwidth: Number(selectedPolicy.cpu_bandwidth),
+        cpu_time_limit_ms: Number(selectedPolicy.cpu_time_limit_ms),
+        output_limit_bytes: Number(selectedPolicy.output_limit_bytes),
+      },
     };
 
     let errorPhase = "request";
@@ -592,7 +916,7 @@ function MainPage() {
         throw new Error("실행 요청 응답에서 실행 ID를 확인할 수 없습니다.");
       }
 
-      setJobId(response.job_id);
+      //setJobId(response.job_id);
       setMessage(`실행 요청이 접수되었습니다. (${response.status})`);
 
       errorPhase = "polling";
@@ -614,7 +938,7 @@ function MainPage() {
     setStandardInput("");
     setExecutionState("idle");
     setExecutionStatusText("실행 전");
-    setJobId(null);
+    //setJobId(null);
     setExecutionResult(null);
     setRequestErrorCode(null);
     setMessage("코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.");
@@ -622,7 +946,7 @@ function MainPage() {
   };
 
   return (
-    <form className="main-workspace" onSubmit={handleSubmit}>
+    <form className="main-workspace" onSubmit={handleSubmit} noValidate>
       <div className="main-workspace-grid">
         {/* 코드 편집기 및 I/O 영역 */}
         <section
@@ -790,104 +1114,65 @@ function MainPage() {
           {/* 실행 설정 영역 */}
           <section className="workspace-panel settings-section">
             <div className="workspace-panel-header">
-              <h2>현재 실행 환경</h2>
+              <h2>자원 제한 설정</h2>
+
+              <button
+                type="button"
+                className="policy-reset-button"
+                onClick={handlePolicyReset}
+                disabled={isExecuting}
+              >
+                ↻ 초기화
+              </button>
             </div>
 
             <div className="settings-content">
-              <h3>적용 중인 제한</h3>
-              <div className="environment-limit-grids">
-                <div className="environment-limit-grid-top">
+              <div className="environment-limit-grid-top policy-setting-grid">
+                {POLICY_FIELDS.map((field) => (
                   <div
                     className={`environment-limit-card ${
-                      isLimitTriggered("TIME_LIMIT") ? "limit-triggered" : ""
+                      field.reasonCode && isLimitTriggered(field.reasonCode)
+                        ? "limit-triggered"
+                        : ""
                     }`}
+                    key={field.key}
                   >
-                    <span className="environment-limit-icon metric-time">
-                      <MetricIcon type="time" />
+                    <span
+                      className={`environment-limit-icon metric-${field.type}`}
+                    >
+                      <MetricIcon type={field.type} />
                     </span>
-                    <div>
-                      <small>시간 제한</small>
-                      <strong>{selectedPolicy.timeout_ms / 1000} sec</strong>
-                    </div>
-                  </div>
 
-                  {/* 메모리 제한 */}
-                  <div
-                    className={`environment-limit-card ${
-                      isLimitTriggered("MEMORY_LIMIT") ? "limit-triggered" : ""
-                    }`}
-                  >
-                    <span className="environment-limit-icon metric-memory">
-                      <MetricIcon type="memory" />
-                    </span>
                     <div>
-                      <small>메모리</small>
-                      <strong>{selectedPolicy.memory_limit_mb} MB</strong>
-                    </div>
-                  </div>
+                      <label htmlFor={`policy-${field.key}`}>
+                        {field.label}
+                      </label>
 
-                  <div
-                    className={`environment-limit-card ${
-                      isLimitTriggered("PIDS_LIMIT") ? "limit-triggered" : ""
-                    }`}
-                  >
-                    <span className="environment-limit-icon metric-process">
-                      <MetricIcon type="process" />
-                    </span>
-                    <div>
-                      <small>PID</small>
-                      <strong>{selectedPolicy.pids_limit}개</strong>
+                      <div className="policy-input-row">
+                        <input
+                          id={`policy-${field.key}`}
+                          type="number"
+                          step={field.step}
+                          value={selectedPolicy[field.key]}
+                          onChange={(event) =>
+                            handlePolicyChange(field.key, event.target.value)
+                          }
+                          disabled={isExecuting}
+                        />
+                        <span>{field.unit}</span>
+                      </div>
                     </div>
                   </div>
+                ))}
+              </div>
 
-                  <div
-                    className={`environment-limit-card ${
-                      isLimitTriggered("CPU_LIMIT") ? "limit-triggered" : ""
-                    }`}
-                  >
-                    <span className="environment-limit-icon metric-cpu">
-                      <MetricIcon type="cpu" />
-                    </span>
-                    <div>
-                      <small>CPU 처리량</small>
-                      <strong>
-                        {selectedPolicy.cpu_bandwidth.toFixed(1)} CPU
-                      </strong>
-                    </div>
-                  </div>
-
-                  <div
-                    className={`environment-limit-card ${
-                      isLimitTriggered("CPUTIME_LIMIT") ? "limit-triggered" : ""
-                    }`}
-                  >
-                    <span className="environment-limit-icon metric-cputime">
-                      <MetricIcon type="cputime" />
-                    </span>
-                    <div>
-                      <small>CPU time</small>
-                      <strong>
-                        {selectedPolicy.cpu_time_limit_ms / 1000} sec
-                      </strong>
-                    </div>
-                  </div>
-                </div>
+              <div className="fixed-control-section">
+                <h3>고정 통제</h3>
 
                 <div className="environment-limit-grid-bottom">
                   <article
                     className={`planned-feature-item ${
-                      isLimitTriggered("OUTPUT_LIMIT") ? "limit-triggered" : ""
-                    }`}
-                  >
-                    <span className="environment-limit-icon planned-output-icon">
-                      <MetricIcon type="output" />
-                    </span>
-                    <strong>출력 제한</strong>
-                    <small className="limit-status-badge">제한 중</small>
-                  </article>
-                  <article
-                    className={`planned-feature-item ${
-                      isLimitTriggered("FILE_ACCESS_LIMIT")
+                      isLimitTriggered("FILESYSTEM_LIMIT")
                         ? "limit-triggered"
                         : ""
                     }`}
@@ -895,13 +1180,16 @@ function MainPage() {
                     <span className="environment-limit-icon planned-file-icon">
                       <MetricIcon type="file" />
                     </span>
-                    <strong>파일 접근 제한</strong>
-                    <small className="limit-status-badge">제한 중</small>
+
+                    <div className="fixed-control-info">
+                      <strong>파일 접근 제한</strong>
+                      <small className="limit-status-badge">제한 중</small>
+                    </div>
                   </article>
 
                   <article
                     className={`planned-feature-item ${
-                      isLimitTriggered("NETWORK_ACCESS_LIMIT")
+                      isLimitTriggered("NETWORK_BLOCKED")
                         ? "limit-triggered"
                         : ""
                     }`}
@@ -909,8 +1197,11 @@ function MainPage() {
                     <span className="environment-limit-icon planned-network-icon">
                       <MetricIcon type="network" />
                     </span>
-                    <strong>네트워크 차단</strong>
-                    <small className="limit-status-badge">제한 중</small>
+
+                    <div className="fixed-control-info">
+                      <strong>네트워크 차단</strong>
+                      <small className="limit-status-badge">제한 중</small>
+                    </div>
                   </article>
 
                   <article
@@ -923,8 +1214,11 @@ function MainPage() {
                     <span className="environment-limit-icon planned-permission-icon">
                       <MetricIcon type="permission" />
                     </span>
-                    <strong>권한 제한</strong>
-                    <small className="limit-status-badge">제한 중</small>
+
+                    <div className="fixed-control-info">
+                      <strong>권한 제한</strong>
+                      <small className="limit-status-badge">제한 중</small>
+                    </div>
                   </article>
                 </div>
               </div>
@@ -949,47 +1243,50 @@ function MainPage() {
                 </p>
               )}
 
-              <div className="execution-result-meta">
-                <div>
-                  <span>상태</span>
-                  <strong
-                    className={`execution-status-badge execution-status-${executionState}`}
-                    title={executionStatusText}
-                  >
-                    {executionStatusText}
-                  </strong>
-                </div>
-                <div>
-                  <span>종료 코드</span>
-                  <strong title={executionExitCode}>{executionExitCode}</strong>
-                </div>
-                <div>
-                  <span>종료 사유</span>
-                  <strong title={executionReasonCode}>
-                    {executionReasonCode}
-                  </strong>
-                </div>
-              </div>
+              <div className="execution-result-summary">
+                <strong
+                  className={`execution-status-badge execution-status-${executionState}`}
+                >
+                  {executionStatusText}
+                </strong>
 
-              <div className="execution-stage-flow" aria-label="단계별 결과">
-                {executionStages.map((stage, index) => (
-                  <div className="execution-stage-item" key={stage.key}>
-                    <div className={`stage-indicator stage-${stage.status}`}>
-                      <StatusGlyph status={stage.status} />
-                    </div>
-                    <strong>{stage.label}</strong>
-                    <span>{stage.statusLabel.replace(/^[^ ]+ /, "")}</span>
-                    {index < executionStages.length - 1 && (
-                      <span className="stage-arrow" aria-hidden="true">
-                        <ArrowIcon />
+                <div className="execution-summary-item">
+                  <span>종료 코드</span>
+                  <strong>{executionExitCode}</strong>
+                </div>
+
+                <div className="execution-summary-item">
+                  <span>종료 사유</span>
+                  <strong>{executionReasonCode}</strong>
+                </div>
+                <div className="execution-stage-label">단계</div>
+
+                <div
+                  className="execution-stage-compact"
+                  aria-label="단계별 결과"
+                >
+                  {executionStages.map((stage, index) => (
+                    <div
+                      className="execution-stage-compact-item"
+                      key={stage.key}
+                    >
+                      <span className={`stage-dot stage-${stage.status}`}>
+                        <StatusGlyph status={stage.status} />
                       </span>
-                    )}
-                  </div>
-                ))}
+
+                      <strong>{stage.label}</strong>
+
+                      <span>{stage.statusLabel.replace(/^[^ ]+ /, "")}</span>
+
+                      {index < executionStages.length - 1 && (
+                        <span className="stage-compact-arrow">→</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </section>
-
           {/* 자원 사용량 요약 영역 */}
           <section className="workspace-panel resource-section">
             <div className="resource-section-header">
@@ -1153,8 +1450,25 @@ function MainPage() {
                 </div>
               </article>
             </div>
-          </section>
 
+            <div className="resource-charts">
+              <div className="resource-chart-item">
+                <h3>구간별 CPU 사용률 추이</h3>
+                <CpuUsageChart
+                  samples={executionResult?.resource_usage?.cpu_usage_samples}
+                />
+              </div>
+
+              <div className="resource-chart-item">
+                <h3>구간별 메모리 사용량 추이</h3>
+                <MemoryUsageChart
+                  samples={
+                    executionResult?.resource_usage?.memory_usage_samples
+                  }
+                />
+              </div>
+            </div>
+          </section>
           {/* <section className="workspace-panel summary-section">
             <div className="workspace-panel-header">
               <h2>결과 요약</h2>
