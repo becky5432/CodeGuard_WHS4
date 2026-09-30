@@ -35,6 +35,57 @@ const DEFAULT_POLICY = {
   cpu_time_limit_ms: 1000,
 };
 
+const POLICY_FIELDS = [
+  {
+    key: "timeout_ms",
+    label: "실행 시간",
+    unit: "ms",
+    type: "time",
+    step: 1,
+    reasonCode: "TIME_LIMIT",
+  },
+  {
+    key: "memory_limit_mb",
+    label: "메모리 제한",
+    unit: "MB",
+    type: "memory",
+    step: 1,
+    reasonCode: "MEMORY_LIMIT",
+  },
+  {
+    key: "pids_limit",
+    label: "PID 제한",
+    unit: "개",
+    type: "process",
+    step: 1,
+    reasonCode: "PIDS_LIMIT",
+  },
+  {
+    key: "cpu_bandwidth",
+    label: "CPU 처리량",
+    unit: "CPU",
+    type: "cpu",
+    step: "any",
+    reasonCode: null,
+  },
+  {
+    key: "cpu_time_limit_ms",
+    label: "CPU 시간",
+    unit: "ms",
+    type: "cputime",
+    step: 1,
+    reasonCode: "CPU_TIME_LIMIT",
+  },
+  {
+    key: "output_limit_bytes",
+    label: "출력 제한",
+    unit: "bytes",
+    type: "output",
+    step: 1,
+    reasonCode: "OUTPUT_LIMIT",
+  },
+];
+
 const POLLING_INTERVAL_MS = 1000;
 
 const EXECUTION_RESULT_PRESENTATION = {
@@ -256,24 +307,6 @@ function ResultMessageIcon({ status }) {
       {!isSuccess && !isFailure && (
         <path d="M12 7.8v5.3M12 16.4h.01" stroke="#fff" strokeWidth="2.4" />
       )}
-    </svg>
-  );
-}
-
-function ArrowIcon() {
-  return (
-    <svg
-      className="stage-arrow-icon"
-      viewBox="0 0 42 28"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="3.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M3 14h31" />
-      <path d="m26 7 7 7-7 7" />
     </svg>
   );
 }
@@ -663,7 +696,18 @@ function MainPage() {
 
   // 선택값 및 실행 상태 파생 데이터
   const isExecuting = executionState === "loading";
-  const selectedPolicy = DEFAULT_POLICY;
+  const [selectedPolicy, setSelectedPolicy] = useState(DEFAULT_POLICY);
+
+  const handlePolicyChange = (key, value) => {
+    setSelectedPolicy((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
+  const handlePolicyReset = () => {
+    setSelectedPolicy(DEFAULT_POLICY);
+  };
 
   const outputByTab = {
     stdout: executionResult?.stdout,
@@ -814,6 +858,33 @@ function MainPage() {
       return;
     }
 
+    const integerPolicyKeys = [
+      "timeout_ms",
+      "memory_limit_mb",
+      "pids_limit",
+      "cpu_time_limit_ms",
+      "output_limit_bytes",
+    ];
+
+    const hasInvalidPolicy = POLICY_FIELDS.some(({ key }) => {
+      const value = Number(selectedPolicy[key]);
+
+      return (
+        selectedPolicy[key] === "" ||
+        !Number.isFinite(value) ||
+        value <= 0 ||
+        (integerPolicyKeys.includes(key) && !Number.isInteger(value))
+      );
+    });
+
+    if (hasInvalidPolicy) {
+      setExecutionState("error");
+      setExecutionStatusText("입력 오류");
+      setRequestErrorCode("INVALID_POLICY");
+      setMessage("정책 값은 0보다 큰 정수로 입력해주세요. (CPU 처리량 제외)");
+      return;
+    }
+
     executionLockRef.current = true;
     setExecutionState("loading");
     setExecutionStatusText("실행 중");
@@ -826,6 +897,14 @@ function MainPage() {
       language,
       code,
       stdin: standardInput,
+      policy: {
+        timeout_ms: Number(selectedPolicy.timeout_ms),
+        memory_limit_mb: Number(selectedPolicy.memory_limit_mb),
+        pids_limit: Number(selectedPolicy.pids_limit),
+        cpu_bandwidth: Number(selectedPolicy.cpu_bandwidth),
+        cpu_time_limit_ms: Number(selectedPolicy.cpu_time_limit_ms),
+        output_limit_bytes: Number(selectedPolicy.output_limit_bytes),
+      },
     };
 
     let errorPhase = "request";
@@ -867,7 +946,7 @@ function MainPage() {
   };
 
   return (
-    <form className="main-workspace" onSubmit={handleSubmit}>
+    <form className="main-workspace" onSubmit={handleSubmit} noValidate>
       <div className="main-workspace-grid">
         {/* 코드 편집기 및 I/O 영역 */}
         <section
@@ -1035,103 +1114,62 @@ function MainPage() {
           {/* 실행 설정 영역 */}
           <section className="workspace-panel settings-section">
             <div className="workspace-panel-header">
-              <h2>현재 실행 환경</h2>
+              <h2>자원 제한 설정</h2>
+
+              <button
+                type="button"
+                className="policy-reset-button"
+                onClick={handlePolicyReset}
+                disabled={isExecuting}
+              >
+                ↻ 초기화
+              </button>
             </div>
 
             <div className="settings-content">
-              <h3>적용 중인 제한</h3>
-              <div className="environment-limit-grids">
-                <div className="environment-limit-grid-top">
+              <div className="environment-limit-grid-top policy-setting-grid">
+                {POLICY_FIELDS.map((field) => (
                   <div
                     className={`environment-limit-card ${
-                      isLimitTriggered("TIME_LIMIT") ? "limit-triggered" : ""
-                    }`}
-                  >
-                    <span className="environment-limit-icon metric-time">
-                      <MetricIcon type="time" />
-                    </span>
-                    <div>
-                      <small>시간 제한</small>
-                      <strong>{selectedPolicy.timeout_ms / 1000} sec</strong>
-                    </div>
-                  </div>
-
-                  {/* 메모리 제한 */}
-                  <div
-                    className={`environment-limit-card ${
-                      isLimitTriggered("MEMORY_LIMIT") ? "limit-triggered" : ""
-                    }`}
-                  >
-                    <span className="environment-limit-icon metric-memory">
-                      <MetricIcon type="memory" />
-                    </span>
-                    <div>
-                      <small>메모리</small>
-                      <strong>{selectedPolicy.memory_limit_mb} MB</strong>
-                    </div>
-                  </div>
-
-                  <div
-                    className={`environment-limit-card ${
-                      isLimitTriggered("PIDS_LIMIT") ? "limit-triggered" : ""
-                    }`}
-                  >
-                    <span className="environment-limit-icon metric-process">
-                      <MetricIcon type="process" />
-                    </span>
-                    <div>
-                      <small>PID</small>
-                      <strong>{selectedPolicy.pids_limit}개</strong>
-                    </div>
-                  </div>
-
-                  <div
-                    className={`environment-limit-card ${
-                      isLimitTriggered("CPU_LIMIT") ? "limit-triggered" : ""
-                    }`}
-                  >
-                    <span className="environment-limit-icon metric-cpu">
-                      <MetricIcon type="cpu" />
-                    </span>
-                    <div>
-                      <small>CPU 처리량</small>
-                      <strong>
-                        {selectedPolicy.cpu_bandwidth.toFixed(1)} CPU
-                      </strong>
-                    </div>
-                  </div>
-
-                  <div
-                    className={`environment-limit-card ${
-                      isLimitTriggered("CPU_TIME_LIMIT")
+                      field.reasonCode && isLimitTriggered(field.reasonCode)
                         ? "limit-triggered"
                         : ""
                     }`}
+                    key={field.key}
                   >
-                    <span className="environment-limit-icon metric-cputime">
-                      <MetricIcon type="cputime" />
+                    <span
+                      className={`environment-limit-icon metric-${field.type}`}
+                    >
+                      <MetricIcon type={field.type} />
                     </span>
+
                     <div>
-                      <small>CPU time</small>
-                      <strong>
-                        {selectedPolicy.cpu_time_limit_ms / 1000} sec
-                      </strong>
+                      <label htmlFor={`policy-${field.key}`}>
+                        {field.label}
+                      </label>
+
+                      <div className="policy-input-row">
+                        <input
+                          id={`policy-${field.key}`}
+                          type="number"
+                          step={field.step}
+                          value={selectedPolicy[field.key]}
+                          onChange={(event) =>
+                            handlePolicyChange(field.key, event.target.value)
+                          }
+                          disabled={isExecuting}
+                        />
+                        <span>{field.unit}</span>
+                      </div>
                     </div>
                   </div>
-                </div>
+                ))}
+              </div>
+
+              <div className="fixed-control-section">
+                <h3>고정 통제</h3>
 
                 <div className="environment-limit-grid-bottom">
-                  <article
-                    className={`planned-feature-item ${
-                      isLimitTriggered("OUTPUT_LIMIT") ? "limit-triggered" : ""
-                    }`}
-                  >
-                    <span className="environment-limit-icon planned-output-icon">
-                      <MetricIcon type="output" />
-                    </span>
-                    <strong>출력 제한</strong>
-                    <small className="limit-status-badge">제한 중</small>
-                  </article>
                   <article
                     className={`planned-feature-item ${
                       isLimitTriggered("FILESYSTEM_LIMIT")
@@ -1142,8 +1180,11 @@ function MainPage() {
                     <span className="environment-limit-icon planned-file-icon">
                       <MetricIcon type="file" />
                     </span>
-                    <strong>파일 접근 제한</strong>
-                    <small className="limit-status-badge">제한 중</small>
+
+                    <div className="fixed-control-info">
+                      <strong>파일 접근 제한</strong>
+                      <small className="limit-status-badge">제한 중</small>
+                    </div>
                   </article>
 
                   <article
@@ -1156,8 +1197,11 @@ function MainPage() {
                     <span className="environment-limit-icon planned-network-icon">
                       <MetricIcon type="network" />
                     </span>
-                    <strong>네트워크 차단</strong>
-                    <small className="limit-status-badge">제한 중</small>
+
+                    <div className="fixed-control-info">
+                      <strong>네트워크 차단</strong>
+                      <small className="limit-status-badge">제한 중</small>
+                    </div>
                   </article>
 
                   <article
@@ -1170,13 +1214,17 @@ function MainPage() {
                     <span className="environment-limit-icon planned-permission-icon">
                       <MetricIcon type="permission" />
                     </span>
-                    <strong>권한 제한</strong>
-                    <small className="limit-status-badge">제한 중</small>
+
+                    <div className="fixed-control-info">
+                      <strong>권한 제한</strong>
+                      <small className="limit-status-badge">제한 중</small>
+                    </div>
                   </article>
                 </div>
               </div>
             </div>
           </section>
+
           {/* 실행 결과 영역 */}
           <section className="workspace-panel result-section">
             <div className="workspace-panel-header">
@@ -1195,43 +1243,47 @@ function MainPage() {
                 </p>
               )}
 
-              <div className="execution-result-meta">
-                <div>
-                  <span>상태</span>
-                  <strong
-                    className={`execution-status-badge execution-status-${executionState}`}
-                    title={executionStatusText}
-                  >
-                    {executionStatusText}
-                  </strong>
-                </div>
-                <div>
-                  <span>종료 코드</span>
-                  <strong title={executionExitCode}>{executionExitCode}</strong>
-                </div>
-                <div>
-                  <span>종료 사유</span>
-                  <strong title={executionReasonCode}>
-                    {executionReasonCode}
-                  </strong>
-                </div>
-              </div>
+              <div className="execution-result-summary">
+                <strong
+                  className={`execution-status-badge execution-status-${executionState}`}
+                >
+                  {executionStatusText}
+                </strong>
 
-              <div className="execution-stage-flow" aria-label="단계별 결과">
-                {executionStages.map((stage, index) => (
-                  <div className="execution-stage-item" key={stage.key}>
-                    <div className={`stage-indicator stage-${stage.status}`}>
-                      <StatusGlyph status={stage.status} />
-                    </div>
-                    <strong>{stage.label}</strong>
-                    <span>{stage.statusLabel.replace(/^[^ ]+ /, "")}</span>
-                    {index < executionStages.length - 1 && (
-                      <span className="stage-arrow" aria-hidden="true">
-                        <ArrowIcon />
+                <div className="execution-summary-item">
+                  <span>종료 코드</span>
+                  <strong>{executionExitCode}</strong>
+                </div>
+
+                <div className="execution-summary-item">
+                  <span>종료 사유</span>
+                  <strong>{executionReasonCode}</strong>
+                </div>
+                <div className="execution-stage-label">단계</div>
+
+                <div
+                  className="execution-stage-compact"
+                  aria-label="단계별 결과"
+                >
+                  {executionStages.map((stage, index) => (
+                    <div
+                      className="execution-stage-compact-item"
+                      key={stage.key}
+                    >
+                      <span className={`stage-dot stage-${stage.status}`}>
+                        <StatusGlyph status={stage.status} />
                       </span>
-                    )}
-                  </div>
-                ))}
+
+                      <strong>{stage.label}</strong>
+
+                      <span>{stage.statusLabel.replace(/^[^ ]+ /, "")}</span>
+
+                      {index < executionStages.length - 1 && (
+                        <span className="stage-compact-arrow">→</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </section>
