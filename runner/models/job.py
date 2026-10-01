@@ -12,6 +12,14 @@ class RunnerLanguage(str, Enum):
     CPP = "CPP"
 
 
+class NetworkPreset(str, Enum):
+    """실행 컨테이너의 네트워크 차단 프리셋."""
+
+    NONE = "none"    # P0: 완전 차단
+    HTTPS = "https"  # P1: 공인 443만 허용
+    WEB = "web"      # P2: 공인 80/443/53 허용
+
+
 class PolicyLimits(BaseModel):
     timeout_ms: int = Field(gt=0)
     memory_limit_mb: int = Field(gt=0)
@@ -22,6 +30,8 @@ class PolicyLimits(BaseModel):
         default=EXECUTION_OUTPUT_LIMIT_BYTES,
         gt=0,
     )
+    # 미지정(None)이면 러너 기본 네트워크(settings.execution_network)를 사용 → 기존 동작 유지
+    network_preset: NetworkPreset | None = None
 
 
 class RunnerRequest(BaseModel):
