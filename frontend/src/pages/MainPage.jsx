@@ -470,7 +470,7 @@ function CpuUsageChart({ samples }) {
 
   const width = 720;
   const height = 230;
-  const left = 48;
+  const left = 70;
   const right = 16;
   const top = 16;
   const bottom = 36;
@@ -582,7 +582,7 @@ function MemoryUsageChart({ samples }) {
 
   const width = 720;
   const height = 230;
-  const left = 48;
+  const left = 90;
   const right = 16;
   const top = 16;
   const bottom = 36;
@@ -1455,16 +1455,64 @@ function MainPage() {
               <div className="resource-chart-item">
                 <h3>구간별 CPU 사용률 추이</h3>
                 <CpuUsageChart
-                  samples={executionResult?.resource_usage?.cpu_usage_samples}
+                  //samples={executionResult?.resource_usage?.cpu_usage_samples}
+                  samples={[
+                    { elapsed_ms: 0, interval_ms: 100, cpu_time_delta_ms: 10 },
+                    {
+                      elapsed_ms: 100,
+                      interval_ms: 100,
+                      cpu_time_delta_ms: 30,
+                    },
+                    {
+                      elapsed_ms: 200,
+                      interval_ms: 100,
+                      cpu_time_delta_ms: 55,
+                    },
+                    {
+                      elapsed_ms: 300,
+                      interval_ms: 100,
+                      cpu_time_delta_ms: 80,
+                    },
+                    {
+                      elapsed_ms: 400,
+                      interval_ms: 100,
+                      cpu_time_delta_ms: 105,
+                    },
+                    {
+                      elapsed_ms: 500,
+                      interval_ms: 100,
+                      cpu_time_delta_ms: 75,
+                    },
+                    {
+                      elapsed_ms: 600,
+                      interval_ms: 100,
+                      cpu_time_delta_ms: 40,
+                    },
+                    {
+                      elapsed_ms: 700,
+                      interval_ms: 100,
+                      cpu_time_delta_ms: 20,
+                    },
+                  ]}
                 />
               </div>
 
               <div className="resource-chart-item">
                 <h3>구간별 메모리 사용량 추이</h3>
                 <MemoryUsageChart
-                  samples={
-                    executionResult?.resource_usage?.memory_usage_samples
-                  }
+                  // samples={
+                  //   executionResult?.resource_usage?.memory_usage_samples
+                  // }
+                  samples={[
+                    { elapsed_ms: 0, memory_bytes: 8 * 1024 * 1024 },
+                    { elapsed_ms: 100, memory_bytes: 16 * 1024 * 1024 },
+                    { elapsed_ms: 200, memory_bytes: 28 * 1024 * 1024 },
+                    { elapsed_ms: 300, memory_bytes: 40 * 1024 * 1024 },
+                    { elapsed_ms: 400, memory_bytes: 56 * 1024 * 1024 },
+                    { elapsed_ms: 500, memory_bytes: 64 * 1024 * 1024 },
+                    { elapsed_ms: 600, memory_bytes: 58 * 1024 * 1024 },
+                    { elapsed_ms: 700, memory_bytes: 50 * 1024 * 1024 },
+                  ]}
                 />
               </div>
             </div>
