@@ -223,7 +223,9 @@ class ExecutionTests(unittest.TestCase):
 
     def test_execution_opens_start_file_after_security_and_tracker_registration(self) -> None:
         tracker = MagicMock()
-        tracker.snapshot.return_value = PidsPeakSnapshot(1, 1, 0)
+        tracker.snapshot.return_value = PidsPeakSnapshot(
+            1, 1, 0, root_tid=456
+        )
         self.container.attrs["State"]["Pid"] = 321
         with (
             patch("runner.pipeline.execution.find_codeguard_init_tid", return_value=456),
@@ -244,6 +246,43 @@ class ExecutionTests(unittest.TestCase):
             ["evidence", "register_root", "release"],
         )
         tracker.register_root.assert_called_once_with(self.run_id, 456)
+        self.container.kill.assert_not_called()
+
+    def test_ebpf_exec_boundaries_are_authoritative_for_wall_time(self) -> None:
+        tracker = MagicMock()
+        tracker.snapshot.return_value = PidsPeakSnapshot(
+            1,
+            1,
+            0,
+            root_tid=456,
+            exec_start_ns=100_000_000,
+            exec_end_ns=600_000_000,
+        )
+        self.container.attrs["State"]["Pid"] = 321
+
+        with (
+            patch(
+                "runner.pipeline.execution.resolve_execution_cgroup",
+                return_value=ExecutionCgroupIdentity(999, 1),
+            ),
+            patch(
+                "runner.pipeline.execution.find_codeguard_init_tid",
+                return_value=456,
+            ),
+            patch(
+                "runner.pipeline.execution._monotonic_ns",
+                return_value=1_000_000_000,
+            ),
+        ):
+            result = execute_program(
+                self.container,
+                self.workspace.job_id,
+                self.run_id,
+                timeout_ms=2000,
+                task_tracker=tracker,
+            )
+
+        self.assertEqual(result.wall_time_ms, 500)
         self.container.kill.assert_not_called()
 
     def test_start_file_failure_aborts_without_running_user_code(self) -> None:
@@ -384,6 +423,7 @@ class ExecutionTests(unittest.TestCase):
             user_task_peak=15,
             process_at_user_task_peak=3,
             thread_at_user_task_peak=12,
+            root_tid=456,
         )
         cgroup_scope = MagicMock()
         cgroup_scope.snapshot.return_value = CgroupMetrics(pids_peak=18)
@@ -399,7 +439,13 @@ class ExecutionTests(unittest.TestCase):
 
         tracker.register_cgroup.assert_called_once_with(self.run_id, 999, 1)
         tracker.register_root.assert_called_once_with(self.run_id, 456)
-        tracker.snapshot.assert_called_once_with(self.run_id)
+        self.assertGreaterEqual(tracker.snapshot.call_count, 1)
+        self.assertTrue(
+            all(
+                entry == call(self.run_id)
+                for entry in tracker.snapshot.call_args_list
+            )
+        )
         tracker.remove.assert_called_once_with(self.run_id)
         self.container.kill.assert_not_called()
         self.assertEqual(result.pids_peak, 18)
@@ -422,6 +468,7 @@ class ExecutionTests(unittest.TestCase):
             user_task_peak=1,
             process_at_user_task_peak=1,
             thread_at_user_task_peak=0,
+            root_tid=456,
         )
         cgroup_scope = MagicMock()
         cgroup_scope.snapshot.return_value = CgroupMetrics(pids_peak=18)
@@ -1032,10 +1079,22 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
         cgroup_metrics=None,
         output=None,
         pids_exceeded=False,
+        exec_start=None,
+        exec_end=None,
+        tracker_enabled=None,
+        snapshot_error_after_start=False,
+        exec_start_on_snapshot=1,
+        exec_end_on_snapshot=None,
+        hold_container_after_gate=False,
+        finish_container_on_exec_end=True,
+        gate_deadline_before_exec_deadline=False,
+        expect_system_error=False,
     ):
         """Use real worker threads and barriers, without timing-sensitive sleeps."""
         container = MagicMock()
-        container.attrs = {"State": {"OOMKilled": oom_killed}}
+        container.attrs = {
+            "State": {"OOMKilled": oom_killed, "Pid": 321},
+        }
         container.attach.return_value = output or [(b"ok", None)]
         release_wait = threading.Event()
         clock = [0.0]
@@ -1064,9 +1123,18 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
 
         def release_gate(_container):
             if timeout_reached:
-                clock[0] = 1.001
+                clock[0] = (
+                    1.001
+                    if gate_deadline_before_exec_deadline
+                    else (exec_start or 0.0) + 1.001
+                )
+            elif hold_container_after_gate:
+                clock[0] = (exec_end or exec_start or 0.0) + 0.1
             elif output is None and not pids_exceeded:
                 finish_wait()
+
+        def monotonic_ns():
+            return int(clock[0] * 1_000_000_000)
 
         def kill(*args, **kwargs):
             finish_wait()
@@ -1081,12 +1149,81 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
             cgroup_scope.read_cpu_usage_usec.return_value = None
             cgroup_scope.snapshot.return_value = cgroup_metrics
 
+        if tracker_enabled is None:
+            tracker_enabled = exec_start is not None
+        tracker = None
+        if tracker_enabled:
+            tracker = MagicMock()
+            snapshot_calls = 0
+
+            def snapshot(_run_id):
+                nonlocal snapshot_calls
+                snapshot_calls += 1
+                if snapshot_error_after_start and snapshot_calls > 1:
+                    raise TaskTrackingError("temporary snapshot failure")
+                if (
+                    gate_deadline_before_exec_deadline
+                    and snapshot_calls > exec_start_on_snapshot
+                    and not release_wait.is_set()
+                ):
+                    clock[0] = (exec_start or 0.0) + 1.001
+                if (
+                    exec_end_on_snapshot is not None
+                    and snapshot_calls >= exec_end_on_snapshot
+                    and finish_container_on_exec_end
+                    and not release_wait.is_set()
+                ):
+                    finish_wait()
+                return PidsPeakSnapshot(
+                    1,
+                    1,
+                    0,
+                    root_tid=456,
+                    exec_start_ns=(
+                        int(exec_start * 1_000_000_000)
+                        if (
+                            exec_start is not None
+                            and snapshot_calls >= exec_start_on_snapshot
+                        )
+                        else 0
+                    ),
+                    exec_end_ns=(
+                        int(exec_end * 1_000_000_000)
+                        if (
+                            exec_end is not None
+                            and (
+                                (
+                                    exec_end_on_snapshot is not None
+                                    and snapshot_calls
+                                    >= exec_end_on_snapshot
+                                )
+                                or (
+                                    exec_end_on_snapshot is None
+                                    and release_wait.is_set()
+                                )
+                            )
+                        )
+                        else 0
+                    ),
+                )
+
+            tracker.snapshot.side_effect = snapshot
+
         with (
             patch("runner.pipeline.execution.ResourceMonitor") as resource_class,
             patch("runner.pipeline.execution.PidsLimitMonitor") as pids_class,
             patch("runner.pipeline.execution.threading.Thread", side_effect=make_thread),
             patch("runner.pipeline.execution.time.monotonic", side_effect=lambda: clock[0]),
+            patch("runner.pipeline.execution._monotonic_ns", side_effect=monotonic_ns),
             patch("runner.pipeline.execution.release_start_gate", side_effect=release_gate),
+            patch(
+                "runner.pipeline.execution.resolve_execution_cgroup",
+                return_value=ExecutionCgroupIdentity(999, 1),
+            ),
+            patch(
+                "runner.pipeline.execution.find_codeguard_init_tid",
+                return_value=456,
+            ),
         ):
             resource_class.return_value.start.side_effect = start_monitor
             resource_class.return_value.memory_peak_bytes = None
@@ -1096,12 +1233,16 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
                 result = execute_program(
                     container, uuid4(), uuid4(), timeout_ms=1000,
                     output_limit_bytes=16, cgroup_scope=cgroup_scope,
+                    task_tracker=tracker,
                 )
             finally:
                 release_wait.set()
                 for worker in workers.values():
                     worker.join(timeout=1.0)
-        self.assertIsNone(result.system_error)
+        if expect_system_error:
+            self.assertIsNotNone(result.system_error)
+        else:
+            self.assertIsNone(result.system_error)
         self.assertEqual(result.exit_code, exit_code)
         return result, container
 
@@ -1129,11 +1270,158 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
         self.assert_start_only(container)
         self.assert_classification(result, RunnerReasonCode.RUNTIME_ERROR, RunnerStatus.ERROR)
 
+    def test_ebpf_wall_excludes_pre_exec_and_strace_footer_time(self):
+        result, container = self.run_execution(
+            0,
+            finished_at=1.5,
+            exec_start=0.2,
+            exec_end=1.0,
+        )
+        self.assertEqual(result.wall_time_ms, 800)
+        self.assertFalse(result.timed_out)
+        self.assert_start_only(container)
+
+    def test_timeout_deadline_uses_ebpf_exec_start(self):
+        result, container = self.run_execution(
+            137,
+            timeout_reached=True,
+            finished_at=1.3,
+            exec_start=0.2,
+            exec_end=1.3,
+        )
+        self.assertEqual(result.wall_time_ms, 1100)
+        self.assertTrue(result.timed_out)
+        self.assert_policy_kill(container)
+
+    def test_exec_start_snapshot_failure_keeps_ebpf_deadline(self):
+        result, container = self.run_execution(
+            137,
+            timeout_reached=True,
+            finished_at=1.3,
+            exec_start=0.2,
+            snapshot_error_after_start=True,
+        )
+        self.assertTrue(result.timed_out)
+        self.assertEqual(result.wall_time_ms, 1100)
+        self.assert_policy_kill(container)
+
+    def test_late_start_observation_disables_gate_deadline(self):
+        result, container = self.run_execution(
+            137,
+            timeout_reached=True,
+            finished_at=1.3,
+            exec_start=0.2,
+            exec_start_on_snapshot=2,
+            gate_deadline_before_exec_deadline=True,
+        )
+        self.assertTrue(result.timed_out)
+        self.assertEqual(result.wall_time_ms, 1100)
+        self.assertGreaterEqual(container.kill.call_count, 1)
+
+    def test_exec_end_observed_at_deadline_wins_over_timeout(self):
+        result, container = self.run_execution(
+            0,
+            timeout_reached=True,
+            finished_at=1.3,
+            exec_start=0.2,
+            exec_end=1.19,
+            exec_end_on_snapshot=2,
+        )
+        self.assertFalse(result.timed_out)
+        self.assertEqual(result.wall_time_ms, 990)
+        self.assert_start_only(container)
+
+    def test_exec_end_after_deadline_is_time_limit(self):
+        result, container = self.run_execution(
+            0,
+            timeout_reached=True,
+            finished_at=1.3,
+            exec_start=0.2,
+            exec_end=1.21,
+            exec_end_on_snapshot=2,
+        )
+        self.assertTrue(result.timed_out)
+        self.assertEqual(result.wall_time_ms, 1010)
+        self.assert_start_only(container)
+        self.assert_classification(
+            result,
+            RunnerReasonCode.TIME_LIMIT,
+            RunnerStatus.BLOCKED,
+        )
+
+    def test_final_snapshot_detects_natural_exit_after_deadline(self):
+        result, container = self.run_execution(
+            0,
+            finished_at=1.5,
+            exec_start=0.2,
+            exec_end=1.3,
+        )
+        self.assertTrue(result.timed_out)
+        self.assertEqual(result.wall_time_ms, 1100)
+        self.assert_start_only(container)
+        self.assert_classification(
+            result,
+            RunnerReasonCode.TIME_LIMIT,
+            RunnerStatus.BLOCKED,
+        )
+
+    def test_exec_end_cleanup_hang_is_internal_not_time_limit(self):
+        result, container = self.run_execution(
+            137,
+            finished_at=1.5,
+            exec_start=0.2,
+            exec_end=1.0,
+            exec_end_on_snapshot=1,
+            hold_container_after_gate=True,
+            finish_container_on_exec_end=False,
+            expect_system_error=True,
+        )
+        self.assertFalse(result.timed_out)
+        self.assertEqual(result.wall_time_ms, 800)
+        self.assert_policy_kill(container)
+        self.assert_classification(
+            result,
+            RunnerReasonCode.INTERNAL_ERROR,
+            RunnerStatus.ERROR,
+        )
+
+    def test_missing_exec_start_uses_safety_timeout_not_time_limit(self):
+        result, container = self.run_execution(
+            137,
+            timeout_reached=True,
+            finished_at=1.1,
+            tracker_enabled=True,
+            expect_system_error=True,
+        )
+        self.assertFalse(result.timed_out)
+        self.assertIn("Safety Timeout", result.system_error)
+        self.assert_policy_kill(container)
+        self.assert_classification(
+            result,
+            RunnerReasonCode.INTERNAL_ERROR,
+            RunnerStatus.ERROR,
+        )
+
     def test_timeout_kill_exit_137_is_time_limit(self):
         result, container = self.run_execution(137, timeout_reached=True, finished_at=1.1)
         self.assertTrue(result.timed_out)
         self.assert_policy_kill(container)
         self.assert_classification(result, RunnerReasonCode.TIME_LIMIT, RunnerStatus.BLOCKED)
+
+    def test_tracker_disabled_keeps_legacy_gate_timeout(self):
+        result, container = self.run_execution(
+            137,
+            timeout_reached=True,
+            finished_at=1.1,
+            tracker_enabled=False,
+        )
+        self.assertTrue(result.timed_out)
+        self.assert_policy_kill(container)
+        self.assert_classification(
+            result,
+            RunnerReasonCode.TIME_LIMIT,
+            RunnerStatus.BLOCKED,
+        )
 
     def test_sigsegv_wins_race_with_successful_timeout_kill_request(self):
         result, container = self.run_execution(139, timeout_reached=True, finished_at=1.1)

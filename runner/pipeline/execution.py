@@ -136,6 +136,70 @@ def _stop_output_thread(frames, output_thread) -> bool:
         output_thread.join(timeout=1.0)
     return not output_thread.is_alive()
 
+
+def _monotonic_ns() -> int:
+    """Read the monotonic clock domain used by bpf_ktime_get_ns()."""
+    return time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+
+
+def _merge_exec_timing_snapshot(
+    snapshot: PidsPeakSnapshot,
+    *,
+    expected_root_tid: int,
+    observed_start_ns: int | None,
+    observed_end_ns: int,
+    observed_now_ns: int,
+) -> tuple[int | None, int]:
+    """Validate and merge an immutable eBPF execution boundary snapshot."""
+    if snapshot.root_tid != expected_root_tid:
+        raise TaskTrackingError(
+            "Task tracker returned an unexpected root TID."
+        )
+    if snapshot.exec_start_ns > observed_now_ns:
+        raise TaskTrackingError(
+            "Exec start timestamp is ahead of CLOCK_MONOTONIC."
+        )
+    if snapshot.exec_end_ns > observed_now_ns:
+        raise TaskTrackingError(
+            "Exec end timestamp is ahead of CLOCK_MONOTONIC."
+        )
+    if snapshot.exec_end_ns != 0 and (
+        snapshot.exec_start_ns == 0
+        or snapshot.exec_end_ns < snapshot.exec_start_ns
+    ):
+        raise TaskTrackingError("Invalid task tracker exec timing state.")
+    if (
+        observed_start_ns is not None
+        and snapshot.exec_start_ns != observed_start_ns
+    ):
+        raise TaskTrackingError(
+            "Root exec timestamp changed unexpectedly."
+        )
+    if observed_end_ns > 0 and snapshot.exec_end_ns != observed_end_ns:
+        raise TaskTrackingError(
+            "Final exec timestamp changed unexpectedly."
+        )
+    if snapshot.exec_start_ns == 0:
+        return observed_start_ns, observed_end_ns
+    return snapshot.exec_start_ns, snapshot.exec_end_ns
+
+
+def _wall_time_ms(
+    *,
+    exec_start_ns: int | None,
+    exec_end_ns: int,
+    fallback_start_ns: int,
+    finished_at_ns: int,
+) -> int:
+    if (
+        exec_start_ns is not None
+        and exec_end_ns >= exec_start_ns
+        and exec_end_ns > 0
+    ):
+        return (exec_end_ns - exec_start_ns) // 1_000_000
+    return max(finished_at_ns - fallback_start_ns, 0) // 1_000_000
+
+
 def _resolve_cpuset() -> str:
     available_cpus = sorted(os.sched_getaffinity(0))
 
@@ -265,7 +329,11 @@ def execute_program(
 ) -> ExecutionResult:
     """제한을 감시하며 실행 컨테이너의 종료 정보와 출력을 수집한다."""
 
-    start = time.monotonic()
+    operation_start_ns = _monotonic_ns()
+    gate_start_ns: int | None = None
+    registered_root_tid: int | None = None
+    observed_exec_start_ns: int | None = None
+    observed_exec_end_ns = 0
     network_start = time.time()
     output = _BoundedOutput(output_limit_bytes)
     monitor = ResourceMonitor(container)
@@ -273,7 +341,9 @@ def execute_program(
     wait_done = threading.Event()
     wait_state: dict[str, object] = {}
     output_state: dict[str, Exception | None] = {}
-    timeout_reached = False
+    normal_timeout_reached = False
+    legacy_timeout_reached = False
+    timing_safety_timeout_reached = False
     timeout_kill_requested = False
     cpu_time_limit_reached = False
     cpu_time_kill_requested = False
@@ -286,6 +356,7 @@ def execute_program(
     cgroup_registered = False
     root_registered = False
     task_metrics: PidsPeakSnapshot | None = None
+    exec_timing_error_logged = False
     cpu_start_usec: int | None = None
     cpu_sampler: CpuUsageSampler | None = None
     memory_sampler: MemoryUsageSampler | None = None
@@ -298,11 +369,57 @@ def execute_program(
         except Exception as exc:
             wait_state["error"] = exc
         finally:
-            wait_state["finished_at"] = time.monotonic()
+            wait_state["finished_at_ns"] = _monotonic_ns()
             wait_done.set()
 
     def collect_output() -> None:
         output_state["error"] = _collect_output(frames, output)
+
+    def poll_exec_timing() -> int:
+        """Merge one tracker snapshot without discarding known timestamps."""
+        nonlocal observed_exec_start_ns
+        nonlocal observed_exec_end_ns
+        nonlocal exec_timing_error_logged
+
+        assert task_tracker is not None
+        assert registered_root_tid is not None
+        try:
+            timing_snapshot = task_tracker.snapshot(run_id)
+            observed_now_ns = _monotonic_ns()
+            previous_start_ns = observed_exec_start_ns
+            (
+                observed_exec_start_ns,
+                observed_exec_end_ns,
+            ) = _merge_exec_timing_snapshot(
+                timing_snapshot,
+                expected_root_tid=registered_root_tid,
+                observed_start_ns=observed_exec_start_ns,
+                observed_end_ns=observed_exec_end_ns,
+                observed_now_ns=observed_now_ns,
+            )
+            if (
+                previous_start_ns is None
+                and observed_exec_start_ns is not None
+            ):
+                logger.info(
+                    "event=execution_timing_ebpf_started "
+                    "job_id=%s run_id=%s exec_start_ns=%s",
+                    job_id,
+                    run_id,
+                    observed_exec_start_ns,
+                )
+            return observed_now_ns
+        except TaskTrackingError as exc:
+            if not exec_timing_error_logged:
+                logger.warning(
+                    "event=task_tracker_exec_timing_error "
+                    "job_id=%s run_id=%s error=%s",
+                    job_id,
+                    run_id,
+                    exc,
+                )
+                exec_timing_error_logged = True
+            return _monotonic_ns()
 
     try:
         # 빠르게 종료되는 프로그램의 출력도 놓치지 않도록 start 전에
@@ -315,7 +432,6 @@ def execute_program(
             demux=True,
         )
         try:
-            start = time.monotonic()
             container.start()
             container_started = True
 
@@ -344,6 +460,7 @@ def execute_program(
                             "Execution Container의 strace TID가 없습니다."
                         )
                     root_tid = find_codeguard_init_tid(tracer_tid)
+                    registered_root_tid = root_tid
                     identity = resolve_execution_cgroup(root_tid)
                     task_tracker.register_cgroup(
                         run_id,
@@ -404,21 +521,39 @@ def execute_program(
             monitor_started = True
             monitor.start()
 
-            start = time.monotonic()
+            monitoring_start = time.monotonic()
             if cgroup_scope is not None and cpu_start_usec is not None:
                 cpu_sampler = CpuUsageSampler(
                     cgroup_scope=cgroup_scope,
                     start_cpu_usec=cpu_start_usec,
-                    start_time=start,
+                    start_time=monitoring_start,
                 )
             if cgroup_scope is not None:
                 memory_sampler = MemoryUsageSampler(
                     cgroup_scope=cgroup_scope,
-                    start_time=start,
+                    start_time=monitoring_start,
                 )
+            # The gate timestamp is a safety/legacy origin only. In the normal
+            # tracker path sched_process_exec supplies the wall-time origin.
+            gate_start_ns = _monotonic_ns()
             release_start_gate(container)
 
-            timeout_seconds = timeout_ms / 1000
+            if task_tracker is None:
+                logger.info(
+                    "event=execution_timing_legacy_mode "
+                    "job_id=%s run_id=%s reason=tracker_disabled",
+                    job_id,
+                    run_id,
+                )
+            elif not (cgroup_registered and root_registered):
+                logger.warning(
+                    "event=execution_timing_safety_mode "
+                    "job_id=%s run_id=%s reason=tracker_registration_failed",
+                    job_id,
+                    run_id,
+                )
+
+            timeout_ns = timeout_ms * 1_000_000
             while not wait_done.is_set():
 
                 if output.exceeded.is_set():
@@ -429,6 +564,15 @@ def execute_program(
                     break
 
                 now = time.monotonic()
+                timeout_now_ns = _monotonic_ns()
+
+                if (
+                    task_tracker is not None
+                    and cgroup_registered
+                    and root_registered
+                    and observed_exec_end_ns == 0
+                ):
+                    timeout_now_ns = poll_exec_timing()
 
                 if cpu_sampler is not None:
                     cpu_sampler.sample_if_due(now)
@@ -462,19 +606,103 @@ def execute_program(
                             cpu_time_limit_reached = True
                             break
 
-                remaining = timeout_seconds - (now - start)
-                if remaining <= 0:
-                    timeout_reached = True
+                assert gate_start_ns is not None
+                exec_deadline_ns = (
+                    observed_exec_start_ns + timeout_ns
+                    if observed_exec_start_ns is not None
+                    else None
+                )
+                if observed_exec_end_ns > 0:
+                    if (
+                        exec_deadline_ns is not None
+                        and observed_exec_end_ns > exec_deadline_ns
+                    ):
+                        normal_timeout_reached = True
                     break
-                wait_done.wait(timeout=min(remaining, 0.01))
 
-            policy_kill = timeout_reached or output.exceeded.is_set() or pids_limit_exceeded or cpu_time_limit_reached
+                deadline_ns = (
+                    exec_deadline_ns
+                    if exec_deadline_ns is not None
+                    else gate_start_ns + timeout_ns
+                )
+                remaining_ns = deadline_ns - timeout_now_ns
+                if remaining_ns <= 0:
+                    # A fresh eBPF snapshot closes the natural-exit race at
+                    # the deadline. Only an end at/before the deadline wins.
+                    if (
+                        task_tracker is not None
+                        and cgroup_registered
+                        and root_registered
+                        and observed_exec_end_ns == 0
+                    ):
+                        timeout_now_ns = poll_exec_timing()
+                        exec_deadline_ns = (
+                            observed_exec_start_ns + timeout_ns
+                            if observed_exec_start_ns is not None
+                            else None
+                        )
+                        if (
+                            observed_exec_end_ns > 0
+                            and exec_deadline_ns is not None
+                            and observed_exec_end_ns <= exec_deadline_ns
+                        ):
+                            break
+                        deadline_ns = (
+                            exec_deadline_ns
+                            if exec_deadline_ns is not None
+                            else gate_start_ns + timeout_ns
+                        )
+                        if timeout_now_ns < deadline_ns:
+                            continue
+
+                    if observed_exec_start_ns is not None:
+                        normal_timeout_reached = True
+                        logger.info(
+                            "event=normal_time_limit "
+                            "job_id=%s run_id=%s exec_start_ns=%s",
+                            job_id,
+                            run_id,
+                            observed_exec_start_ns,
+                        )
+                    elif task_tracker is None:
+                        legacy_timeout_reached = True
+                        logger.warning(
+                            "event=execution_timing_legacy_timeout "
+                            "job_id=%s run_id=%s gate_start_ns=%s",
+                            job_id,
+                            run_id,
+                            gate_start_ns,
+                        )
+                    else:
+                        timing_safety_timeout_reached = True
+                        logger.error(
+                            "event=execution_timing_safety_timeout "
+                            "job_id=%s run_id=%s gate_start_ns=%s",
+                            job_id,
+                            run_id,
+                            gate_start_ns,
+                        )
+                    break
+                wait_done.wait(
+                    timeout=min(remaining_ns / 1_000_000_000, 0.01)
+                )
+
+            wall_timeout_reached = (
+                normal_timeout_reached
+                or legacy_timeout_reached
+                or timing_safety_timeout_reached
+            )
+            policy_kill = (
+                wall_timeout_reached
+                or output.exceeded.is_set()
+                or pids_limit_exceeded
+                or cpu_time_limit_reached
+            )
             if policy_kill and not wait_done.is_set():
                 try:
                     container.kill()
-                    if timeout_reached:
+                    if normal_timeout_reached or legacy_timeout_reached:
                         timeout_kill_requested = True
-
                     if cpu_time_limit_reached:
                         cpu_time_kill_requested = True 
                     
@@ -490,7 +718,32 @@ def execute_program(
                 if not wait_done.wait(timeout=2.0):
                     system_error = "실행 컨테이너를 종료하지 못했습니다."
 
-            wait_done.wait(timeout=1.0)
+            if not wait_done.wait(timeout=1.0) and (
+                observed_exec_end_ns > 0 and not policy_kill
+            ):
+                system_error = (
+                    "사용자 실행 종료 후 Container 정리를 "
+                    "완료하지 못했습니다."
+                )
+                logger.error(
+                    "event=execution_cleanup_wait_timeout "
+                    "job_id=%s run_id=%s exec_end_ns=%s",
+                    job_id,
+                    run_id,
+                    observed_exec_end_ns,
+                )
+                try:
+                    container.kill()
+                except docker.errors.DockerException as exc:
+                    logger.warning(
+                        "event=execution_cleanup_kill_error "
+                        "job_id=%s run_id=%s error=%s",
+                        job_id,
+                        run_id,
+                        exc,
+                    )
+                if not wait_done.wait(timeout=2.0):
+                    system_error = "실행 컨테이너를 종료하지 못했습니다."
         except Exception:
             if container_started:
                 try:
@@ -519,7 +772,14 @@ def execute_program(
                     )
             pids_monitor.sample()
 
-        final_policy_kill = timeout_reached or output.exceeded.is_set() or pids_limit_exceeded or cpu_time_limit_reached
+        final_policy_kill = (
+            normal_timeout_reached
+            or legacy_timeout_reached
+            or timing_safety_timeout_reached
+            or output.exceeded.is_set()
+            or pids_limit_exceeded
+            or cpu_time_limit_reached
+        )
         if not output_thread_stopped:
             system_error = "실행 출력 수집기를 종료하지 못했습니다."
             logger.error(
@@ -559,7 +819,6 @@ def execute_program(
         # Reaching the deadline does not prove timeout caused the exit: a natural
         # exit (e.g. SIGSEGV/139) can win the race with a successful kill request.
         timed_out = timeout_kill_requested and exit_code == 137
-
         cpu_time_limit_exceeded = (
             cpu_time_kill_requested
             and exit_code == 137
@@ -625,7 +884,19 @@ def execute_program(
         if task_tracker is not None and cgroup_registered and root_registered:
             try:
                 task_metrics = task_tracker.snapshot(run_id)
+                assert registered_root_tid is not None
+                (
+                    observed_exec_start_ns,
+                    observed_exec_end_ns,
+                ) = _merge_exec_timing_snapshot(
+                    task_metrics,
+                    expected_root_tid=registered_root_tid,
+                    observed_start_ns=observed_exec_start_ns,
+                    observed_end_ns=observed_exec_end_ns,
+                    observed_now_ns=_monotonic_ns(),
+                )
             except TaskTrackingError as exc:
+                task_metrics = None
                 logger.warning(
                     "event=task_tracker_snapshot_error "
                     "job_id=%s run_id=%s error=%s",
@@ -663,9 +934,36 @@ def execute_program(
             stdout, stderr = output.decode()
         else:
             stdout, stderr = "", ""
-        finished_at = wait_state.get("finished_at")
-        if not isinstance(finished_at, float):
-            finished_at = time.monotonic()
+        finished_at_ns = wait_state.get("finished_at_ns")
+        if not isinstance(finished_at_ns, int):
+            finished_at_ns = _monotonic_ns()
+        finished_at = finished_at_ns / 1_000_000_000
+
+        fallback_start_ns = (
+            observed_exec_start_ns
+            if observed_exec_start_ns is not None
+            else (
+                gate_start_ns
+                if gate_start_ns is not None
+                else operation_start_ns
+            )
+        )
+        wall_time_ms = _wall_time_ms(
+            exec_start_ns=observed_exec_start_ns,
+            exec_end_ns=observed_exec_end_ns,
+            fallback_start_ns=fallback_start_ns,
+            finished_at_ns=finished_at_ns,
+        )
+
+        if (
+            observed_exec_start_ns is not None
+            and observed_exec_end_ns > 0
+        ):
+            exec_deadline_ns = observed_exec_start_ns + timeout_ms * 1_000_000
+            if observed_exec_end_ns <= exec_deadline_ns:
+                timed_out = False
+            else:
+                timed_out = True
 
         if cpu_sampler is not None:
             cpu_sampler.sample_final(
@@ -718,6 +1016,19 @@ def execute_program(
                 network_start,
             )
 
+        if (
+            timing_safety_timeout_reached
+            and system_error is None
+            and not output.exceeded.is_set()
+            and not cpu_time_limit_exceeded
+            and not oom_killed
+            and not pids_limit_exceeded
+        ):
+            system_error = (
+                "eBPF 실행 시작시각을 측정하지 못해 "
+                "Gate 기준 Safety Timeout으로 종료했습니다."
+            )
+
         return ExecutionResult(
             exit_code=exit_code,
             stdout=stdout,
@@ -727,7 +1038,7 @@ def execute_program(
             output_limit_exceeded=output.exceeded.is_set(),
             cpu_time_limit_exceeded=cpu_time_limit_exceeded,
             oom_killed=oom_killed,
-            wall_time_ms=int((finished_at - start) * 1000),
+            wall_time_ms=wall_time_ms,
             cpu_time_ms=cpu_time_ms,
             cpu_usage_samples=(
                 cpu_sampler.samples
@@ -762,7 +1073,19 @@ def execute_program(
             stdout="",
             stderr="",
             system_error="실행 컨테이너 처리에 실패했습니다.",
-            wall_time_ms=int((time.monotonic() - start) * 1000),
+            wall_time_ms=max(
+                _monotonic_ns()
+                - (
+                    observed_exec_start_ns
+                    if observed_exec_start_ns is not None
+                    else (
+                        gate_start_ns
+                        if gate_start_ns is not None
+                        else operation_start_ns
+                    )
+                ),
+                0,
+            ) // 1_000_000,
             memory_peak_bytes=monitor.memory_peak_bytes,
             pids_peak=pids_monitor.pids_peak,
             network_blocked=network_blocked,

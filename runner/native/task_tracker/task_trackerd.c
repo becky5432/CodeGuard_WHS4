@@ -168,8 +168,11 @@ static int register_root(
         return -saved_errno;
     }
 
+    metrics.root_tid = request->root_tid;
+    metrics.last_exit_ns = 0;
+    metrics.exec_start_ns = 0;
+    metrics.exec_end_ns = 0;
     metrics.process_current = 1;
-    metrics.thread_current = 0;
     metrics.user_task_current = 1;
     metrics.user_task_peak = 1;
     metrics.process_at_user_task_peak = 1;
@@ -192,7 +195,7 @@ static int register_root(
 static int snapshot(
     struct task_tracker_bpf *skel,
     const struct cg_request *request,
-    struct cg_peak_snapshot *result
+    struct cg_response *response
 )
 {
     struct cg_run_metrics metrics = {};
@@ -206,10 +209,15 @@ static int snapshot(
         ))
         return -errno;
 
-    result->user_task_peak = metrics.user_task_peak;
-    result->process_at_user_task_peak = metrics.process_at_user_task_peak;
-    result->thread_at_user_task_peak = metrics.thread_at_user_task_peak;
-    result->error_flags = metrics.error_flags;
+    response->root_tid = metrics.root_tid;
+    response->metrics.user_task_peak = metrics.user_task_peak;
+    response->metrics.process_at_user_task_peak =
+        metrics.process_at_user_task_peak;
+    response->metrics.thread_at_user_task_peak =
+        metrics.thread_at_user_task_peak;
+    response->metrics.error_flags = metrics.error_flags;
+    response->metrics.exec_start_ns = metrics.exec_start_ns;
+    response->metrics.exec_end_ns = metrics.exec_end_ns;
     return 0;
 }
 
@@ -350,7 +358,7 @@ static int dispatch(
     case CG_OP_REGISTER_ROOT:
         return register_root(skel, request);
     case CG_OP_SNAPSHOT:
-        return snapshot(skel, request, &response->metrics);
+        return snapshot(skel, request, response);
     case CG_OP_REMOVE:
         return remove_run(skel, &request->run_id);
     default:

@@ -7,7 +7,7 @@
 #endif
 
 #define CG_TRACKER_MAGIC 0x43475452
-#define CG_TRACKER_VERSION 2
+#define CG_TRACKER_VERSION 3
 
 enum cg_tracker_op {
     CG_OP_HEALTH = 1,
@@ -58,13 +58,16 @@ struct cg_process_value {
 
 struct cg_run_metrics {
     struct bpf_spin_lock lock;
+    __u32 root_tid;
     __u32 user_task_current;
     __u32 user_task_peak;
     __u32 process_current;
-    __u32 thread_current;
     __u32 process_at_user_task_peak;
     __u32 thread_at_user_task_peak;
     __u32 error_flags;
+    __u64 last_exit_ns;
+    __u64 exec_start_ns;
+    __u64 exec_end_ns;
 };
 
 struct cg_peak_snapshot {
@@ -72,6 +75,8 @@ struct cg_peak_snapshot {
     __u32 process_at_user_task_peak;
     __u32 thread_at_user_task_peak;
     __u32 error_flags;
+    __u64 exec_start_ns;
+    __u64 exec_end_ns;
 };
 
 struct cg_request {
@@ -89,10 +94,35 @@ struct cg_response {
     __u16 version;
     __u16 reserved;
     __s32 status;
+    __u32 root_tid;
     struct cg_peak_snapshot metrics;
 };
 
+_Static_assert(
+    sizeof(struct cg_run_metrics) == 56,
+    "cg_run_metrics size mismatch"
+);
+_Static_assert(
+    sizeof(struct cg_peak_snapshot) == 32,
+    "cg_peak_snapshot size mismatch"
+);
 _Static_assert(sizeof(struct cg_request) == 40, "cg_request size mismatch");
-_Static_assert(sizeof(struct cg_response) == 28, "cg_response size mismatch");
+_Static_assert(sizeof(struct cg_response) == 48, "cg_response size mismatch");
+_Static_assert(
+    __builtin_offsetof(struct cg_response, root_tid) == 12,
+    "cg_response root_tid offset mismatch"
+);
+_Static_assert(
+    __builtin_offsetof(struct cg_response, metrics) == 16,
+    "cg_response metrics offset mismatch"
+);
+_Static_assert(
+    __builtin_offsetof(struct cg_peak_snapshot, exec_start_ns) == 16,
+    "cg_peak_snapshot exec_start_ns offset mismatch"
+);
+_Static_assert(
+    __builtin_offsetof(struct cg_peak_snapshot, exec_end_ns) == 24,
+    "cg_peak_snapshot exec_end_ns offset mismatch"
+);
 
 #endif

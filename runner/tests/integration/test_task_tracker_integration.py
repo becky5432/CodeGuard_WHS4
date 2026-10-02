@@ -1,5 +1,6 @@
 import os
 import platform
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ from runner.config import settings
 from runner.models.job import PolicyLimits, RunnerLanguage, RunnerRequest
 from runner.models.result import RunnerReasonCode, RunnerStatus
 from runner.metrics.task_tracker import TaskTrackerClient
+from runner.pipeline import execution as execution_module
 from runner.pipeline.executor import execute_job
 
 
@@ -21,6 +23,57 @@ SINGLE_TASK_SOURCE = r"""
 
 int main(void) {
     usleep(200000);
+    return 0;
+}
+"""
+
+IMMEDIATE_EXIT_SOURCE = r"""
+int main(void) {
+    return 0;
+}
+"""
+
+SLEEP_SOURCE = r"""
+#include <unistd.h>
+
+int main(void) {
+    usleep(500000);
+    return 0;
+}
+"""
+
+FORK_CHILD_SOURCE = r"""
+#include <unistd.h>
+
+int main(void) {
+    pid_t pid = fork();
+    if (pid < 0)
+        return 1;
+    if (pid == 0) {
+        usleep(500000);
+        return 0;
+    }
+    return 0;
+}
+"""
+
+CHILD_EXEC_SOURCE = r"""
+#include <unistd.h>
+
+int main(int argc, char **argv) {
+    if (argc > 1) {
+        usleep(300000);
+        return 0;
+    }
+
+    usleep(400000);
+    pid_t pid = fork();
+    if (pid < 0)
+        return 1;
+    if (pid == 0) {
+        execl("/workspace/main", argv[0], "child", (char *)0);
+        _exit(127);
+    }
     return 0;
 }
 """
@@ -313,6 +366,101 @@ class TaskTrackerIntegrationTests(unittest.TestCase):
     def test_single_task_snapshot_is_stable_across_30_runs(self) -> None:
         for _ in range(30):
             self.assert_snapshot(self.execute(SINGLE_TASK_SOURCE), 1, 1, 0)
+
+    def test_immediate_exit_has_persisted_exec_boundaries(self) -> None:
+        real_tracker = TaskTrackerClient.from_settings(settings)
+        observed_snapshots = []
+
+        class RecordingTracker:
+            def register_cgroup(
+                self,
+                run_id,
+                cgroup_id,
+                initial_task_count,
+            ):
+                return real_tracker.register_cgroup(
+                    run_id,
+                    cgroup_id,
+                    initial_task_count,
+                )
+
+            def register_root(self, run_id, root_tid):
+                return real_tracker.register_root(run_id, root_tid)
+
+            def snapshot(self, run_id):
+                snapshot = real_tracker.snapshot(run_id)
+                observed_snapshots.append(snapshot)
+                return snapshot
+
+            def remove(self, run_id):
+                return real_tracker.remove(run_id)
+
+        with patch(
+            "runner.pipeline.executor.TaskTrackerClient.from_settings",
+            return_value=RecordingTracker(),
+        ):
+            response = self.execute(IMMEDIATE_EXIT_SOURCE)
+
+        self.assertEqual(response.status, RunnerStatus.SUCCESS)
+        self.assertIsNotNone(response.resource_usage)
+        self.assertIsNotNone(response.resource_usage.wall_time_ms)
+        self.assertGreaterEqual(response.resource_usage.wall_time_ms, 0)
+        completed = [
+            snapshot
+            for snapshot in observed_snapshots
+            if snapshot.exec_start_ns > 0 and snapshot.exec_end_ns > 0
+        ]
+        self.assertTrue(completed)
+        self.assertGreaterEqual(
+            completed[-1].exec_end_ns,
+            completed[-1].exec_start_ns,
+        )
+
+    def test_sleep_wall_time_starts_at_exec(self) -> None:
+        response = self.execute(SLEEP_SOURCE)
+
+        self.assertEqual(response.status, RunnerStatus.SUCCESS)
+        self.assertGreaterEqual(response.resource_usage.wall_time_ms, 450)
+        self.assertLess(response.resource_usage.wall_time_ms, 1000)
+
+    def test_timeout_uses_exec_start_deadline(self) -> None:
+        response = self.execute(TIMEOUT_SOURCE, timeout_ms=1000)
+
+        self.assertEqual(response.status, RunnerStatus.BLOCKED)
+        self.assertEqual(response.reason_code, RunnerReasonCode.TIME_LIMIT)
+        self.assertGreaterEqual(response.resource_usage.wall_time_ms, 950)
+        self.assertLess(response.resource_usage.wall_time_ms, 2000)
+
+    def test_last_fork_child_exit_sets_wall_end(self) -> None:
+        response = self.execute(FORK_CHILD_SOURCE)
+
+        self.assertEqual(response.status, RunnerStatus.SUCCESS)
+        self.assertGreaterEqual(response.resource_usage.wall_time_ms, 450)
+        self.assertLess(response.resource_usage.wall_time_ms, 1000)
+
+    def test_child_exec_does_not_overwrite_root_exec_start(self) -> None:
+        response = self.execute(CHILD_EXEC_SOURCE)
+
+        self.assertEqual(response.status, RunnerStatus.SUCCESS)
+        self.assertGreaterEqual(response.resource_usage.wall_time_ms, 650)
+        self.assertLess(response.resource_usage.wall_time_ms, 1200)
+
+    def test_gate_preparation_delay_is_excluded_from_wall_time(self) -> None:
+        real_release = execution_module.release_start_gate
+
+        def delayed_release(container) -> None:
+            time.sleep(0.5)
+            real_release(container)
+
+        with patch(
+            "runner.pipeline.execution.release_start_gate",
+            side_effect=delayed_release,
+        ):
+            response = self.execute(SINGLE_TASK_SOURCE)
+
+        self.assertEqual(response.status, RunnerStatus.SUCCESS)
+        self.assertGreaterEqual(response.resource_usage.wall_time_ms, 150)
+        self.assertLess(response.resource_usage.wall_time_ms, 500)
 
     def test_thread_barrier_snapshot(self) -> None:
         self.assert_snapshot(self.execute(THREAD_BARRIER_SOURCE), 16, 1, 15)

@@ -70,22 +70,58 @@ static __always_inline void update_peaks_locked(
     if (metrics->user_task_current > metrics->user_task_peak) {
         metrics->user_task_peak = metrics->user_task_current;
         metrics->process_at_user_task_peak = metrics->process_current;
-        metrics->thread_at_user_task_peak = metrics->thread_current;
+        if (metrics->user_task_current < metrics->process_current) {
+            metrics->thread_at_user_task_peak = 0;
+            metrics->error_flags |= CG_ERR_COUNTER;
+        } else {
+            metrics->thread_at_user_task_peak =
+                metrics->user_task_current - metrics->process_current;
+        }
     }
 }
 
-static __always_inline void update_thread_count_locked(
+static __always_inline void validate_task_counts_locked(
     struct cg_run_metrics *metrics
 )
 {
-    if (metrics->user_task_current < metrics->process_current) {
-        metrics->thread_current = 0;
+    if (metrics->user_task_current < metrics->process_current)
         metrics->error_flags |= CG_ERR_COUNTER;
-        return;
-    }
+}
 
-    metrics->thread_current =
-        metrics->user_task_current - metrics->process_current;
+SEC("tp_btf/sched_process_exec")
+int BPF_PROG(
+    handle_sched_process_exec,
+    struct task_struct *task,
+    pid_t old_pid,
+    struct linux_binprm *bprm
+)
+{
+    struct cg_cgroup_key cgroup_key = {
+        .cgroup_id = bpf_get_current_cgroup_id(),
+    };
+    struct cg_cgroup_value *cgroup_value;
+    struct cg_run_metrics *metrics;
+    __u32 current_tid = (__u32)bpf_get_current_pid_tgid();
+    __u64 exec_start_ns;
+
+    (void)task;
+    (void)old_pid;
+    (void)bprm;
+
+    cgroup_value = bpf_map_lookup_elem(&tracked_cgroups, &cgroup_key);
+    if (!cgroup_value)
+        return 0;
+
+    metrics = bpf_map_lookup_elem(&run_metrics, &cgroup_value->run_id);
+    if (!metrics)
+        return 0;
+
+    exec_start_ns = bpf_ktime_get_ns();
+    bpf_spin_lock(&metrics->lock);
+    if (metrics->root_tid == current_tid && metrics->exec_start_ns == 0)
+        metrics->exec_start_ns = exec_start_ns;
+    bpf_spin_unlock(&metrics->lock);
+    return 0;
 }
 
 SEC("tp_btf/sched_process_fork")
@@ -181,7 +217,7 @@ int BPF_PROG(
         metrics->user_task_current += 1;
         if (new_process)
             metrics->process_current += 1;
-        update_thread_count_locked(metrics);
+        validate_task_counts_locked(metrics);
     }
     update_peaks_locked(metrics);
     bpf_spin_unlock(&metrics->lock);
@@ -204,7 +240,9 @@ int BPF_PROG(handle_sched_process_exit, struct task_struct *task)
     bool tracked_user_task = false;
     bool last_process_task = false;
     bool process_counter_error = false;
+    bool user_count_decremented = false;
     __u32 previous_live_tasks = 0;
+    __u64 exit_ns = 0;
 
     cgroup_value = bpf_map_lookup_elem(&tracked_cgroups, &cgroup_key);
     if (!cgroup_value)
@@ -241,23 +279,32 @@ int BPF_PROG(handle_sched_process_exit, struct task_struct *task)
         bpf_map_delete_elem(&tracked_tasks, &task_key);
         if (last_process_task)
             bpf_map_delete_elem(&process_tasks, &process_key);
+        exit_ns = bpf_ktime_get_ns();
     }
 
     bpf_spin_lock(&metrics->lock);
     if (process_counter_error)
         metrics->error_flags |= CG_ERR_COUNTER;
     if (tracked_user_task) {
-        if (metrics->user_task_current > 0)
+        if (metrics->user_task_current > 0) {
             metrics->user_task_current -= 1;
-        else
+            user_count_decremented = true;
+        } else {
             metrics->error_flags |= CG_ERR_COUNTER;
+        }
         if (last_process_task) {
             if (metrics->process_current > 0)
                 metrics->process_current -= 1;
             else
                 metrics->error_flags |= CG_ERR_COUNTER;
         }
-        update_thread_count_locked(metrics);
+        validate_task_counts_locked(metrics);
+        if (user_count_decremented && metrics->exec_start_ns != 0 &&
+            exit_ns > metrics->last_exit_ns)
+            metrics->last_exit_ns = exit_ns;
+        if (user_count_decremented && metrics->user_task_current == 0 &&
+            metrics->exec_start_ns != 0 && metrics->exec_end_ns == 0)
+            metrics->exec_end_ns = metrics->last_exit_ns;
     }
     bpf_spin_unlock(&metrics->lock);
     return 0;

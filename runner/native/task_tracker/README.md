@@ -42,7 +42,7 @@ Execution cgroup 전체의 현재값과 Peak는 커널의 `pids.current`와
 `container_task_peak`를 중복 계산하지 않는다. 따라서 컨테이너 생명주기
 Task의 측정 오류가 사용자 코드 계보의 Snapshot을 무효화하지 않는다.
 
-바이너리 프로토콜 V2의 `initial_task_count` 요청 필드는 기존 Runner와의
+바이너리 프로토콜 V3의 `initial_task_count` 요청 필드는 기존 Runner와의
 호환성을 위해 유지하지만 native tracker의 측정에는 사용하지 않는다.
 
 ## 3. 측정 흐름
@@ -51,8 +51,9 @@ Task의 측정 오류가 사용자 코드 계보의 Snapshot을 무효화하지 
 2. `codeguard-init`은 runtime permission을 검사하고 보호된 PASS/FAIL 토큰을 기록한다. 실패하면 사용자 프로그램을 실행하지 않는다.
 3. 검증 성공 후 `codeguard-init`은 작업별 evidence Volume의 `start.ready` 파일을 기다린다.
 4. Runner는 PASS 증거를 확인하고 `strace`의 직접 자식인 `codeguard-init` TID를 eBPF Root TID로 등록한다. 다른 UID의 `/proc/<tid>/exe` 조회가 거부되면 대기 중인 프로세스의 `cmdline`을 확인한다. 감시기와 CPU 기준값을 준비한 뒤 `put_archive()`로 시작 파일을 만든다.
-5. `codeguard-init`은 같은 TID에서 사용자 프로그램을 `exec`한다. `strace`는 프로그램 종료와 trace footer 기록을 마친 뒤 종료한다.
-6. Runner는 종료 후 eBPF Snapshot을 회수한다.
+5. `codeguard-init`은 같은 TID에서 사용자 프로그램을 `exec`한다. 최초 Root TID의 `sched_process_exec`에서 `exec_start_ns`를 기록하고 이 시점부터 Wall Time과 TIME_LIMIT을 계산한다.
+6. 각 `sched_process_exit`의 시각 최댓값을 `last_exit_ns`로 누적하고, 사용자 계보의 생존 Task 카운터가 0이 되는 순간 그 값을 `exec_end_ns`로 확정한다.
+7. `strace`는 trace footer 기록을 마친 뒤 종료하고, Runner는 종료 후 eBPF Snapshot을 회수한다. 최종 Wall Time은 `(exec_end_ns - exec_start_ns) // 1_000_000`이다.
 
 `strace`는 계속 컨테이너 PID 1이다. 시작 파일은 `strace`에 신호를 보내지 않고
 사용자 코드 실행만 지연한다. 시작 파일이 생성되지 않으면 `codeguard-init`은
@@ -163,9 +164,27 @@ user_task_current
 
 ## 6. 실패 처리
 
-eBPF 측정은 실행 분석을 위한 보조 기능이다. Tracker 비활성화, 등록 실패,
-Snapshot 실패 또는 측정 오류가 발생해도 사용자 프로그램 실행과 cgroup
-제한 판정은 계속한다. 이 경우 다음 필드는 `null`로 반환한다.
+정상 eBPF 모드에서 `exec_start_ns`는 Wall Time과 `TIME_LIMIT`의
+authoritative source이다. `exec_start_ns`를 한 번 확인하면 후속 Snapshot이
+일시적으로 실패해도 Runner가 저장한 시작시각을 버리지 않고 정상
+eBPF deadline 감시를 계속한다. `exec_end_ns`를 확인하면 사용자
+Wall Time 감시를 종료한다. deadline 판정 시점에 Snapshot을 다시
+조회하여 `exec_end_ns <= exec_start_ns + timeout_ns`이면 정상 종료로
+우선 판정한다. `exec_end_ns`가 deadline 뒤면 실제 kill 여부와
+무관하게 `TIME_LIMIT`이다. 사용자 종료 후의 `strace` footer와
+Container wait 시간은 Wall Time에 포함하지 않는다.
+
+Tracker가 활성화된 실행에서 `exec_start_ns`를 얻지 못하면 Gate 해제
+직전의 `CLOCK_MONOTONIC` 시각을 기준으로 기존 timeout을 Safety
+Timeout으로 사용한다. 이 종료는 정상 사용자 `TIME_LIMIT`이 아니므로
+`execution_timing_safety_timeout` 로그와 기존 `INTERNAL_ERROR` 경로로
+구분한다. 별도 grace나 watchdog 시간은 추가하지 않는다.
+
+Tracker가 설정으로 비활성화된 환경은 기존 호환성을 위해 Gate 기준
+legacy timeout과 Wall Time을 유지하고 `execution_timing_legacy_mode` 로그로
+정밀 eBPF timing이 아님을 남긴다.
+
+Task Peak 측정에 실패하면 다음 필드는 `null`로 반환한다.
 
 ```json
 {
@@ -178,6 +197,19 @@ Snapshot 실패 또는 측정 오류가 발생해도 사용자 프로그램 실�
 `pids_peak`는 eBPF 결과와 독립적으로 cgroup에서 회수한다.
 `error_flags`에는 사용자 Task Map, 프로세스 Map, 사용자 계보 카운터와 관련된
 오류만 기록한다. 사용하지 않는 eBPF 컨테이너 카운터의 오류는 발생하지 않는다.
+
+바이너 프로토콜 V3의 크기는 다음과 같다.
+
+```text
+cg_request        40 bytes
+cg_response       48 bytes
+cg_run_metrics    56 bytes
+cg_peak_snapshot  32 bytes
+```
+
+`cg_response`는 헤더의 `root_tid` 뒤에 Peak 측정값과
+`exec_start_ns`, `exec_end_ns`를 전달한다. Runner는 응답의
+`root_tid`가 등록한 Root TID와 같은지 확인한다.
 
 ## 7. 대표 Task 선종료 처리 검증
 
