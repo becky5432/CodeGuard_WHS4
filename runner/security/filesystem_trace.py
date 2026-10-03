@@ -11,7 +11,7 @@ TRACE_PATH = f"{TRACE_DIRECTORY}/trace.log"
 TRACE_LIMIT_BYTES = 1024 * 1024
 WRITE_FLAGS = frozenset({"O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND", "O_TMPFILE"})
 OPEN_FLAG_ARGUMENT = {"open": 1, "openat": 2, "openat2": 2}
-RAW_WRITE_SYSCALLS = "write,writev,pwrite64,pwritev,pwritev2"
+WRITE_SYSCALLS = frozenset({"write", "writev", "pwrite64", "pwritev", "pwritev2"})
 MUTATION_IOCTLS = frozenset({
     "FICLONE", "FICLONERANGE", "FIDEDUPERANGE", "FS_IOC_SETFLAGS",
     "FS_IOC_SETVERSION", "FS_IOC_FSSETXATTR", "FS_IOC_SET_ENCRYPTION_POLICY",
@@ -21,18 +21,21 @@ MUTATION_SYSCALLS = frozenset({
     "creat", "unlink", "unlinkat", "rename", "renameat", "renameat2",
     "mkdir", "mkdirat", "rmdir", "link", "linkat", "symlink", "symlinkat",
     "truncate", "ftruncate", "mknod", "mknodat",
-    *RAW_WRITE_SYSCALLS.split(","), "fallocate",
+    *WRITE_SYSCALLS, "fallocate",
     "chmod", "fchmod", "fchmodat", "fchmodat2",
     "chown", "fchown", "lchown", "fchownat",
     "utime", "utimes", "futimesat", "utimensat",
     "setxattr", "lsetxattr", "fsetxattr",
     "removexattr", "lremovexattr", "fremovexattr",
 })
+# Keep write calls understood by the analyzer for compatibility with existing
+# evidence, but omit them from newly generated strace logs.
+TRACE_MUTATION_SYSCALLS = MUTATION_SYSCALLS - WRITE_SYSCALLS
 # User-installed seccomp can fabricate errno; io_uring submits filesystem work
 # without ordinary write syscall stops. Successful use invalidates this detector.
 TRACE_SYSCALLS = ",".join([
     "execve", "seccomp", "prctl", "io_uring_setup", "clone", "clone3", "ioctl",
-    *OPEN_FLAG_ARGUMENT, *sorted(MUTATION_SYSCALLS),
+    *OPEN_FLAG_ARGUMENT, *sorted(TRACE_MUTATION_SYSCALLS),
 ])
 _PREFIX = re.compile(r"^(?:(\d+)\s+|\[pid\s+(\d+)\]\s+)?(.*)$")
 _CALL = re.compile(r"^(\w+)\((.*)\)\s+=\s+(-?\d+)(?:\s+(\w+)\b.*)?$")

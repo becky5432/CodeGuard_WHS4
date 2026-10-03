@@ -49,7 +49,7 @@ from runner.security.runtime_verification import (
     collect_runtime_permission_failure,
 )
 from runner.security.filesystem_trace import (
-    TRACE_DIRECTORY, TRACE_PATH, TRACE_SYSCALLS, RAW_WRITE_SYSCALLS,
+    TRACE_DIRECTORY, TRACE_PATH, TRACE_SYSCALLS,
     FilesystemViolation, collect_filesystem_trace,
 )
 
@@ -232,7 +232,7 @@ def create_execution_container(
         f"exec strace -f -q -yy -s 4096 "
         f"-u codeguard "
         f"-o {TRACE_PATH} -e trace={TRACE_SYSCALLS} "
-        f"-e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init "
+        f"/usr/local/bin/codeguard-init "
         f"--security-fd 3"
     )
     if stdin:

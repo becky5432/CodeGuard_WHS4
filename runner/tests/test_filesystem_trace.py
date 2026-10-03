@@ -5,8 +5,19 @@ from unittest.mock import MagicMock
 import pytest
 
 from runner.security.filesystem_trace import (
-    TRACE_LIMIT_BYTES, analyze_filesystem_trace, collect_filesystem_trace,
+    TRACE_LIMIT_BYTES, TRACE_SYSCALLS, WRITE_SYSCALLS,
+    analyze_filesystem_trace, collect_filesystem_trace,
 )
+
+
+def test_trace_syscalls_exclude_high_volume_writes_and_keep_security_calls():
+    traced = set(TRACE_SYSCALLS.split(','))
+    assert WRITE_SYSCALLS == {'write', 'writev', 'pwrite64', 'pwritev', 'pwritev2'}
+    assert traced.isdisjoint(WRITE_SYSCALLS)
+    assert {
+        'execve', 'openat', 'unlink', 'rename', 'truncate', 'ftruncate',
+        'clone', 'clone3', 'seccomp', 'prctl',
+    } <= traced
 
 
 @pytest.mark.parametrize('trace', [

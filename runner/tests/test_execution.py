@@ -20,7 +20,6 @@ from runner.pipeline.execution import (
 )
 from runner.pipeline.workspace import VolumeWorkspace
 from runner.security.filesystem_trace import (
-    RAW_WRITE_SYSCALLS,
     TRACE_DIRECTORY,
     TRACE_PATH,
     TRACE_SYSCALLS,
@@ -99,7 +98,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertIs(result, self.container)
         self.client.containers.create.assert_called_once_with(
             image=settings.cpp_image,
-            command=["sh", "-c", f"umask 077; set -C; exec 3>/run/codeguard-trace/security.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 -- /workspace/main"],
+            command=["sh", "-c", f"umask 077; set -C; exec 3>/run/codeguard-trace/security.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 -- /workspace/main"],
             mounts=[docker.types.Mount(target=TRACE_DIRECTORY, source="", type="volume")],
             volumes={
                 self.workspace.volume_name: {
@@ -181,7 +180,7 @@ class ExecutionTests(unittest.TestCase):
         command = self.client.containers.create.call_args.kwargs["command"]
         self.assertEqual(
             command,
-            ["sh", "-c", f"umask 077; set -C; exec 3>/run/codeguard-trace/security.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 --stdin /workspace/stdin -- /workspace/main"],
+            ["sh", "-c", f"umask 077; set -C; exec 3>/run/codeguard-trace/security.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 --stdin /workspace/stdin -- /workspace/main"],
         )
 
     def test_create_execution_container_uses_cgroup_parent(self) -> None:
