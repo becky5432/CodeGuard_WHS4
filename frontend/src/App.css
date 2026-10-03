@@ -253,7 +253,7 @@ button {
 /* 코드 편집기 */
 .code-editor-area {
   flex: 0 0 460px;
-  height: 460px;
+  height: auto;
   min-height: 0;
   margin: 10px 16px 0;
   overflow: hidden;
@@ -846,7 +846,7 @@ button {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
   gap: 12px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .editor-section {
@@ -891,12 +891,17 @@ button {
 }
 
 .io-input-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   margin: 0 20px;
 }
 
 .standard-input {
   display: block;
   width: 100%;
+  flex: 1;
+  height: auto;
   min-height: 72px;
   margin: 0 0 2px;
   padding: 12px 14px;
@@ -1119,6 +1124,13 @@ button {
 }
 
 .io-section {
+  flex: 1 1 auto;
+  min-height: 0;
+
+  display: grid;
+  grid-template-rows:
+    minmax(100px, 0.8fr)
+    minmax(160px, 1.2fr);
   border-top: 0;
   background-color: var(--white);
   padding-top: 6px;
@@ -1184,10 +1196,15 @@ body,
   background: #cbd5e1 !important;
   background-color: #cbd5e1 !important;
 }
-
+.io-output-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
 .io-result-output {
+  flex: 1;
   min-height: 112px;
-  max-height: 150px;
+  max-height: none;
   margin: 0 20px 16px;
   padding: 14px 16px;
   overflow: auto;
@@ -1529,7 +1546,7 @@ body,
 
 .resource-chart-item h3 {
   margin: 0 0 10px;
-  font-size: 15px;
+  font-size: 17px;
 }
 
 .resource-chart-item span {
@@ -1558,14 +1575,14 @@ body,
 
 .cpu-chart-label {
   fill: var(--gray-600);
-  font-size: 12px;
+  font-size: 25px;
 }
 
 /* CPU 그래프 */
 .cpu-chart-line {
   fill: none;
   stroke: var(--blue-600);
-  stroke-width: 2.5;
+  stroke-width: 3;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -1573,7 +1590,7 @@ body,
 .cpu-chart-point {
   fill: var(--white);
   stroke: var(--blue-600);
-  stroke-width: 2;
+  stroke-width: 5;
 }
 
 /* 메모리 그래프 */

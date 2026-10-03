@@ -470,7 +470,7 @@ function CpuUsageChart({ samples }) {
 
   const width = 720;
   const height = 230;
-  const left = 48;
+  const left = 70;
   const right = 16;
   const top = 16;
   const bottom = 36;
@@ -582,7 +582,7 @@ function MemoryUsageChart({ samples }) {
 
   const width = 720;
   const height = 230;
-  const left = 48;
+  const left = 90;
   const right = 16;
   const top = 16;
   const bottom = 36;
