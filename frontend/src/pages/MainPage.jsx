@@ -1202,16 +1202,39 @@ function MainPage() {
                           min={field.min}
                           value={selectedPolicy[field.key]}
                           onKeyDown={(event) => {
-                            const blockedKeys = ["-", "+", "e", "E"];
-
-                            if (field.key !== "cpu_bandwidth") {
-                              blockedKeys.push(".");
+                            const allowedControlKeys = [
+                              "Backspace",
+                              "Delete",
+                              "Tab",
+                              "ArrowLeft",
+                              "ArrowRight",
+                              "ArrowUp",
+                              "ArrowDown",
+                              "Home",
+                              "End",
+                              "Enter",
+                            ];
+                            if (event.ctrlKey || event.metaKey) {
+                              return;
                             }
 
-                            if (blockedKeys.includes(event.key)) {
-                              event.preventDefault();
-                              showPolicyInputMessage(field.key);
+                            if (allowedControlKeys.includes(event.key)) {
+                              return;
                             }
+
+                            if (/^[0-9]$/.test(event.key)) {
+                              return;
+                            }
+
+                            if (
+                              field.key === "cpu_bandwidth" &&
+                              event.key === "."
+                            ) {
+                              return;
+                            }
+
+                            event.preventDefault();
+                            showPolicyInputMessage(field.key);
                           }}
                           onChange={(event) =>
                             handlePolicyChange(field, event.target.value)
