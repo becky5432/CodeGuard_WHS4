@@ -225,6 +225,9 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 "network_mode": settings.network_for_preset(
                     job.policy.network_preset
                 ),
+                "dns": settings.dns_for_preset(
+                    job.policy.network_preset
+                ),
             }
             if execution_cgroup_scope is not None:
                 create_execution_options["cgroup_scope"] = (

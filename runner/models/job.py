@@ -13,11 +13,10 @@ class RunnerLanguage(str, Enum):
 
 
 class NetworkPreset(str, Enum):
-    """실행 컨테이너의 네트워크 차단 프리셋."""
+    """실행 컨테이너의 네트워크 차단 프리셋 (2단계)."""
 
-    NONE = "none"    # P0: 완전 차단
-    HTTPS = "https"  # P1: 공인 443만 허용
-    WEB = "web"      # P2: 공인 80/443/53 허용
+    NONE = "none"   # P0: 완전 차단 (egress 0, DNS 포함)
+    WEB = "web"     # P1: 확장 허용 (공인 80/443/53)
 
 
 class PolicyLimits(BaseModel):
