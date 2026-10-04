@@ -42,6 +42,7 @@ const POLICY_FIELDS = [
     unit: "ms",
     type: "time",
     step: 1,
+    min: 1,
     reasonCode: "TIME_LIMIT",
   },
   {
@@ -50,6 +51,7 @@ const POLICY_FIELDS = [
     unit: "MB",
     type: "memory",
     step: 1,
+    min: 1,
     reasonCode: "MEMORY_LIMIT",
   },
   {
@@ -58,6 +60,7 @@ const POLICY_FIELDS = [
     unit: "개",
     type: "process",
     step: 1,
+    min: 1,
     reasonCode: "PIDS_LIMIT",
   },
   {
@@ -66,6 +69,7 @@ const POLICY_FIELDS = [
     unit: "CPU",
     type: "cpu",
     step: "any",
+    min: Number.MIN_VALUE,
     reasonCode: null,
   },
   {
@@ -74,6 +78,7 @@ const POLICY_FIELDS = [
     unit: "ms",
     type: "cputime",
     step: 1,
+    min: 1,
     reasonCode: "CPU_TIME_LIMIT",
   },
   {
@@ -82,6 +87,7 @@ const POLICY_FIELDS = [
     unit: "bytes",
     type: "output",
     step: 1,
+    min: 1,
     reasonCode: "OUTPUT_LIMIT",
   },
 ];
@@ -470,7 +476,7 @@ function CpuUsageChart({ samples }) {
 
   const width = 720;
   const height = 230;
-  const left = 48;
+  const left = 70;
   const right = 16;
   const top = 16;
   const bottom = 36;
@@ -582,7 +588,7 @@ function MemoryUsageChart({ samples }) {
 
   const width = 720;
   const height = 230;
-  const left = 48;
+  const left = 90;
   const right = 16;
   const top = 16;
   const bottom = 36;
@@ -690,6 +696,15 @@ function MainPage() {
     "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
   );
   const [activeOutputTab, setActiveOutputTab] = useState("stdout");
+  const [fullscreenChart, setFullscreenChart] = useState(null);
+  const [policyInputMessage, setPolicyInputMessage] = useState(null);
+  const showPolicyInputMessage = (key) => {
+    setPolicyInputMessage(key);
+
+    setTimeout(() => {
+      setPolicyInputMessage(null);
+    }, 2000);
+  };
 
   // 실행 중복 요청 방지
   const executionLockRef = useRef(false);
@@ -698,15 +713,44 @@ function MainPage() {
   const isExecuting = executionState === "loading";
   const [selectedPolicy, setSelectedPolicy] = useState(DEFAULT_POLICY);
 
-  const handlePolicyChange = (key, value) => {
+  const handlePolicyChange = (field, value) => {
+    if (value === "") {
+      setSelectedPolicy((current) => ({
+        ...current,
+        [field.key]: "",
+      }));
+      return;
+    }
+
+    const numberValue = Number(value);
+
+    if (!Number.isFinite(numberValue) || numberValue < field.min) {
+      showPolicyInputMessage(field.key);
+      return;
+    }
+
     setSelectedPolicy((current) => ({
       ...current,
-      [key]: value,
+      [field.key]: value,
     }));
   };
 
   const handlePolicyReset = () => {
     setSelectedPolicy(DEFAULT_POLICY);
+  };
+
+  const handleOutputKeyDown = (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+
+      const selection = window.getSelection();
+      const range = document.createRange();
+
+      range.selectNodeContents(event.currentTarget);
+
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
   };
 
   const outputByTab = {
@@ -1103,6 +1147,8 @@ function MainPage() {
               <pre
                 className={`io-result-output${executionResult ? "" : " io-result-output-empty"}`}
                 aria-label="출력 결과"
+                tabIndex={0}
+                onKeyDown={handleOutputKeyDown}
               >
                 {resultOutput}
               </pre>
@@ -1153,13 +1199,31 @@ function MainPage() {
                           id={`policy-${field.key}`}
                           type="number"
                           step={field.step}
+                          min={field.min}
                           value={selectedPolicy[field.key]}
+                          onKeyDown={(event) => {
+                            const blockedKeys = ["-", "+", "e", "E"];
+
+                            if (field.key !== "cpu_bandwidth") {
+                              blockedKeys.push(".");
+                            }
+
+                            if (blockedKeys.includes(event.key)) {
+                              event.preventDefault();
+                              showPolicyInputMessage(field.key);
+                            }
+                          }}
                           onChange={(event) =>
-                            handlePolicyChange(field.key, event.target.value)
+                            handlePolicyChange(field, event.target.value)
                           }
                           disabled={isExecuting}
                         />
                         <span>{field.unit}</span>
+                        {policyInputMessage === field.key && (
+                          <div className="policy-input-tooltip">
+                            0보다 큰 숫자만 입력할 수 있습니다.
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1452,15 +1516,73 @@ function MainPage() {
             </div>
 
             <div className="resource-charts">
-              <div className="resource-chart-item">
-                <h3>구간별 CPU 사용률 추이</h3>
+              <div
+                className={`resource-chart-item${
+                  fullscreenChart === "cpu" ? " resource-chart-fullscreen" : ""
+                }`}
+              >
+                <div className="resource-chart-header">
+                  <h3>구간별 CPU 사용률 추이</h3>
+
+                  <button
+                    type="button"
+                    className="chart-fullscreen-button"
+                    aria-label={
+                      fullscreenChart === "cpu"
+                        ? "CPU 그래프 전체 화면 종료"
+                        : "CPU 그래프 전체 화면"
+                    }
+                    title={
+                      fullscreenChart === "cpu" ? "전체 화면 종료" : "전체 화면"
+                    }
+                    onClick={() =>
+                      setFullscreenChart((current) =>
+                        current === "cpu" ? null : "cpu",
+                      )
+                    }
+                  >
+                    {fullscreenChart === "cpu" ? "×" : "⛶"}
+                  </button>
+                </div>
+
                 <CpuUsageChart
                   samples={executionResult?.resource_usage?.cpu_usage_samples}
                 />
               </div>
 
-              <div className="resource-chart-item">
-                <h3>구간별 메모리 사용량 추이</h3>
+              <div
+                className={`resource-chart-item${
+                  fullscreenChart === "memory"
+                    ? " resource-chart-fullscreen"
+                    : ""
+                }`}
+              >
+                <div className="resource-chart-header">
+                  <h3>구간별 메모리 사용량 추이</h3>
+
+                  <button
+                    type="button"
+                    className="chart-fullscreen-button"
+                    aria-label={
+                      fullscreenChart === "memory"
+                        ? "메모리 그래프 전체 화면 종료"
+                        : "메모리 그래프 전체 화면"
+                    }
+                    title={
+                      fullscreenChart === "memory"
+                        ? "전체 화면 종료"
+                        : "전체 화면"
+                    }
+                    onClick={() =>
+                      setFullscreenChart((current) =>
+                        current === "memory" ? null : "memory",
+                      )
+                    }
+                  >
+                    {fullscreenChart === "memory" ? "×" : "⛶"}
+                  </button>
+                </div>
+
                 <MemoryUsageChart
                   samples={
                     executionResult?.resource_usage?.memory_usage_samples
