@@ -12,6 +12,7 @@ from app.schemas.execution_schema import (
     ExecutionReasonCode,
     ExecutionResultResponse,
     ExecutionStatus,
+    NetworkPreset,
     PolicyLimits,
     ResourceUsage,
 
@@ -57,7 +58,8 @@ class ExecutionService:
         job_id = uuid4()
 
         resolved_policy = self.resolve_policy(request)
-        limits = resolved_policy.model_dump()
+        # mode="json": NetworkPreset enum 을 "none"/"web" 문자열로 직렬화해 DB에 저장
+        limits = resolved_policy.model_dump(mode="json")
 
         try:
             execution = repository.create_execution(
@@ -296,6 +298,11 @@ class ExecutionService:
             reason_code=(
                 ExecutionReasonCode(execution.reason_code)
                 if execution.reason_code
+                else None
+            ),
+            network_preset=(
+                NetworkPreset(execution.network_preset)
+                if execution.network_preset
                 else None
             ),
             error_message=execution.error_message,

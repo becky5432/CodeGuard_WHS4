@@ -27,6 +27,7 @@ class Execution(Base):
     cpu_bandwidth = Column(Float)                              # CPU 할당 한도(대역폭)
     cpu_time_limit_ms = Column(Integer)                        # 최대 CPU 시간(ms)
     output_limit_bytes= Column(Integer)                        # 최대 출력 크기(bytes)
+    network_preset = Column(String(8))                         # 적용된 네트워크 프리셋 (none/web)
 
     # --- Runner 결과 수신 후 갱신 ---
     run_id = Column(String(36))                                # Runner 발급 실행 ID
