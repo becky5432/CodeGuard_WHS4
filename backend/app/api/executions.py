@@ -16,13 +16,11 @@ from app.schemas.execution_schema import (
     ExecutionCreateRequest,
     ExecutionCreateResponse,
     ExecutionResultResponse,
-    ExecutionListItem
 )
 from app.services.execution_service import ExecutionService
 
 # 실행 기록 조회를 위해 추가함
 from app.db import repository
-from app.schemas.execution_schema import ExecutionListItem
 
 router = APIRouter(
     prefix="/executions",
