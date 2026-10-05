@@ -1,3 +1,5 @@
+import io
+import tarfile
 from dataclasses import dataclass
 
 import docker
@@ -8,6 +10,7 @@ from runner.exceptions import (
     ContainerExecutionError,
     DockerUnavailableError,
     RunnerError,
+    SecurityVerificationError,
     WorkspaceError,
 )
 from runner.pipeline.workspace import VolumeWorkspace, build_source_archive
@@ -80,22 +83,76 @@ def _get_compiler_config(language) -> dict:
     return config
 
 
+class _ArtifactPrefixReader(io.RawIOBase):
+    """Bound tar header parsing without materializing an arbitrary ELF body."""
+
+    def __init__(self, stream):
+        self.chunks = iter(stream)
+        self.pending = b""
+        self.remaining = 16 * 1024
+
+    def read(self, size=-1):
+        if size < 0 or size > 16 * 1024:
+            raise ValueError("Unbounded artifact archive read")
+        parts = []
+        while size:
+            if not self.pending:
+                chunk = next(self.chunks, None)
+                if chunk is None:
+                    break
+                if len(chunk) > self.remaining:
+                    raise ValueError("Artifact archive header exceeds limit")
+                self.remaining -= len(chunk)
+                self.pending = chunk
+                if not chunk:
+                    continue
+            part, self.pending = self.pending[:size], self.pending[size:]
+            parts.append(part)
+            size -= len(part)
+        return b"".join(parts)
+
+
 def _artifact_exists(container) -> bool:
     try:
-        stream, _ = container.get_archive("/workspace/main")
+        stream, metadata = container.get_archive("/workspace/main", chunk_size=512)
     except docker.errors.NotFound:
         return False
-
-    close = getattr(stream, "close", None)
-    if callable(close):
-        close()
-    return True
+    try:
+        if (metadata.get("name") != "main" or metadata.get("linkTarget")
+                or type(metadata.get("size")) is not int or metadata["size"] < 4
+                or type(metadata.get("mode")) is not int
+                or metadata["mode"] & ~0o777 or metadata["mode"] & 0o022
+                or not metadata["mode"] & 0o100):
+            return False
+        reader = _ArtifactPrefixReader(stream)
+        with tarfile.open(fileobj=reader, mode="r|", bufsize=512) as archive:
+            member = archive.next()
+            if (member is None or member.name != "main"
+                    or member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE)
+                    or member.linkname or member.sparse is not None
+                    or member.uid != SECURITY_UID or member.gid != SECURITY_GID
+                    or member.mode & ~0o777 or member.mode & 0o022
+                    or not member.mode & 0o100 or member.size != metadata["size"]):
+                return False
+            with archive.extractfile(member) as artifact:
+                # read() on ExFileObject's BufferedReader prefetches 8 KiB;
+                # read1() requests only this four-byte signature from the tar.
+                return artifact.read1(4) == b"\x7fELF"
+    except (tarfile.TarError, OSError, ValueError):
+        return False
+    finally:
+        # Cancel/close Docker's HTTP stream, do not drain a huge artifact body.
+        close = getattr(stream, "close", None)
+        if callable(close):
+            close()
 
 
 def create_compile_container(
     client,
     workspace: VolumeWorkspace,
     language,
+    *,
+    image_id: str | None = None,
 ):
     """Job Volume을 연결한 컴파일 컨테이너를 생성하고 반환한다."""
 
@@ -104,7 +161,7 @@ def create_compile_container(
 
     try:
         container = client.containers.create(
-            image=settings.cpp_image,
+            image=image_id if image_id is not None else settings.cpp_image,
             command=[
                 SECURITY_PREFLIGHT_PATH,
                 config["compiler"],
@@ -115,7 +172,7 @@ def create_compile_container(
                 "/workspace/main",
             ],
             volumes={
-                workspace.volume_name: {
+                workspace.app_volume: {
                     "bind": "/workspace",
                     "mode": "rw",
                 }
@@ -137,7 +194,16 @@ def create_compile_container(
                 container,
                 stage="compile",
                 workspace_mode="rw",
+                expected_image_id=image_id,
             )
+            # The execution verifier has a different three-volume layout.
+            # Compile must see only this job's app volume at the legacy path.
+            mounts = container.attrs.get("Mounts", [])
+            if (len(mounts) != 1 or mounts[0].get("Destination") != "/workspace"
+                    or mounts[0].get("Type") != "volume"
+                    or mounts[0].get("Name") != workspace.app_volume
+                    or mounts[0].get("RW") is not True):
+                raise SecurityVerificationError("Compile app volume identity verification failed.")
         except RunnerError:
             try:
                 container.remove(force=True)
@@ -169,7 +235,9 @@ def compile_source(
     _get_compiler_config(language)
 
     try:
-        source_archive = build_source_archive(language, code, stdin=stdin)
+        # Preparation owns stdin in its independent input volume. Re-uploading
+        # the fixed source file here is idempotent for existing compile callers.
+        source_archive = build_source_archive(language, code)
         try:
             uploaded = container.put_archive(
                 path="/workspace",

@@ -21,6 +21,8 @@ class Settings(BaseSettings):
 
     volume_name_prefix: str = "codeguard-job-"
     cpp_image: str = "codeguard-cpp:dev"
+    filesystem_policy_profile: Literal["cpp-amd64-v1"] = "cpp-amd64-v1"
+    filesystem_startup_timeout_seconds: float = Field(default=5.0, gt=0, lt=15)
     execution_network: str = "bridge"
     execution_cgroup_enabled: bool = True
     execution_cgroup_root: Path = Path("/sys/fs/cgroup/codeguard")

@@ -9,11 +9,29 @@ from runner.models.job import PolicyLimits, RunnerLanguage, RunnerRequest
 from runner.models.result import RunnerReasonCode, RunnerStage, RunnerStatus
 from runner.pipeline.compiler import CompileResult
 from runner.pipeline.execution import ExecutionResult
-from runner.pipeline.executor import execute_job
+from runner.pipeline.executor import execute_job, _resolve_execution_image
+from runner.exceptions import WorkspaceError
 from runner.pipeline.workspace import VolumeWorkspace
 
 
 class ExecutorTests(unittest.TestCase):
+    def setUp(self):
+        manifest = (
+            b'{"version":1,"profile":"cpp-amd64-v1","architecture":"amd64",'
+            b'"loader":"/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",'
+            b'"libraries":["/usr/lib/x86_64-linux-gnu/libc.so.6",'
+            b'"/usr/local/lib64/libstdc++.so.6.0.34",'
+            b'"/usr/local/lib64/libgcc_s.so.1",'
+            b'"/usr/lib/x86_64-linux-gnu/libm.so.6"],"cache":null}'
+        )
+        for target, value in (
+            ("runner.pipeline.executor._resolve_execution_image", "sha256:" + "a" * 64),
+            ("runner.pipeline.executor.prepare_workspace", manifest),
+        ):
+            patcher = patch(target, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def test_enabled_cgroup_scope_is_passed_and_removed(self) -> None:
         job_id = uuid4()
         client = MagicMock()
@@ -22,7 +40,7 @@ class ExecutorTests(unittest.TestCase):
         execution_container = MagicMock()
         task_tracker = MagicMock()
         cgroup_scope = MagicMock()
-        workspace = VolumeWorkspace(job_id, "codeguard-job-test")
+        workspace = VolumeWorkspace(job_id, "codeguard-job-test-app", "codeguard-job-test-input", "codeguard-job-test-work")
         delegated_root = Path("/sys/fs/cgroup/codeguard")
         job = RunnerRequest(
             job_id=job_id,
@@ -149,7 +167,7 @@ class ExecutorTests(unittest.TestCase):
         job_id = uuid4()
         client = MagicMock()
         compile_container = MagicMock()
-        workspace = VolumeWorkspace(job_id, "codeguard-job-test")
+        workspace = VolumeWorkspace(job_id, "codeguard-job-test-app", "codeguard-job-test-input", "codeguard-job-test-work")
         get_client.return_value = client
         create_workspace.return_value = workspace
         create_compile_container.return_value = compile_container
@@ -186,6 +204,29 @@ class ExecutorTests(unittest.TestCase):
         create_execution_container.assert_not_called()
         compile_container.remove.assert_called_once_with(force=True)
         remove_workspace.assert_called_once_with(client, workspace)
+
+
+class ExecutionImageTests(unittest.TestCase):
+    def test_image_id_is_pinned(self):
+        client = MagicMock()
+        image = client.images.get.return_value
+        image.attrs = {"Os": "linux", "Architecture": "amd64"}
+        image.id = "sha256:" + "a" * 64
+        self.assertEqual(_resolve_execution_image(client), image.id)
+        client.images.get.assert_called_once_with(settings.cpp_image)
+
+    def test_unverified_platform_or_invalid_image_id_is_rejected(self):
+        for os_name, architecture, image_id in (
+            ("windows", "amd64", "sha256:" + "a" * 64),
+            ("linux", "arm64", "sha256:" + "a" * 64),
+            ("linux", "amd64", "codeguard-cpp:dev"),
+        ):
+            with self.subTest(os_name=os_name, architecture=architecture):
+                client = MagicMock()
+                client.images.get.return_value.attrs = {"Os": os_name, "Architecture": architecture}
+                client.images.get.return_value.id = image_id
+                with self.assertRaises(WorkspaceError):
+                    _resolve_execution_image(client)
 
 
 if __name__ == "__main__":

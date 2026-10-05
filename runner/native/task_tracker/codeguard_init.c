@@ -8,8 +8,11 @@
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../filesystem/landlock_policy.h"
 
 #ifndef START_READY_PATH
 #define START_READY_PATH "/run/codeguard-trace/start.ready"
@@ -33,7 +36,9 @@ static int wait_for_start_file(void)
     deadline.tv_sec += START_WAIT_SECONDS;
     for (;;) {
         if (lstat(START_READY_PATH, &marker) == 0) {
-            return S_ISREG(marker.st_mode) ? 0 : -1;
+            if (S_ISREG(marker.st_mode)) return 0;
+            errno = EINVAL;
+            return -1;
         }
         if (errno != ENOENT || clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
             return -1;
@@ -57,7 +62,8 @@ static void usage(const char *program)
 {
     fprintf(
         stderr,
-        "usage: %s --security-fd FD [--stdin PATH] -- PROGRAM [ARG ...]\n",
+        "usage: %s --security-fd FD --filesystem-policy-fd FD "
+        "--filesystem-status-fd FD --stdin PATH --workdir PATH -- PROGRAM [ARG ...]\n",
         program
     );
 }
@@ -185,90 +191,161 @@ static int verify_runtime_security(void)
     return verified ? 0 : -1;
 }
 
+static int parse_fd(const char *value)
+{
+    char *end;
+    long fd;
+    if (!value || !*value || strspn(value, "0123456789") != strlen(value)) return -1;
+    errno = 0;
+    fd = strtol(value, &end, 10);
+    return errno || *end || fd < 3 || fd > 1024 ? -1 : (int)fd;
+}
+
+/* Early failures precede policy parsing by design. Recover only a well-formed
+ * header ID for FAILED evidence, without granting authority from any rule. */
+static void recover_policy_id(int fd, struct cg_fs_policy *policy)
+{
+    char header[73];
+    ssize_t count;
+    if (fd < 0 || cg_fs_valid_id(policy->policy_id)) return;
+    do { count = pread(fd, header, 72, 0); } while (count < 0 && errno == EINTR);
+    if (count != 72 || memcmp(header, "CGFS\t1\t", 7) || header[71] != '\n') return;
+    header[71] = 0;
+    if (cg_fs_valid_id(header + 7)) memcpy(policy->policy_id, header + 7, 65);
+}
+
 int main(int argc, char **argv)
 {
-    const char *stdin_path = NULL;
-    char *end = NULL;
-    long parsed_security_fd;
-    int security_fd = -1;
-    int stdin_fd = -1;
-    int index = 1;
-    if (index + 1 >= argc || strcmp(argv[index], "--security-fd") != 0) {
-        usage(argv[0]);
+    const char *stdin_path = NULL, *workdir = NULL;
+    struct cg_fs_policy *policy = calloc(1, sizeof(*policy));
+    struct cg_fs_error error = {0};
+    int security_fd = -1, policy_fd = -1, status_fd = -1;
+    int stdin_fd = -1, ruleset_fd = -1, abi = 0;
+    int index = 1, exit_code = 126, result, code;
+    struct stat stdin_stat;
+    if (!policy) {
+        perror("codeguard-init allocation");
         return 126;
     }
-    errno = 0;
-    parsed_security_fd = strtol(argv[index + 1], &end, 10);
-    if (errno != 0 || !end || *end != '\0' || parsed_security_fd < 3 ||
-        parsed_security_fd > 1024) {
-        usage(argv[0]);
-        return 126;
+    while (index < argc && strcmp(argv[index], "--")) {
+        const char *option = argv[index++], *value;
+        if (index >= argc) goto bad_cli;
+        value = argv[index++];
+        if (!strcmp(option, "--security-fd") && security_fd == -1) {
+            security_fd = parse_fd(value);
+            if (security_fd < 0) goto bad_cli;
+        } else if (!strcmp(option, "--filesystem-policy-fd") && policy_fd == -1) {
+            policy_fd = parse_fd(value);
+            if (policy_fd < 0) goto bad_cli;
+        } else if (!strcmp(option, "--filesystem-status-fd") && status_fd == -1) {
+            status_fd = parse_fd(value);
+            if (status_fd < 0) goto bad_cli;
+        } else if (!strcmp(option, "--stdin") && !stdin_path) stdin_path = value;
+        else if (!strcmp(option, "--workdir") && !workdir) workdir = value;
+        else goto bad_cli;
     }
-    security_fd = (int)parsed_security_fd;
-    index += 2;
-
-
-    if (index < argc && strcmp(argv[index], "--stdin") == 0) {
-        if (index + 1 >= argc) {
-            usage(argv[0]);
-            return 126;
-        }
-        stdin_path = argv[index + 1];
-        index += 2;
+    if (index >= argc || index + 1 >= argc || security_fd < 0 || policy_fd < 0 ||
+        status_fd < 0 || !stdin_path || stdin_path[0] != '/' ||
+        !workdir || workdir[0] != '/' || security_fd == policy_fd ||
+        security_fd == status_fd || policy_fd == status_fd) goto bad_cli;
+    index++;
+    /* Reject invalid input FDs before open() could accidentally reuse them. */
+    if (fcntl(security_fd, F_GETFD) < 0 || fcntl(policy_fd, F_GETFD) < 0 ||
+        fcntl(status_fd, F_GETFD) < 0) {
+        cg_fs_fail(&error, errno, "input_fds", NULL); goto failed;
     }
-
-    if (index >= argc || strcmp(argv[index], "--") != 0 ||
-        index + 1 >= argc) {
-        usage(argv[0]);
-        return 126;
+    stdin_fd = open(stdin_path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (stdin_fd < 0) {
+        cg_fs_fail(&error, errno, "stdin_open", stdin_path); goto failed;
     }
-    index += 1;
-
-    if (stdin_path) {
-        stdin_fd = open(stdin_path, O_RDONLY | O_CLOEXEC);
-        if (stdin_fd < 0) {
-            perror("codeguard-init stdin open");
-            return 126;
-        }
-        if (dup2(stdin_fd, STDIN_FILENO) < 0) {
-            perror("codeguard-init stdin dup2");
-            close(stdin_fd);
-            return 126;
-        }
-        close(stdin_fd);
+    if (fstat(stdin_fd, &stdin_stat) < 0) {
+        cg_fs_fail(&error, errno, "stdin_type", stdin_path); goto failed;
     }
-
-    if (verify_runtime_security() != 0) {
-        static const char failure[] = "SECURITY_VERIFICATION_FAILED\n";
-
-        if (write_all(security_fd, failure, sizeof(failure) - 1) != 0 ||
-            fsync(security_fd) != 0 || close(security_fd) != 0) {
-            perror("codeguard-init security failure status");
-            return 126;
-        }
-        fprintf(stderr, "codeguard-init security verification failed\n");
-        return 200;
+    if (!S_ISREG(stdin_stat.st_mode)) {
+        cg_fs_fail(&error, EINVAL, "stdin_type", stdin_path); goto failed;
     }
+    if (dup2(stdin_fd, STDIN_FILENO) < 0) {
+        cg_fs_fail(&error, errno, "stdin_dup2", stdin_path); goto failed;
+    }
+    /* dup2(x, x) leaves CLOEXEC set when stdin was initially closed. */
+    if (fcntl(STDIN_FILENO, F_SETFD, 0) < 0) {
+        cg_fs_fail(&error, errno, "stdin_flags", stdin_path); goto failed;
+    }
+    if (stdin_fd != STDIN_FILENO) close(stdin_fd);
+    stdin_fd = -1;
+    if (chdir(workdir) < 0) {
+        cg_fs_fail(&error, errno, "workdir", workdir); goto failed;
+    }
+    result = verify_runtime_security();
     {
-        static const char success[] = "SECURITY_VERIFICATION_PASSED\n";
-
-        if (write_all(security_fd, success, sizeof(success) - 1) != 0 ||
-            fsync(security_fd) != 0 || close(security_fd) != 0) {
-            perror("codeguard-init security success status");
-            return 126;
+        const char *message = result ? "SECURITY_VERIFICATION_FAILED\n" :
+            "SECURITY_VERIFICATION_PASSED\n";
+        if (write_all(security_fd, message, strlen(message)) < 0 || fsync(security_fd) < 0) {
+            cg_fs_fail(&error, errno, "security_status", NULL); goto failed;
+        }
+        code = close(security_fd);
+        security_fd = -1;
+        if (code < 0) {
+            cg_fs_fail(&error, errno, "security_close", NULL); goto failed;
         }
     }
-
-    if (wait_for_start_file() != 0) {
-        perror("codeguard-init start gate");
-        return 126;
+    if (result) {
+        exit_code = 200;
+        cg_fs_fail(&error, EPERM, "security", NULL); goto failed;
     }
-
+    if (cg_fs_read_policy(policy_fd, policy, &error) < 0 ||
+        cg_fs_prepare_ruleset(policy, &ruleset_fd, &abi, &error) < 0) goto failed;
+    code = close(policy_fd);
+    policy_fd = -1;
+    if (code < 0) {
+        cg_fs_fail(&error, errno, "policy_close", NULL); goto failed;
+    }
+    if (cg_write_fs_status(status_fd, policy->policy_id, abi, "PREPARED", &error) < 0)
+        goto failed;
+    if (wait_for_start_file() < 0) {
+        cg_fs_fail(&error, errno, "start_gate", START_READY_PATH); goto failed;
+    }
+    if (cg_fs_enforce(ruleset_fd, &error) < 0) goto failed;
+    code = close(ruleset_fd);
+    ruleset_fd = -1;
+    if (code < 0) {
+        cg_fs_fail(&error, errno, "ruleset_close", NULL); goto failed;
+    }
+    if (cg_write_fs_status(status_fd, policy->policy_id, abi, "APPLIED", &error) < 0)
+        goto failed;
+    code = close(status_fd);
+    status_fd = -1;
+    if (code < 0) {
+        cg_fs_fail(&error, errno, "status_close", NULL); goto failed;
+    }
+    /* Landlock does not revoke already-open FD authority. Do not use a bounded
+     * rlimit loop: inherited FDs may sit above a subsequently lowered limit.
+     * Unsupported/blocked close_range fails closed instead of leaking FDs. */
+    if (syscall(SYS_close_range, 3U, ~0U, 0U) < 0) {
+        cg_fs_fail(&error, errno, "close_range", NULL); goto failed;
+    }
+    free(policy);
     execv(argv[index], &argv[index]);
-    fprintf(
-        stderr,
-        "codeguard-init exec failed: %s\n",
-        strerror(errno)
-    );
-    _exit(127);
+    fprintf(stderr, "codeguard-init exec failed: %s\n", strerror(errno));
+    return 127;
+bad_cli:
+    usage(argv[0]);
+    cg_fs_fail(&error, EINVAL, "cli", NULL);
+failed:
+    code = error.saved_errno;
+    recover_policy_id(policy_fd, policy);
+    if (status_fd >= 0 && cg_fs_valid_id(policy->policy_id))
+        (void)cg_write_fs_status(status_fd, policy->policy_id, abi, "FAILED", &error);
+    if (stdin_fd >= 0) close(stdin_fd);
+    if (security_fd >= 0) close(security_fd);
+    if (policy_fd >= 0) close(policy_fd);
+    if (ruleset_fd >= 0) close(ruleset_fd);
+    if (status_fd >= 0) close(status_fd);
+    /* Process exits immediately, but also revoke unknown inherited FDs. */
+    (void)syscall(SYS_close_range, 3U, ~0U, 0U);
+    free(policy);
+    errno = code;
+    fprintf(stderr, "codeguard-init filesystem failed at %s: %s\n",
+            error.step, strerror(code));
+    return exit_code;
 }

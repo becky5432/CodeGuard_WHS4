@@ -1,4 +1,5 @@
 import threading
+import time
 import unittest
 from unittest.mock import MagicMock, call, patch
 from uuid import uuid4
@@ -18,7 +19,8 @@ from runner.pipeline.execution import (
     create_execution_container,
     execute_program,
 )
-from runner.pipeline.workspace import VolumeWorkspace
+from runner.pipeline.workspace import VolumeWorkspace, execution_mounts
+from runner.tests.test_filesystem_execution_setup import policy_fixture, container_fixture
 from runner.security.filesystem_trace import (
     RAW_WRITE_SYSCALLS,
     TRACE_DIRECTORY,
@@ -44,6 +46,8 @@ class ExecutionTests(unittest.TestCase):
         for target in (
             "runner.pipeline.execution.wait_for_security_evidence",
             "runner.pipeline.execution.release_start_gate",
+            "runner.pipeline.execution.wait_for_filesystem_prepared",
+            "runner.pipeline.execution.verify_filesystem_applied",
         ):
             gate_patch = patch(target)
             gate_patch.start()
@@ -71,8 +75,16 @@ class ExecutionTests(unittest.TestCase):
         }
         self.workspace = VolumeWorkspace(
             job_id=uuid4(),
-            volume_name="codeguard-job-test",
+            app_volume="codeguard-job-test-app",
+            input_volume="codeguard-job-test-input",
+            work_volume="codeguard-job-test-work",
         )
+        self.container.attrs = container_fixture(self.workspace, policy_fixture()).attrs
+        self.container.attrs["State"] = {"OOMKilled": False}
+        if not hasattr(time, "clock_gettime_ns"):
+            clock_patch = patch("runner.pipeline.execution._monotonic_ns", side_effect=time.monotonic_ns)
+            clock_patch.start()
+            self.addCleanup(clock_patch.stop)
         self.run_id = uuid4()
         self.affinity_patcher = patch(
             "runner.pipeline.execution.os.sched_getaffinity",
@@ -84,6 +96,58 @@ class ExecutionTests(unittest.TestCase):
 
         
 
+    def test_filesystem_prepared_failure_never_releases_gate(self) -> None:
+        with (
+            patch("runner.pipeline.execution.wait_for_filesystem_prepared", side_effect=ContainerExecutionError("not prepared")),
+            patch("runner.pipeline.execution.release_start_gate") as release,
+        ):
+            with self.assertRaises(ContainerExecutionError):
+                execute_program(
+                    self.container, self.workspace.job_id, self.run_id,
+                    timeout_ms=2000, filesystem_policy_id="a" * 64,
+                )
+        release.assert_not_called()
+        self.container.kill.assert_called_once_with()
+
+    def test_applied_missing_does_not_report_success(self) -> None:
+        with patch("runner.pipeline.execution.verify_filesystem_applied", side_effect=ContainerExecutionError("missing applied")):
+            result = execute_program(
+                self.container, self.workspace.job_id, self.run_id,
+                timeout_ms=2000, filesystem_policy_id="a" * 64,
+            )
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.system_error, "missing applied")
+        self.assertEqual(classify_execution(result).status, RunnerStatus.ERROR)
+        self.trace_collector.assert_not_called()
+
+    def test_filesystem_prepared_precedes_gate_and_applied_is_final(self) -> None:
+        order = []
+        with (
+            patch("runner.pipeline.execution.wait_for_security_evidence", side_effect=lambda *a, **kw: order.append("security")),
+            patch("runner.pipeline.execution.wait_for_filesystem_prepared", side_effect=lambda *a, **kw: order.append("prepared")),
+            patch("runner.pipeline.execution.release_start_gate", side_effect=lambda *a, **kw: order.append("release")),
+            patch("runner.pipeline.execution.verify_filesystem_applied", side_effect=lambda *a, **kw: order.append("applied")),
+        ):
+            result = execute_program(
+                self.container, self.workspace.job_id, self.run_id,
+                timeout_ms=2000, filesystem_policy_id="a" * 64,
+            )
+        self.assertIsNone(result.system_error)
+        self.assertEqual(order, ["security", "prepared", "release", "applied"])
+
+    def test_missing_filesystem_policy_never_starts_container(self) -> None:
+        with self.assertRaises(ContainerExecutionError):
+            execute_program(self.container, self.workspace.job_id, self.run_id, timeout_ms=2000)
+        self.container.start.assert_not_called()
+
+    def test_invalid_policy_identifier_never_starts_container(self) -> None:
+        with self.assertRaises(ContainerExecutionError):
+            execute_program(
+                self.container, self.workspace.job_id, self.run_id,
+                timeout_ms=2000, filesystem_policy_id="z" * 64,
+            )
+        self.container.start.assert_not_called()
+
     def test_create_execution_container_returns_registered_container(self) -> None:
         result = create_execution_container(
             client=self.client,
@@ -94,19 +158,14 @@ class ExecutionTests(unittest.TestCase):
             memory_limit_mb=128,
             cpu_bandwidth=1.0,
             pids_limit=10,
+            filesystem_policy=policy_fixture(),
         )
 
         self.assertIs(result, self.container)
         self.client.containers.create.assert_called_once_with(
-            image=settings.cpp_image,
-            command=["sh", "-c", f"umask 077; set -C; exec 3>/run/codeguard-trace/security.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 -- /workspace/main"],
-            mounts=[docker.types.Mount(target=TRACE_DIRECTORY, source="", type="volume")],
-            volumes={
-                self.workspace.volume_name: {
-                    "bind": "/workspace",
-                    "mode": "ro",
-                }
-            },
+            image=policy_fixture().image_id,
+            command=["sh", "-c", f"umask 077; set -Ce; exec 3>/run/codeguard-trace/security.status; exec 4</run/codeguard-trace/filesystem.policy; exec 5>/run/codeguard-trace/filesystem.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 --filesystem-policy-fd 4 --filesystem-status-fd 5 --stdin /workspace/input/stdin --workdir /workspace/work -- /workspace/app/main"],
+            mounts=execution_mounts(self.workspace),
             detach=True,
             read_only=True,
             network_mode=settings.execution_network,
@@ -137,6 +196,7 @@ class ExecutionTests(unittest.TestCase):
             memory_limit_mb=128,
             cpu_bandwidth=1.0,
             pids_limit=10,
+            filesystem_policy=policy_fixture(),
         )
 
         cpuset_cpus = self.client.containers.create.call_args.kwargs[
@@ -158,6 +218,7 @@ class ExecutionTests(unittest.TestCase):
             memory_limit_mb=128,
             cpu_bandwidth=1.0,
             pids_limit=10,
+            filesystem_policy=policy_fixture(),
         )
 
         cpuset_cpus = self.client.containers.create.call_args.kwargs[
@@ -176,12 +237,13 @@ class ExecutionTests(unittest.TestCase):
             memory_limit_mb=128,
             cpu_bandwidth=1.0,
             pids_limit=10,
+            filesystem_policy=policy_fixture(),
         )
 
         command = self.client.containers.create.call_args.kwargs["command"]
         self.assertEqual(
             command,
-            ["sh", "-c", f"umask 077; set -C; exec 3>/run/codeguard-trace/security.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 --stdin /workspace/stdin -- /workspace/main"],
+            ["sh", "-c", f"umask 077; set -Ce; exec 3>/run/codeguard-trace/security.status; exec 4</run/codeguard-trace/filesystem.policy; exec 5>/run/codeguard-trace/filesystem.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 --filesystem-policy-fd 4 --filesystem-status-fd 5 --stdin /workspace/input/stdin --workdir /workspace/work -- /workspace/app/main"],
         )
 
     def test_create_execution_container_uses_cgroup_parent(self) -> None:
@@ -198,6 +260,7 @@ class ExecutionTests(unittest.TestCase):
             cpu_bandwidth=1.0,
             pids_limit=10,
             cgroup_scope=cgroup_scope,
+            filesystem_policy=policy_fixture(),
         )
 
         self.assertEqual(
@@ -211,6 +274,7 @@ class ExecutionTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=self.run_id,
             timeout_ms=2000,
+            filesystem_policy_id="a" * 64,
         )
 
         self.assertEqual(result.exit_code, 0)
@@ -240,6 +304,7 @@ class ExecutionTests(unittest.TestCase):
             execute_program(
                 self.container, self.workspace.job_id, self.run_id,
                 timeout_ms=2000, task_tracker=tracker,
+                filesystem_policy_id="a" * 64,
             )
         self.assertEqual(
             [entry[0] for entry in order.mock_calls],
@@ -280,6 +345,7 @@ class ExecutionTests(unittest.TestCase):
                 self.run_id,
                 timeout_ms=2000,
                 task_tracker=tracker,
+                filesystem_policy_id="a" * 64,
             )
 
         self.assertEqual(result.wall_time_ms, 500)
@@ -294,6 +360,7 @@ class ExecutionTests(unittest.TestCase):
                 execute_program(
                     self.container, self.workspace.job_id, self.run_id,
                     timeout_ms=2000,
+                    filesystem_policy_id="a" * 64,
                 )
         self.container.kill.assert_called_once_with()
 
@@ -309,6 +376,7 @@ class ExecutionTests(unittest.TestCase):
                 execute_program(
                     self.container, self.workspace.job_id, self.run_id,
                     timeout_ms=2000,
+                    filesystem_policy_id="a" * 64,
                 )
         release.assert_not_called()
         self.container.kill.assert_called_once_with()
@@ -321,6 +389,7 @@ class ExecutionTests(unittest.TestCase):
                 execute_program(
                     self.container, self.workspace.job_id, self.run_id,
                     timeout_ms=2000,
+                    filesystem_policy_id="a" * 64,
                 )
         release.assert_not_called()
         self.container.kill.assert_called_once_with()
@@ -340,6 +409,7 @@ class ExecutionTests(unittest.TestCase):
                 memory_limit_mb=128,
                 cpu_bandwidth=1.0,
                 pids_limit=10,
+                filesystem_policy=policy_fixture(),
             )
 
     def test_execute_program_returns_system_error_without_removing_container(self) -> None:
@@ -350,6 +420,7 @@ class ExecutionTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=self.run_id,
             timeout_ms=2000,
+            filesystem_policy_id="a" * 64,
         )
 
         self.assertIsNotNone(result.system_error)
@@ -379,6 +450,7 @@ class ExecutionTests(unittest.TestCase):
             run_id=self.run_id,
             timeout_ms=2000,
             cgroup_scope=cgroup_scope,
+            filesystem_policy_id="a" * 64,
         )
 
         self.assertEqual(result.memory_peak_bytes, 16 * 1024 * 1024)
@@ -399,6 +471,7 @@ class ExecutionTests(unittest.TestCase):
             run_id=self.run_id,
             timeout_ms=2000,
             cgroup_scope=cgroup_scope,
+            filesystem_policy_id="a" * 64,
         )
 
         self.assertEqual(result.cpu_time_ms, 75)
@@ -435,6 +508,7 @@ class ExecutionTests(unittest.TestCase):
             timeout_ms=2000,
             cgroup_scope=cgroup_scope,
             task_tracker=tracker,
+            filesystem_policy_id="a" * 64,
         )
 
         tracker.register_cgroup.assert_called_once_with(self.run_id, 999, 1)
@@ -480,6 +554,7 @@ class ExecutionTests(unittest.TestCase):
             timeout_ms=2000,
             cgroup_scope=cgroup_scope,
             task_tracker=tracker,
+            filesystem_policy_id="a" * 64,
         )
 
         self.assertEqual(result.pids_peak, 18)
@@ -507,6 +582,7 @@ class ExecutionTests(unittest.TestCase):
             run_id=self.run_id,
             timeout_ms=2000,
             task_tracker=tracker,
+            filesystem_policy_id="a" * 64,
         )
 
         self.assertEqual(result.exit_code, 0)
@@ -539,6 +615,7 @@ class ExecutionTests(unittest.TestCase):
             run_id=self.run_id,
             timeout_ms=2000,
             task_tracker=tracker,
+            filesystem_policy_id="a" * 64,
         )
 
         self.assertEqual(result.exit_code, 0)
@@ -554,6 +631,7 @@ class ExecutionTests(unittest.TestCase):
             self.workspace.job_id,
             self.run_id,
             timeout_ms=2000,
+            filesystem_policy_id="a" * 64,
         )
         self.assertIsNotNone(result.system_error)
         self.assertFalse(result.filesystem_limit_exceeded)
@@ -572,6 +650,7 @@ class ExecutionTests(unittest.TestCase):
             self.workspace.job_id,
             self.run_id,
             timeout_ms=2000,
+            filesystem_policy_id="a" * 64,
         )
         self.assertTrue(result.filesystem_limit_exceeded)
         self.assertEqual(result.filesystem_violation_syscall, "unlink")
@@ -622,6 +701,7 @@ class ExecutionTests(unittest.TestCase):
             timeout_ms=2000,
             cgroup_scope=cgroup_scope,
             cpu_time_limit_ms=100,
+            filesystem_policy_id="a" * 64,
         )
 
         self.assertEqual(result.exit_code, 137)
@@ -690,6 +770,7 @@ class ExecutionTests(unittest.TestCase):
             timeout_ms=2000,
             cgroup_scope=cgroup_scope,
             cpu_time_limit_ms=100,
+            filesystem_policy_id="a" * 64,
         )
 
         self.assertEqual(result.exit_code, 0)
@@ -744,6 +825,7 @@ class ExecutionTests(unittest.TestCase):
             timeout_ms=2000,
             cgroup_scope=cgroup_scope,
             cpu_time_limit_ms=100,
+            filesystem_policy_id="a" * 64,
         )
 
         self.assertEqual(result.exit_code, 0)
@@ -801,6 +883,7 @@ class ExecutionTests(unittest.TestCase):
             timeout_ms=2000,
             cgroup_scope=cgroup_scope,
             cpu_time_limit_ms=100,
+            filesystem_policy_id="a" * 64,
         )
 
         self.assertEqual(result.exit_code, 137)
@@ -856,6 +939,7 @@ class ExecutionTests(unittest.TestCase):
             timeout_ms=2000,
             cgroup_scope=cgroup_scope,
             cpu_time_limit_ms=100,
+            filesystem_policy_id="a" * 64,
         )
 
         self.assertEqual(result.exit_code, 137)
@@ -891,6 +975,7 @@ class ExecutionTests(unittest.TestCase):
                 timeout_ms=2000,
                 cgroup_scope=cgroup_scope,
                 cpu_time_limit_ms=100,
+                filesystem_policy_id="a" * 64,
             )
 
         container.kill.assert_called_once_with()
@@ -941,6 +1026,7 @@ class ExecutionTests(unittest.TestCase):
             timeout_ms=2000,
             cgroup_scope=cgroup_scope,
             cpu_time_limit_ms=100,
+            filesystem_policy_id="a" * 64,
         )
 
         self.assertEqual(result.exit_code, 137)
@@ -987,6 +1073,7 @@ class ExecutionTests(unittest.TestCase):
                         uuid4(),
                         uuid4(),
                         timeout_ms=5,
+                        filesystem_policy_id="a" * 64,
                     )
 
                 self.assertEqual(
@@ -1034,6 +1121,7 @@ class ExecutionTests(unittest.TestCase):
             job_id=self.workspace.job_id,
             run_id=self.run_id,
             timeout_ms=2000,
+            filesystem_policy_id="a" * 64,
         )
 
         self.assertTrue(result.network_blocked)
@@ -1063,6 +1151,8 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
         for target in (
             "runner.pipeline.execution.wait_for_security_evidence",
             "runner.pipeline.execution.release_start_gate",
+            "runner.pipeline.execution.wait_for_filesystem_prepared",
+            "runner.pipeline.execution.verify_filesystem_applied",
         ):
             gate_patch = patch(target)
             gate_patch.start()
@@ -1234,6 +1324,7 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
                     container, uuid4(), uuid4(), timeout_ms=1000,
                     output_limit_bytes=16, cgroup_scope=cgroup_scope,
                     task_tracker=tracker,
+                    filesystem_policy_id="a" * 64,
                 )
             finally:
                 release_wait.set()

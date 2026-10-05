@@ -380,7 +380,12 @@ class TaskTrackerClientTests(unittest.TestCase):
 
         self.assertNotIn("sigwait", source)
         self.assertIn("execv", source)
-        self.assertIn('strcmp(argv[index], "--stdin")', source)
+        self.assertIn('strcmp(option, "--stdin")', source)
+        self.assertIn('strcmp(option, "--workdir")', source)
+        self.assertIn('strcmp(option, "--filesystem-policy-fd")', source)
+        self.assertIn('strcmp(option, "--filesystem-status-fd")', source)
+        self.assertIn("cg_fs_enforce(ruleset_fd, &error)", source)
+        self.assertIn("SYS_close_range", source)
         self.assertNotIn("fork(", source)
 
     def test_resolve_execution_cgroup_reads_id_and_current_count(self) -> None:

@@ -135,6 +135,11 @@ def test_program_without_mutations_has_valid_nonempty_trace():
     assert not collect_filesystem_trace(archive_container(trace)).detected
 
 
+def test_split_workspace_program_exec_is_valid():
+    trace = '12 execve("/workspace/app/main", [], 0x0) = 0\n12 +++ exited with 0 +++\n'
+    assert not collect_filesystem_trace(archive_container(trace)).detected
+
+
 @pytest.mark.parametrize('uid,gid,mode', [(10001, 10001, 0o600), (0, 0, 0o644), (0, 10001, 0o600)])
 def test_unprotected_trace_is_rejected(uid, gid, mode):
     archive = io.BytesIO()

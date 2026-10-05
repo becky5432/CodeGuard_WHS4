@@ -12,6 +12,7 @@ from runner.exceptions import (
     RunnerError,
     TaskTrackingError,
     SecurityVerificationError,
+    WorkspaceError,
 )
 from runner.main import app
 from runner.models.job import PolicyLimits, RunnerLanguage, RunnerRequest
@@ -25,6 +26,7 @@ from runner.models.result import (
 from runner.pipeline.compiler import CompileResult
 from runner.pipeline.execution import ExecutionResult
 from runner.pipeline.workspace import VolumeWorkspace
+from runner.tests.test_filesystem_execution_setup import policy_fixture, runtime_manifest_fixture
 from runner.policies import EXECUTION_OUTPUT_LIMIT_BYTES
 
 
@@ -46,6 +48,10 @@ class ExecuteApiTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.client = TestClient(app)
+        patch("runner.pipeline.executor._resolve_execution_image", return_value=policy_fixture().image_id).start()
+        self.prepare_workspace_mock = patch(
+            "runner.pipeline.executor.prepare_workspace", return_value=runtime_manifest_fixture(),
+        ).start()
 
         self.docker_client = MagicMock()
         self.compile_container = MagicMock()
@@ -53,7 +59,9 @@ class ExecuteApiTests(unittest.TestCase):
 
         self.workspace = VolumeWorkspace(
             job_id=uuid4(),
-            volume_name="codeguard-job-test",
+            app_volume="codeguard-job-test-app",
+            input_volume="codeguard-job-test-input",
+            work_volume="codeguard-job-test-work",
         )
 
         self.get_client_patcher = patch(
@@ -281,6 +289,7 @@ class ExecuteApiTests(unittest.TestCase):
             client=self.docker_client,
             workspace=self.workspace,
             language=RunnerLanguage.CPP,
+            image_id=policy_fixture().image_id,
         )
 
         self.create_execution_container_mock.assert_called_once_with(
@@ -292,6 +301,7 @@ class ExecuteApiTests(unittest.TestCase):
             memory_limit_mb=body["policy"]["memory_limit_mb"],
             cpu_bandwidth=body["policy"]["cpu_bandwidth"],
             pids_limit=body["policy"]["pids_limit"],
+            filesystem_policy=policy_fixture("CPP"),
         )
 
         self.remove_workspace_mock.assert_called_once_with(
@@ -306,6 +316,7 @@ class ExecuteApiTests(unittest.TestCase):
             timeout_ms=body["policy"]["timeout_ms"],
             output_limit_bytes=EXECUTION_OUTPUT_LIMIT_BYTES,
             cpu_time_limit_ms=body["policy"]["cpu_time_limit_ms"],
+            filesystem_policy_id=policy_fixture("CPP").policy_id,
         )
 
         self.execution_container.remove.assert_called_once_with(
@@ -351,6 +362,9 @@ class ExecuteApiTests(unittest.TestCase):
         )
 
     def test_execute_returns_filesystem_limit_and_backend_accepts_response(self) -> None:
+        import sys
+        from pathlib import Path
+        self.enterContext(patch.object(sys, "path", [str(Path(__file__).resolve().parents[2] / "backend"), *sys.path]))
         from app.schemas.runner_schema import RunnerResponse as BackendRunnerResponse
         self.compile_source_mock.return_value = CompileResult(success=True, stdout="", stderr="", exit_code=0, artifact_ready=True)
         self.execute_program_mock.return_value = ExecutionResult(0, "user output", "", filesystem_limit_exceeded=True)
@@ -362,6 +376,27 @@ class ExecuteApiTests(unittest.TestCase):
         self.assertEqual(payload["stdout"], "user output")
         self.assertEqual(payload["stage_summary"]["failed"], ["EXECUTE"])
         BackendRunnerResponse.model_validate(payload)
+
+    def test_workspace_preparation_failure_never_compiles_and_cleans_job(self) -> None:
+        self.prepare_workspace_mock.side_effect = WorkspaceError("prepare failed")
+        response = self.client.post("/execute", json=self.make_request_body())
+        payload = response.json()
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
+        self.assertEqual(payload["stage_summary"]["failed"], ["WORKSPACE"])
+        self.create_compile_container_mock.assert_not_called()
+        self.create_execution_container_mock.assert_not_called()
+        self.remove_workspace_mock.assert_called_once_with(self.docker_client, self.workspace)
+
+    def test_invalid_runtime_manifest_never_compiles(self) -> None:
+        self.prepare_workspace_mock.return_value = b'{"profile":"allow-everything"}'
+        response = self.client.post("/execute", json=self.make_request_body())
+        payload = response.json()
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
+        self.create_compile_container_mock.assert_not_called()
+        self.create_execution_container_mock.assert_not_called()
+        self.remove_workspace_mock.assert_called_once_with(self.docker_client, self.workspace)
 
     def test_execute_returns_compile_error(self) -> None:
         self.compile_source_mock.return_value = CompileResult(

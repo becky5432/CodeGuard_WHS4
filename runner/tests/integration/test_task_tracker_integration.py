@@ -16,9 +16,11 @@ from runner.models.result import RunnerReasonCode, RunnerStatus
 from runner.metrics.task_tracker import TaskTrackerClient
 from runner.pipeline import execution as execution_module
 from runner.pipeline.executor import execute_job
+from runner.tests.filesystem_helpers import pin_execution_image
 
 
 SINGLE_TASK_SOURCE = r"""
+#define _DEFAULT_SOURCE
 #include <unistd.h>
 
 int main(void) {
@@ -34,6 +36,7 @@ int main(void) {
 """
 
 SLEEP_SOURCE = r"""
+#define _DEFAULT_SOURCE
 #include <unistd.h>
 
 int main(void) {
@@ -43,6 +46,8 @@ int main(void) {
 """
 
 FORK_CHILD_SOURCE = r"""
+#define _DEFAULT_SOURCE
+#include <sys/types.h>
 #include <unistd.h>
 
 int main(void) {
@@ -58,6 +63,8 @@ int main(void) {
 """
 
 CHILD_EXEC_SOURCE = r"""
+#define _DEFAULT_SOURCE
+#include <sys/types.h>
 #include <unistd.h>
 
 int main(int argc, char **argv) {
@@ -71,7 +78,7 @@ int main(int argc, char **argv) {
     if (pid < 0)
         return 1;
     if (pid == 0) {
-        execl("/workspace/main", argv[0], "child", (char *)0);
+        execl("/workspace/app/main", argv[0], "child", (char *)0);
         _exit(127);
     }
     return 0;
@@ -81,6 +88,7 @@ int main(int argc, char **argv) {
 THREAD_BARRIER_SOURCE = r"""
 #define _GNU_SOURCE
 #include <pthread.h>
+#include <unistd.h>
 
 #define THREAD_COUNT 15
 
@@ -227,6 +235,7 @@ int main(void) {
 """
 
 MAIN_THREAD_EXITS_SOURCE = r"""
+#define _DEFAULT_SOURCE
 #include <pthread.h>
 #include <unistd.h>
 
@@ -248,6 +257,7 @@ int main(void) {
 """
 
 MAIN_THREAD_EXITS_THEN_SPAWNS_SOURCE = r"""
+#define _DEFAULT_SOURCE
 #include <pthread.h>
 #include <unistd.h>
 
@@ -288,31 +298,27 @@ int main(void) {
 """
 
 
+@unittest.skipUnless(
+    os.environ.get("RUNNER_DOCKER_TESTS") == "1",
+    "Docker/eBPF integration requires RUNNER_DOCKER_TESTS=1",
+)
 class TaskTrackerIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        if os.getenv("CODEGUARD_EBPF_INTEGRATION") != "1":
-            raise unittest.SkipTest("CODEGUARD_EBPF_INTEGRATION=1 required")
+        cls.docker_client = docker.from_env()
+        cls.addClassCleanup(cls.docker_client.close)
+        cls.docker_client.ping()
+        cls.image_id = pin_execution_image(cls.docker_client)
         if platform.system() != "Linux":
-            raise unittest.SkipTest("Linux required")
+            raise AssertionError("Enabled Docker/eBPF integration requires Linux")
         for required in (
             Path("/sys/kernel/btf/vmlinux"),
             Path("/sys/fs/cgroup/cgroup.controllers"),
             settings.task_tracker_socket,
         ):
             if not required.exists():
-                raise unittest.SkipTest(f"missing integration dependency: {required}")
-        try:
-            cls.docker_client = docker.from_env()
-            cls.docker_client.ping()
-            cls.docker_client.images.get(settings.cpp_image)
-        except docker.errors.DockerException as exc:
-            raise unittest.SkipTest(f"Docker integration unavailable: {exc}")
-
-        try:
-            TaskTrackerClient.from_settings(settings).health()
-        except Exception as exc:
-            raise unittest.SkipTest(f"task tracker unavailable: {exc}")
+                raise AssertionError(f"missing enabled integration dependency: {required}")
+        TaskTrackerClient.from_settings(settings).health()
 
     def execute(
         self,
