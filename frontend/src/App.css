@@ -1951,6 +1951,9 @@ body,
   border-radius: 12px;
   background-color: var(--white);
   box-shadow: 0 4px 16px rgba(19, 33, 61, 0.04);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
 }
 
 .history-summary-icon {
@@ -1994,6 +1997,11 @@ body,
   font-size: 21px;
   font-weight: 700;
   line-height: 1.2;
+}
+
+.history-summary-card.selected {
+  border-color: var(--blue-600);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
 }
 
 .history-summary-icon-success {
@@ -2377,4 +2385,65 @@ body,
   flex-direction: column;
   gap: 12px;
   padding: 12px;
+}
+
+.history-detail-section {
+  min-width: 0;
+}
+
+.history-detail-code-meta {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  padding: 16px;
+}
+
+.history-detail-code-meta > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.history-detail-code-block,
+.history-detail-stdin {
+  padding: 0 16px 16px;
+}
+
+.history-detail-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--gray-700);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.history-detail-code-block pre,
+.history-detail-stdin pre {
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  background-color: var(--gray-50);
+  color: var(--gray-950);
+  font-family: Consolas, Monaco, "Courier New", monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+.history-detail-policy-grid,
+.history-detail-fixed-grid,
+.history-detail-panel .resource-card-grid,
+.history-detail-panel .resource-charts {
+  grid-template-columns: 1fr;
+}
+
+.history-summary-card {
+  cursor: pointer;
+  text-align: left;
+}
+
+.history-summary-card.selected {
+  border-color: var(--blue-600);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
 }

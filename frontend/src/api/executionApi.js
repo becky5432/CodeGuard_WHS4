@@ -74,6 +74,9 @@ export function createExecution(executionData) {
   });
 }
 
+export function getExecutions({ limit = 100, offset = 0 } = {}) {
+  return request(`/executions?limit=${limit}&offset=${offset}`);
+}
 export function getExecution(jobId) {
   return request(`/executions/${jobId}`);
 }
