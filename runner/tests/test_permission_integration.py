@@ -18,7 +18,10 @@ from runner.security.filesystem_startup import (
     verify_filesystem_applied,
     wait_for_filesystem_prepared,
 )
-from runner.security.runtime_verification import SECURITY_STATUS_PATH
+from runner.security.runtime_verification import (
+    SECURITY_STATUS_PATH,
+    collect_runtime_permission_failure,
+)
 from runner.pipeline.start_gate import (
     find_codeguard_init_tid,
     release_start_gate,
@@ -213,6 +216,9 @@ class PermissionVerificationIntegrationTests(unittest.TestCase):
                 filesystem_policy_id=policy.policy_id,
             )
 
+        # Runner may kill init immediately after seeing FAIL, before its natural
+        # exit. The native harness tests natural exit 200 without that race.
+        self.assertTrue(collect_runtime_permission_failure(container))
         output = container.logs(stdout=True, stderr=False).decode(
             "utf-8",
             errors="replace",

@@ -254,6 +254,26 @@ int main(int argc, char **argv)
         fcntl(status_fd, F_GETFD) < 0) {
         cg_fs_fail(&error, errno, "input_fds", NULL); goto failed;
     }
+    /* Record the identity verdict before touching user input/work paths.
+     * Invalid identities may not traverse a correctly protected 0700 work
+     * directory; that must not hide the trusted security failure token. */
+    result = verify_runtime_security();
+    {
+        const char *message = result ? "SECURITY_VERIFICATION_FAILED\n" :
+            "SECURITY_VERIFICATION_PASSED\n";
+        if (write_all(security_fd, message, strlen(message)) < 0 || fsync(security_fd) < 0) {
+            cg_fs_fail(&error, errno, "security_status", NULL); goto failed;
+        }
+        code = close(security_fd);
+        security_fd = -1;
+        if (code < 0) {
+            cg_fs_fail(&error, errno, "security_close", NULL); goto failed;
+        }
+    }
+    if (result) {
+        exit_code = 200;
+        cg_fs_fail(&error, EPERM, "security", NULL); goto failed;
+    }
     stdin_fd = open(stdin_path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (stdin_fd < 0) {
         cg_fs_fail(&error, errno, "stdin_open", stdin_path); goto failed;
@@ -275,23 +295,6 @@ int main(int argc, char **argv)
     stdin_fd = -1;
     if (chdir(workdir) < 0) {
         cg_fs_fail(&error, errno, "workdir", workdir); goto failed;
-    }
-    result = verify_runtime_security();
-    {
-        const char *message = result ? "SECURITY_VERIFICATION_FAILED\n" :
-            "SECURITY_VERIFICATION_PASSED\n";
-        if (write_all(security_fd, message, strlen(message)) < 0 || fsync(security_fd) < 0) {
-            cg_fs_fail(&error, errno, "security_status", NULL); goto failed;
-        }
-        code = close(security_fd);
-        security_fd = -1;
-        if (code < 0) {
-            cg_fs_fail(&error, errno, "security_close", NULL); goto failed;
-        }
-    }
-    if (result) {
-        exit_code = 200;
-        cg_fs_fail(&error, EPERM, "security", NULL); goto failed;
     }
     if (cg_fs_read_policy(policy_fd, policy, &error) < 0 ||
         cg_fs_prepare_ruleset(policy, &ruleset_fd, &abi, &error) < 0) goto failed;

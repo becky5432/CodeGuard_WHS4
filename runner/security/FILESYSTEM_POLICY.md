@@ -46,7 +46,7 @@ Runner는 설정된 이미지 태그를 Job 시작 시 불변 이미지 ID로 �
 ## 시작 순서
 
 1. 신뢰된 root 시작 주체가 권한 증거 FD 3, 정책 읽기 FD 4, 적용 상태 FD 5를 열고 기존 strace를 실행한다.
-2. init이 입력 연결·work 기준 경로 설정·기존 UID/GID/capability/NNP 검증을 수행한다.
+2. init이 인자와 내부 FD를 확인한 뒤 기존 UID/GID/capability/NNP 검증을 먼저 수행한다. PASS/FAIL 증거를 기록·동기화하고 권한 증거 FD를 닫는다. 검증 실패 시 입력 연결·work 진입·Landlock 준비·시작 승인 없이 종료한다. 검증에 통과한 경우에만 입력 연결과 work 기준 경로 설정을 수행한다.
 3. 별도 C 모듈이 TSV를 파싱하고 ABI와 각 객체를 검사하여 ruleset을 준비한다. init이 `PREPARED`를 기록한다.
 4. Runner가 보호된 `PREPARED`와 정책 ID를 확인하고 기존 Task·자원 감시를 준비한 뒤 `start.ready`를 만든다.
 5. init이 Landlock을 실제 적용하고 `APPLIED`를 기록한다. 내부 FD를 닫고 `/workspace/app/main`으로 exec한다.

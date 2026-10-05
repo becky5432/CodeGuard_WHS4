@@ -54,7 +54,8 @@ class NativeFilesystemTests(unittest.TestCase):
                 if libc.prctl(38, 1, 0, 0, 0) != 0:
                     os._exit(90)
 
-            def run_case(failure="", drop=True, ready=True, malformed=False, tracer=False, close_stdin=False):
+            def run_case(failure="", drop=True, ready=True, malformed=False, tracer=False, close_stdin=False,
+                         unavailable_paths=False):
                 if ready:
                     marker.touch()
                 else:
@@ -74,7 +75,9 @@ class NativeFilesystemTests(unittest.TestCase):
                     command = [str(binary), "--security-fd", str(sec.fileno()),
                                "--filesystem-policy-fd", str(pol.fileno()),
                                "--filesystem-status-fd", str(sta.fileno()),
-                               "--stdin", str(stdin), "--workdir", str(work), "--", str(probe)]
+                               "--stdin", str(root / "missing-stdin" if unavailable_paths else stdin),
+                               "--workdir", str(root / "missing-work" if unavailable_paths else work),
+                               "--", str(probe)]
                     if tracer:
                         command = [shutil.which("strace"), "-f", "-o", str(root / "trace"), "--", *command]
                     try:
@@ -131,6 +134,15 @@ class NativeFilesystemTests(unittest.TestCase):
             self.assertEqual(code, 200, err)
             self.assertNotIn("EXECUTED", out)
             self.assertIn("step=security errno=1", status)
+            # Invalid identity must produce its trusted failure token even if
+            # input/work paths are inaccessible or absent. No gate release.
+            code, out, err, status, security = run_case(drop=False, unavailable_paths=True)
+            self.assertEqual(code, 200, err)
+            self.assertEqual(security, "SECURITY_VERIFICATION_FAILED\n")
+            self.assertIn("step=security errno=1", status)
+            self.assertNotIn("state=PREPARED", status)
+            self.assertNotIn("state=APPLIED", status)
+            self.assertNotIn("EXECUTED", out)
             code, out, err, status, _ = run_case(malformed=True)
             self.assertEqual(code, 126, err)
             self.assertIn("step=policy_parse errno=22", status)
