@@ -117,3 +117,4 @@ class ExecutionResultResponse(BaseModel): # 상태/결과 조회
     resource_usage: ResourceUsage | None = None
     stage_summary: StageSummary | None = None
     finished_at: datetime | None = None
+    policy_violations: list[ExecutionReasonCode] = Field(default_factory=list)
