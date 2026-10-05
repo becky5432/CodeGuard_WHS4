@@ -122,3 +122,10 @@ class ExecutionResultResponse(BaseModel): # 상태/결과 조회
     resource_usage: ResourceUsage | None = None
     stage_summary: StageSummary | None = None
     finished_at: datetime | None = None
+
+class ExecutionListItem(BaseModel): # 실행 기록 조회
+    job_id: UUID
+    language: Language
+    created_at: datetime
+    status: ExecutionStatus
+    reason_code: ExecutionReasonCode | None = None
