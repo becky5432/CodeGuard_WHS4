@@ -107,6 +107,11 @@ class ExecutionCreateResponse(BaseModel): # 실행 요청 직후 응답
 class ExecutionResultResponse(BaseModel): # 상태/결과 조회
     # 필요한 부분은 나중에 추가하기
     job_id: UUID
+    language: Language
+    code: str
+    stdin: str
+    created_at: datetime
+    policy: PolicyLimits 
     status: ExecutionStatus
     reason_code: ExecutionReasonCode | None = None
     error_message: str | None = None

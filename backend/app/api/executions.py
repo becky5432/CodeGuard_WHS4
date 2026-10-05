@@ -3,9 +3,11 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     HTTPException,
+    Query,
 )
 from sqlalchemy.orm import Session
 from uuid import UUID
+
 
 from app.clients.runner_client import HttpRunnerClient
 from app.config import settings
@@ -14,9 +16,13 @@ from app.schemas.execution_schema import (
     ExecutionCreateRequest,
     ExecutionCreateResponse,
     ExecutionResultResponse,
+    ExecutionListItem
 )
 from app.services.execution_service import ExecutionService
 
+# 실행 기록 조회를 위해 추가함
+from app.db import repository
+from app.schemas.execution_schema import ExecutionListItem
 
 router = APIRouter(
     prefix="/executions",
@@ -55,7 +61,35 @@ def create_execution(
 
     return response
 
+# 실행 기록 조회
+@router.get(
+    "",
+    response_model=list[ExecutionListItem],
+)
+def list_executions(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    executions = repository.list_executions(
+        db=db,
+        limit=limit,
+        offset=offset,
+    )
 
+    return [
+        ExecutionListItem( # 실행 기록 목록에 전달하는 값 (필요하면 추가)
+            job_id=execution.job_id,
+            created_at=execution.created_at,
+            language=execution.language,
+            status=execution.status,
+            reason_code=execution.reason_code,
+        )
+        for execution in executions
+    ]
+
+
+# 상세 조회
 @router.get(
     "/{job_id}",
     response_model=ExecutionResultResponse,
