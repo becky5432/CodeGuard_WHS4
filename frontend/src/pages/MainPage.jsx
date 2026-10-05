@@ -2,12 +2,11 @@ import { useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { cpp } from "@codemirror/lang-cpp";
 import { ApiError, createExecution, getExecution } from "../api/executionApi";
-import {
-  MetricIcon,
-  StatusGlyph,
-  ResultMessageIcon,
-} from "../components/Icons";
-import EXECUTION_RESULT_PRESENTATION from "../components/executionPresentation";
+import { MetricIcon } from "../components/Icons";
+import ExecutionResultPanel from "../components/execution/ExecutionResultPanel";
+import OutputPanel from "../components/execution/OutputPanel";
+import ResourceUsagePanel from "../components/execution/ResourceUsagePanel";
+import { getExecutionResultPresentation } from "../components/executionPresentation";
 
 const DEFAULT_CODE = `#include <iostream>
 using namespace std;
@@ -16,17 +15,6 @@ int main() {
     cout << "Hello, CodeGuard!" << endl;
     return 0;
 }`;
-
-const DISPLAYED_EXECUTION_STAGES = [
-  {
-    key: "COMPILE",
-    label: "컴파일",
-  },
-  {
-    key: "EXECUTE",
-    label: "실행",
-  },
-];
 
 const DEFAULT_POLICY = {
   timeout_ms: 2000,
@@ -98,94 +86,6 @@ const POLLING_INTERVAL_MS = 1000;
 
 const wait = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
 
-function calculateUsagePercentage(value, limit) {
-  if (!value || !limit) {
-    return 0;
-  }
-
-  return Math.min(Math.round((value / limit) * 100), 100);
-}
-
-function getExecutionStageStatus(stage, stageSummary) {
-  if (!stageSummary) {
-    return "waiting";
-  }
-
-  if (stageSummary.succeeded?.includes(stage)) {
-    return "success";
-  }
-
-  if (stageSummary.failed?.includes(stage)) {
-    return "failed";
-  }
-
-  if (stageSummary.skipped?.includes(stage)) {
-    return "skipped";
-  }
-
-  return "waiting";
-}
-
-function getExecutionStageLabel(status) {
-  const labels = {
-    waiting: "- 대기",
-    success: "✓ 성공",
-    failed: "× 실패",
-    skipped: "— 건너뜀",
-  };
-
-  return labels[status];
-}
-
-function getPreferredOutputTab(result) {
-  if (
-    result.reason_code === "COMPILE_ERROR" ||
-    result.reason_code === "COMPILE_TIMEOUT"
-  ) {
-    return "compileLog";
-  }
-
-  if (result.stderr) {
-    return "stderr";
-  }
-
-  return "stdout";
-}
-
-function getExecutionResultPresentation(result) {
-  if (result.status === "SUCCESS") {
-    return {
-      state: "success",
-      label: "성공",
-      message: "코드 실행이 완료되었습니다.",
-    };
-  }
-
-  const reasonPresentation = EXECUTION_RESULT_PRESENTATION[result.reason_code];
-
-  if (reasonPresentation) {
-    return {
-      ...reasonPresentation,
-      message: result.error_message ?? reasonPresentation.message,
-    };
-  }
-
-  if (result.status === "BLOCKED") {
-    return {
-      state: "blocked",
-      label: "정책 위반",
-      message:
-        result.error_message ?? "정책에 의해 코드 실행이 차단되었습니다.",
-    };
-  }
-
-  return {
-    state: "error",
-    label: "실행 실패",
-    message: result.error_message ?? "코드 실행 중 오류가 발생했습니다.",
-  };
-}
-
 function getRequestErrorPresentation(error, phase) {
   const action = phase === "polling" ? "실행 상태 및 결과 조회" : "실행 요청";
 
@@ -236,231 +136,8 @@ function getRequestErrorPresentation(error, phase) {
 }
 
 /* 실행 중 구간별 CPU 사용률 그래프 */
-function CpuUsageChart({ samples }) {
-  const points = (samples ?? [])
-    .filter(
-      (sample) =>
-        Number.isFinite(sample.elapsed_ms) &&
-        Number.isFinite(sample.interval_ms) &&
-        Number.isFinite(sample.cpu_time_delta_ms) &&
-        sample.interval_ms > 0,
-    )
-    .map((sample) => ({
-      time: sample.elapsed_ms,
-      usage: (sample.cpu_time_delta_ms / sample.interval_ms) * 100,
-    }))
-    .sort((a, b) => a.time - b.time);
-
-  if (points.length === 0) {
-    return <p className="cpu-chart-empty">CPU 사용률 데이터가 없습니다.</p>;
-  }
-
-  const width = 720;
-  const height = 230;
-  const left = 70;
-  const right = 16;
-  const top = 16;
-  const bottom = 36;
-
-  const plotWidth = width - left - right;
-  const plotHeight = height - top - bottom;
-
-  const maxTime = Math.max(...points.map((p) => p.time), 1);
-  const maxUsage = Math.max(
-    100,
-    Math.ceil(Math.max(...points.map((p) => p.usage)) / 50) * 50,
-  );
-
-  const x = (time) => left + (time / maxTime) * plotWidth;
-  const y = (usage) => top + plotHeight - (usage / maxUsage) * plotHeight;
-
-  const linePoints = points.map((p) => `${x(p.time)},${y(p.usage)}`).join(" ");
-
-  const gridValues = [0, 0.25, 0.5, 0.75, 1];
-
-  return (
-    <div className="cpu-chart-scroll">
-      <svg
-        className="cpu-chart"
-        viewBox={`0 0 ${width} ${height}`}
-        role="img"
-        aria-label="실행 경과 시간에 따른 CPU 사용률"
-      >
-        {/* 가로 격자 및 CPU 사용률 눈금 */}
-        {gridValues.map((ratio) => {
-          const value = maxUsage * ratio;
-          const posY = y(value);
-
-          return (
-            <g key={ratio}>
-              <line
-                x1={left}
-                y1={posY}
-                x2={width - right}
-                y2={posY}
-                className="cpu-chart-grid"
-              />
-              <text
-                x={left - 10}
-                y={posY + 4}
-                textAnchor="end"
-                className="cpu-chart-label"
-              >
-                {Math.round(value)}%
-              </text>
-            </g>
-          );
-        })}
-
-        {/* 시간축 */}
-        {[0, 0.5, 1].map((ratio) => (
-          <text
-            key={ratio}
-            x={x(maxTime * ratio)}
-            y={height - 12}
-            textAnchor={ratio === 0 ? "start" : ratio === 1 ? "end" : "middle"}
-            className="cpu-chart-label"
-          >
-            {((maxTime * ratio) / 1000).toFixed(2)}s
-          </text>
-        ))}
-
-        {/* 사용률 변화 선 */}
-        <polyline points={linePoints} className="cpu-chart-line" />
-
-        {/* 측정 지점: 마우스를 올리면 수치 표시 */}
-        {points.map((point, index) => (
-          <circle
-            key={`${point.time}-${index}`}
-            cx={x(point.time)}
-            cy={y(point.usage)}
-            r="3"
-            className="cpu-chart-point"
-          >
-            <title>
-              {`${(point.time / 1000).toFixed(3)}초: ${point.usage.toFixed(1)}%`}
-            </title>
-          </circle>
-        ))}
-      </svg>
-    </div>
-  );
-}
 
 /* 실행 중 구간별 메모리 사용량 그래프 */
-function MemoryUsageChart({ samples }) {
-  const points = (samples ?? [])
-    .filter(
-      (sample) =>
-        Number.isFinite(sample.elapsed_ms) &&
-        Number.isFinite(sample.memory_bytes) &&
-        sample.elapsed_ms >= 0 &&
-        sample.memory_bytes >= 0,
-    )
-    .map((sample) => ({
-      time: sample.elapsed_ms,
-      usage: sample.memory_bytes / (1024 * 1024),
-    }))
-    .sort((a, b) => a.time - b.time);
-
-  if (points.length === 0) {
-    return <p className="cpu-chart-empty">메모리 사용량 데이터가 없습니다.</p>;
-  }
-
-  const width = 720;
-  const height = 230;
-  const left = 90;
-  const right = 16;
-  const top = 16;
-  const bottom = 36;
-
-  const plotWidth = width - left - right;
-  const plotHeight = height - top - bottom;
-
-  const maxTime = Math.max(...points.map((p) => p.time), 1);
-  const maxMemory = Math.max(
-    16,
-    Math.ceil(Math.max(...points.map((p) => p.usage)) / 16) * 16,
-  );
-
-  const x = (time) => left + (time / maxTime) * plotWidth;
-  const y = (usage) => top + plotHeight - (usage / maxMemory) * plotHeight;
-
-  const linePoints = points.map((p) => `${x(p.time)},${y(p.usage)}`).join(" ");
-
-  const gridValues = [0, 0.25, 0.5, 0.75, 1];
-
-  return (
-    <div className="cpu-chart-scroll">
-      <svg
-        className="cpu-chart"
-        viewBox={`0 0 ${width} ${height}`}
-        role="img"
-        aria-label="실행 경과 시간에 따른 메모리 사용량"
-      >
-        {/* 가로 격자 및 메모리 사용량 눈금 */}
-        {gridValues.map((ratio) => {
-          const value = maxMemory * ratio;
-          const posY = y(value);
-
-          return (
-            <g key={ratio}>
-              <line
-                x1={left}
-                y1={posY}
-                x2={width - right}
-                y2={posY}
-                className="cpu-chart-grid"
-              />
-              <text
-                x={left - 10}
-                y={posY + 4}
-                textAnchor="end"
-                className="cpu-chart-label"
-              >
-                {Math.round(value)} MiB
-              </text>
-            </g>
-          );
-        })}
-
-        {/* 시간축 */}
-        {[0, 0.5, 1].map((ratio) => (
-          <text
-            key={ratio}
-            x={x(maxTime * ratio)}
-            y={height - 12}
-            textAnchor={ratio === 0 ? "start" : ratio === 1 ? "end" : "middle"}
-            className="cpu-chart-label"
-          >
-            {((maxTime * ratio) / 1000).toFixed(2)}s
-          </text>
-        ))}
-
-        {/* 메모리 사용량 변화 선 */}
-        <polyline
-          points={linePoints}
-          className="cpu-chart-line memory-chart-line"
-        />
-
-        {/* 측정 지점: 마우스를 올리면 수치 표시 */}
-        {points.map((point, index) => (
-          <circle
-            key={`${point.time}-${index}`}
-            cx={x(point.time)}
-            cy={y(point.usage)}
-            r="3"
-            className="cpu-chart-point memory-chart-point"
-          >
-            <title>
-              {`${(point.time / 1000).toFixed(3)}초: ${point.usage.toFixed(2)} MiB`}
-            </title>
-          </circle>
-        ))}
-      </svg>
-    </div>
-  );
-}
 
 function MainPage() {
   // 입력 및 화면 상태
@@ -476,8 +153,6 @@ function MainPage() {
   const [message, setMessage] = useState(
     "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
   );
-  const [activeOutputTab, setActiveOutputTab] = useState("stdout");
-  const [fullscreenChart, setFullscreenChart] = useState(null);
   const [policyInputMessage, setPolicyInputMessage] = useState(null);
   const showPolicyInputMessage = (key) => {
     setPolicyInputMessage(key);
@@ -520,118 +195,10 @@ function MainPage() {
     setSelectedPolicy(DEFAULT_POLICY);
   };
 
-  const handleOutputKeyDown = (event) => {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
-      event.preventDefault();
-
-      const selection = window.getSelection();
-      const range = document.createRange();
-
-      range.selectNodeContents(event.currentTarget);
-
-      selection.removeAllRanges();
-      selection.addRange(range);
-    }
-  };
-
-  const outputByTab = {
-    stdout: executionResult?.stdout,
-    stderr: executionResult?.stderr,
-    compileLog: executionResult?.compile_log,
-  };
-
-  const resultOutput = executionResult
-    ? outputByTab[activeOutputTab] || "출력 내용이 없습니다."
-    : "아직 실행 결과가 없습니다.";
-
-  const executionReasonCode =
-    executionResult?.reason_code ?? requestErrorCode ?? "-";
-  const executionExitCode = executionResult?.exit_code ?? "-";
   const terminationReason = executionResult?.reason_code;
 
   const isLimitTriggered = (...reasonCodes) =>
     reasonCodes.includes(terminationReason);
-  const isTimeLimitExceeded = executionResult?.reason_code === "TIME_LIMIT";
-  const isMemoryLimitExceeded = executionResult?.reason_code === "MEMORY_LIMIT";
-  const isPidsLimitExceeded = executionResult?.reason_code === "PIDS_LIMIT";
-  const isOutputLimitExceeded = executionResult?.reason_code === "OUTPUT_LIMIT";
-  const isCpuTimeLimitExceeded =
-    executionResult?.reason_code === "CPU_TIME_LIMIT";
-
-  // 실제 Runner 응답 기반 자원 사용량
-  const resourceUsage = executionResult?.resource_usage;
-  const wallTimeMs = resourceUsage?.wall_time_ms;
-  const memoryPeakMb =
-    resourceUsage?.memory_peak_bytes != null
-      ? resourceUsage.memory_peak_bytes / 1024 / 1024
-      : null;
-  const pidsPeak = resourceUsage?.pids_peak;
-  const processPeak = resourceUsage?.process_at_user_task_peak;
-  const threadPeak = resourceUsage?.thread_at_user_task_peak;
-
-  const wallTimePercentage = calculateUsagePercentage(
-    wallTimeMs ?? 0,
-    selectedPolicy.timeout_ms,
-  );
-
-  const memoryPercentage = calculateUsagePercentage(
-    memoryPeakMb ?? 0,
-    selectedPolicy.memory_limit_mb,
-  );
-
-  const pidsPercentage = calculateUsagePercentage(
-    pidsPeak ?? 0,
-    selectedPolicy.pids_limit,
-  );
-
-  const cpuTimeMs = resourceUsage?.cpu_time_ms;
-
-  const cpuTimePercentage =
-    cpuTimeMs == null
-      ? 0
-      : Math.min(
-          Math.round((cpuTimeMs / selectedPolicy.cpu_time_limit_ms) * 100),
-          100,
-        );
-
-  const outputBytes = resourceUsage?.output_bytes;
-  const outputPercentage =
-    outputBytes == null
-      ? 0
-      : Math.min(
-          Math.round((outputBytes / selectedPolicy.output_limit_bytes) * 100),
-          100,
-        );
-
-  const processPercentage =
-    processPeak == null
-      ? 0
-      : Math.min(
-          Math.round((processPeak / selectedPolicy.pids_limit) * 100),
-          100,
-        );
-
-  const threadPercentage =
-    threadPeak == null
-      ? 0
-      : Math.min(
-          Math.round((threadPeak / selectedPolicy.pids_limit) * 100),
-          100,
-        );
-
-  // 화면에 표시할 실행 단계
-  const executionStages = DISPLAYED_EXECUTION_STAGES.map((stage) => {
-    const status = getExecutionStageStatus(
-      stage.key,
-      executionResult?.stage_summary,
-    );
-
-    return {
-      ...stage,
-      status,
-      statusLabel: getExecutionStageLabel(status),
-    };
-  });
 
   // 실행 결과 폴링
   const pollExecution = async (currentJobId) => {
@@ -659,7 +226,6 @@ function MainPage() {
         setExecutionState(presentation.state);
         setExecutionStatusText(presentation.label);
         setMessage(presentation.message);
-        setActiveOutputTab(getPreferredOutputTab(result));
         return;
       }
 
@@ -767,7 +333,6 @@ function MainPage() {
     setExecutionResult(null);
     setRequestErrorCode(null);
     setMessage("코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.");
-    setActiveOutputTab("stdout");
   };
 
   return (
@@ -865,76 +430,12 @@ function MainPage() {
               theme="light"
             />
           </div>
-
-          <div className="io-section">
-            <div className="io-input-panel">
-              <label className="io-field-label" htmlFor="standard-input">
-                표준 입력 (stdin)
-              </label>
-              <textarea
-                id="standard-input"
-                className="standard-input"
-                value={standardInput}
-                onChange={(event) => setStandardInput(event.target.value)}
-                rows={4}
-                placeholder="프로그램에 전달할 입력값이 있다면 작성하세요..."
-                aria-label="표준 입력"
-              />
-            </div>
-
-            <div className="io-output-panel">
-              <div
-                className="output-tabs"
-                role="tablist"
-                aria-label="출력 결과 종류"
-              >
-                <button
-                  className={`output-tab${
-                    activeOutputTab === "stdout" ? " active" : ""
-                  }`}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeOutputTab === "stdout"}
-                  onClick={() => setActiveOutputTab("stdout")}
-                >
-                  stdout
-                </button>
-
-                <button
-                  className={`output-tab${
-                    activeOutputTab === "stderr" ? " active" : ""
-                  }`}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeOutputTab === "stderr"}
-                  onClick={() => setActiveOutputTab("stderr")}
-                >
-                  stderr
-                </button>
-
-                <button
-                  className={`output-tab${
-                    activeOutputTab === "compileLog" ? " active" : ""
-                  }`}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeOutputTab === "compileLog"}
-                  onClick={() => setActiveOutputTab("compileLog")}
-                >
-                  컴파일 로그
-                </button>
-              </div>
-
-              <pre
-                className={`io-result-output${executionResult ? "" : " io-result-output-empty"}`}
-                aria-label="출력 결과"
-                tabIndex={0}
-                onKeyDown={handleOutputKeyDown}
-              >
-                {resultOutput}
-              </pre>
-            </div>
-          </div>
+          <OutputPanel
+            executionResult={executionResult}
+            showInput
+            standardInput={standardInput}
+            onStandardInputChange={setStandardInput}
+          />
         </section>
 
         <div className="execution-overview-column">
@@ -1094,334 +595,19 @@ function MainPage() {
           </section>
 
           {/* 실행 결과 영역 */}
-          <section className="workspace-panel result-section">
-            <div className="workspace-panel-header">
-              <h2>실행 결과</h2>
-            </div>
+          <ExecutionResultPanel
+            executionResult={executionResult}
+            executionState={executionState}
+            executionStatusText={executionStatusText}
+            message={message}
+            requestErrorCode={requestErrorCode}
+          />
 
-            <div className="execution-result-content">
-              {executionState !== "idle" && (
-                <p
-                  className={`execution-message execution-message-${executionState}`}
-                >
-                  <span>
-                    <ResultMessageIcon status={executionState} />
-                  </span>{" "}
-                  {message}
-                </p>
-              )}
-
-              <div className="execution-result-summary">
-                <strong
-                  className={`execution-status-badge execution-status-${executionState}`}
-                >
-                  {executionStatusText}
-                </strong>
-
-                <div className="execution-summary-item">
-                  <span>종료 코드</span>
-                  <strong>{executionExitCode}</strong>
-                </div>
-
-                <div className="execution-summary-item">
-                  <span>종료 사유</span>
-                  <strong>{executionReasonCode}</strong>
-                </div>
-                <div className="execution-stage-label">단계</div>
-
-                <div
-                  className="execution-stage-compact"
-                  aria-label="단계별 결과"
-                >
-                  {executionStages.map((stage, index) => (
-                    <div
-                      className="execution-stage-compact-item"
-                      key={stage.key}
-                    >
-                      <span className={`stage-dot stage-${stage.status}`}>
-                        <StatusGlyph status={stage.status} />
-                      </span>
-
-                      <strong>{stage.label}</strong>
-
-                      <span>{stage.statusLabel.replace(/^[^ ]+ /, "")}</span>
-
-                      {index < executionStages.length - 1 && (
-                        <span className="stage-compact-arrow">→</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </section>
           {/* 자원 사용량 요약 영역 */}
-          <section className="workspace-panel resource-section">
-            <div className="resource-section-header">
-              <h2>자원 사용량</h2>
-            </div>
-
-            <div className="resource-card-grid">
-              <article
-                className={`resource-usage-card resource-wall-time${
-                  isTimeLimitExceeded ? " resource-limit-exceeded" : ""
-                }`}
-              >
-                <span>실행 시간</span>
-                <strong>
-                  {wallTimeMs == null ? (
-                    "측정 전"
-                  ) : (
-                    <>
-                      {(wallTimeMs / 1000).toFixed(3)} /{" "}
-                      {(selectedPolicy.timeout_ms / 1000).toFixed(0)}
-                      <small> sec</small>
-                    </>
-                  )}
-                </strong>
-                <div className="resource-progress-row">
-                  <div className="resource-progress">
-                    <span style={{ width: `${wallTimePercentage}%` }} />
-                  </div>
-
-                  {wallTimeMs != null && <em>{wallTimePercentage}%</em>}
-                </div>
-              </article>
-
-              <article
-                className={`resource-usage-card resource-memory${
-                  isMemoryLimitExceeded ? " resource-limit-exceeded" : ""
-                }`}
-              >
-                <span>최대 메모리</span>
-                <strong>
-                  {memoryPeakMb == null ? (
-                    "측정 전"
-                  ) : (
-                    <>
-                      {memoryPeakMb.toFixed(1)} /{" "}
-                      {selectedPolicy.memory_limit_mb}
-                      <small> MB</small>
-                    </>
-                  )}
-                </strong>
-                <div className="resource-progress-row">
-                  <div className="resource-progress">
-                    <span style={{ width: `${memoryPercentage}%` }} />
-                  </div>
-
-                  {memoryPeakMb != null && <em>{memoryPercentage}%</em>}
-                </div>
-              </article>
-
-              <article
-                className={`resource-usage-card resource-process${
-                  isPidsLimitExceeded ? " resource-limit-exceeded" : ""
-                }`}
-              >
-                <div className="resource-pids-heading">
-                  <div>
-                    <span>최대 PIDs 개수</span>
-                    <strong>
-                      {pidsPeak == null ? (
-                        "측정 전"
-                      ) : (
-                        <>
-                          {pidsPeak} / {selectedPolicy.pids_limit}
-                          <small> 개</small>
-                        </>
-                      )}
-                    </strong>
-                  </div>
-                </div>
-
-                <div className="resource-progress-row resource-pids-progress-row">
-                  <div className="resource-progress resource-pids-total">
-                    <span style={{ width: `${pidsPercentage}%` }} />
-                  </div>
-
-                  {pidsPeak != null && <em>{pidsPercentage}%</em>}
-                </div>
-
-                <div className="resource-pids-detail">
-                  <span>Process</span>
-
-                  <div className="resource-progress resource-process-detail">
-                    <span style={{ width: `${processPercentage}%` }} />
-                  </div>
-
-                  {processPeak != null && <em>{processPeak}개</em>}
-                </div>
-
-                <div className="resource-pids-detail">
-                  <span>Thread</span>
-
-                  <div className="resource-progress resource-thread-detail">
-                    <span style={{ width: `${threadPercentage}%` }} />
-                  </div>
-
-                  {threadPeak != null && <em>{threadPeak}개</em>}
-                </div>
-              </article>
-
-              <article
-                className={`resource-usage-card resource-output${
-                  isOutputLimitExceeded ? " resource-limit-exceeded" : ""
-                }`}
-              >
-                <span>출력량</span>
-                <strong>
-                  {outputBytes == null ? (
-                    "측정 전"
-                  ) : (
-                    <>
-                      {(outputBytes / 1024).toFixed(1)} /{" "}
-                      {(selectedPolicy.output_limit_bytes / 1024).toFixed(0)}
-                      <small> KB</small>
-                    </>
-                  )}
-                </strong>
-
-                <div className="resource-progress-row">
-                  <div className="resource-progress">
-                    <span style={{ width: `${outputPercentage}%` }} />
-                  </div>
-
-                  {outputBytes != null && <em>{outputPercentage}%</em>}
-                </div>
-              </article>
-
-              <article
-                className={`resource-usage-card resource-cpu${
-                  isCpuTimeLimitExceeded ? " resource-limit-exceeded" : ""
-                }`}
-              >
-                <span>CPU 시간</span>
-                <strong>
-                  {cpuTimeMs == null ? (
-                    "측정 전"
-                  ) : (
-                    <>
-                      {(cpuTimeMs / 1000).toFixed(3)} /{" "}
-                      {(selectedPolicy.cpu_time_limit_ms / 1000).toFixed(0)}
-                      <small> sec</small>
-                    </>
-                  )}
-                </strong>
-
-                <div className="resource-progress-row">
-                  <div className="resource-progress">
-                    <span style={{ width: `${cpuTimePercentage}%` }} />
-                  </div>
-
-                  {cpuTimeMs != null && <em>{cpuTimePercentage}%</em>}
-                </div>
-              </article>
-            </div>
-
-            <div className="resource-charts">
-              <div
-                className={`resource-chart-item${
-                  fullscreenChart === "cpu" ? " resource-chart-fullscreen" : ""
-                }`}
-              >
-                <div className="resource-chart-header">
-                  <h3>구간별 CPU 사용률 추이</h3>
-
-                  <button
-                    type="button"
-                    className="chart-fullscreen-button"
-                    aria-label={
-                      fullscreenChart === "cpu"
-                        ? "CPU 그래프 전체 화면 종료"
-                        : "CPU 그래프 전체 화면"
-                    }
-                    title={
-                      fullscreenChart === "cpu" ? "전체 화면 종료" : "전체 화면"
-                    }
-                    onClick={() =>
-                      setFullscreenChart((current) =>
-                        current === "cpu" ? null : "cpu",
-                      )
-                    }
-                  >
-                    {fullscreenChart === "cpu" ? "×" : "⛶"}
-                  </button>
-                </div>
-
-                <CpuUsageChart
-                  samples={executionResult?.resource_usage?.cpu_usage_samples}
-                />
-              </div>
-
-              <div
-                className={`resource-chart-item${
-                  fullscreenChart === "memory"
-                    ? " resource-chart-fullscreen"
-                    : ""
-                }`}
-              >
-                <div className="resource-chart-header">
-                  <h3>구간별 메모리 사용량 추이</h3>
-
-                  <button
-                    type="button"
-                    className="chart-fullscreen-button"
-                    aria-label={
-                      fullscreenChart === "memory"
-                        ? "메모리 그래프 전체 화면 종료"
-                        : "메모리 그래프 전체 화면"
-                    }
-                    title={
-                      fullscreenChart === "memory"
-                        ? "전체 화면 종료"
-                        : "전체 화면"
-                    }
-                    onClick={() =>
-                      setFullscreenChart((current) =>
-                        current === "memory" ? null : "memory",
-                      )
-                    }
-                  >
-                    {fullscreenChart === "memory" ? "×" : "⛶"}
-                  </button>
-                </div>
-
-                <MemoryUsageChart
-                  samples={
-                    executionResult?.resource_usage?.memory_usage_samples
-                  }
-                />
-              </div>
-            </div>
-          </section>
-          {/* <section className="workspace-panel summary-section">
-            <div className="workspace-panel-header">
-              <h2>결과 요약</h2>
-            </div>
-
-            <div className="summary-list">
-              {executionStages.map((stage) => (
-                <div
-                  className={`summary-item summary-${stage.status}`}
-                  key={stage.key}
-                >
-                  <span className="summary-indicator" aria-hidden="true">
-                    <StatusGlyph status={stage.status} />
-                  </span>
-                  <span>
-                    {stage.key === "COMPILE"
-                      ? "정상 컴파일 완료"
-                      : stage.key === "EXECUTE"
-                        ? executionState === "blocked"
-                          ? "실행 차단됨"
-                          : "실행 완료"
-                        : "정리 완료"}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </section> */}
+          <ResourceUsagePanel
+            executionResult={executionResult}
+            policy={selectedPolicy}
+          />
         </div>
       </div>
     </form>

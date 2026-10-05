@@ -62,4 +62,45 @@ const EXECUTION_RESULT_PRESENTATION = {
   },
 };
 
+export function getExecutionResultPresentation(result) {
+  if (!result) {
+    return {
+      state: "idle",
+      label: "실행 전",
+      message: "",
+    };
+  }
+  if (result.status === "SUCCESS") {
+    return {
+      state: "success",
+      label: "성공",
+      message: "코드 실행이 완료되었습니다.",
+    };
+  }
+
+  const reasonPresentation = EXECUTION_RESULT_PRESENTATION[result.reason_code];
+
+  if (reasonPresentation) {
+    return {
+      ...reasonPresentation,
+      message: result.error_message ?? reasonPresentation.message,
+    };
+  }
+
+  if (result.status === "BLOCKED") {
+    return {
+      state: "blocked",
+      label: "정책 위반",
+      message:
+        result.error_message ?? "정책에 의해 코드 실행이 차단되었습니다.",
+    };
+  }
+
+  return {
+    state: "error",
+    label: "실행 실패",
+    message: result.error_message ?? "코드 실행 중 오류가 발생했습니다.",
+  };
+}
+
 export default EXECUTION_RESULT_PRESENTATION;
