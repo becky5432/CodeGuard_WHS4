@@ -23,7 +23,7 @@ from runner.models.result import (
     StageError,
     StageSummary,
 )
-from runner.pipeline.classifier import classify_execution
+from runner.pipeline.classifier import classify_execution, classify_policy_violations
 from runner.pipeline.compiler import (
     compile_source,
     create_compile_container,
@@ -249,6 +249,8 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
 
             classification = classify_execution(execution_result)
 
+            policy_violations = classify_policy_violations(execution_result)
+
             if classification.status == RunnerStatus.SUCCESS:
                 _mark_succeeded(stage_summary, RunnerStage.EXECUTE)
             else:
@@ -272,6 +274,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 run_id=run_id,
                 status=classification.status,
                 reason_code=classification.reason_code,
+                policy_violations=policy_violations,
                 error_message=classification.error_message,
                 exit_code=execution_result.exit_code,
                 stdout=execution_result.stdout,

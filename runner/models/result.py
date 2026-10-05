@@ -77,6 +77,7 @@ class RunnerResponse(BaseModel):
     run_id: UUID
     status: RunnerStatus
     reason_code: RunnerReasonCode | None = None
+    policy_violations: list[RunnerReasonCode] = Field(default_factory=list)
     error_message: str | None = None
     exit_code: int | None = None
     stdout: str = ""
