@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { MetricIcon } from "../components/Icons";
 import EXECUTION_RESULT_PRESENTATION from "../components/executionPresentation";
+import ExecutionDetailPanel from "../components/execution/ExecutionDetailPanel";
 
 const HISTORY_RESULT_PRESENTATION = {
   SUCCESS: {
@@ -58,6 +59,7 @@ function HistoryPage() {
   const [summary] = useState({});
   const [isLoading] = useState(false);
   const [error] = useState(null);
+  const [selectedExecution, setSelectedExecution] = useState(null);
 
   return (
     <div className="history-page">
@@ -98,118 +100,132 @@ function HistoryPage() {
           );
         })}
       </section>
+      <div
+        className={`history-layout${
+          selectedExecution ? " history-layout-detail-open" : ""
+        }`}
+      >
+        <section className="history-list-section">
+          <div className="history-list-header">
+            <h2>실행 기록 목록</h2>
 
-      <section className="history-list-section">
-        <div className="history-list-header">
-          <h2>실행 기록 목록</h2>
+            <div className="history-toolbar">
+              <div className="history-search">
+                <input type="search" placeholder="job_id로 검색하세요..." />
+              </div>
 
-          <div className="history-toolbar">
-            <div className="history-search">
-              <input type="search" placeholder="job_id로 검색하세요..." />
+              <select defaultValue="">
+                <option value="">실행 결과</option>
+                <option value="SUCCESS">정상 종료</option>
+                <option value="ERROR">실패</option>
+                <option value="BLOCKED">차단</option>
+              </select>
+
+              <select defaultValue="">
+                <option value="">제한 항목</option>
+                <option value="TIME_LIMIT">시간 제한</option>
+                <option value="MEMORY_LIMIT">메모리 제한</option>
+                <option value="PIDS_LIMIT">프로세스 제한</option>
+                <option value="CPU_TIME_LIMIT">CPU 시간 제한</option>
+                <option value="OUTPUT_LIMIT">출력 제한</option>
+                <option value="FILESYSTEM_LIMIT">파일 접근 제한</option>
+                <option value="NETWORK_BLOCKED">네트워크 접근 제한</option>
+              </select>
+
+              <select defaultValue="">
+                <option value="">기간 선택</option>
+              </select>
             </div>
-
-            <select defaultValue="">
-              <option value="">실행 결과</option>
-              <option value="SUCCESS">정상 종료</option>
-              <option value="ERROR">실패</option>
-              <option value="BLOCKED">차단</option>
-            </select>
-
-            <select defaultValue="">
-              <option value="">제한 항목</option>
-              <option value="TIME_LIMIT">시간 제한</option>
-              <option value="MEMORY_LIMIT">메모리 제한</option>
-              <option value="PIDS_LIMIT">프로세스 제한</option>
-              <option value="CPU_TIME_LIMIT">CPU 시간 제한</option>
-              <option value="OUTPUT_LIMIT">출력 제한</option>
-              <option value="FILESYSTEM_LIMIT">파일 접근 제한</option>
-              <option value="NETWORK_BLOCKED">네트워크 접근 제한</option>
-            </select>
-
-            <select defaultValue="">
-              <option value="">기간 선택</option>
-            </select>
           </div>
-        </div>
 
-        <div className="history-table-wrap">
-          <table className="history-table">
-            <thead>
-              <tr>
-                <th>job_id</th>
-                <th>실행 결과</th>
-                <th>종료 사유</th>
-                <th>제한 항목</th>
-                <th>실행 시간</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {isLoading ? (
+          <div className="history-table-wrap">
+            <table className="history-table">
+              <thead>
                 <tr>
-                  <td colSpan="5" className="history-empty">
-                    실행 기록을 불러오는 중입니다.
-                  </td>
+                  <th>job_id</th>
+                  <th>실행 결과</th>
+                  <th>종료 사유</th>
+                  <th>제한 항목</th>
+                  <th>실행 시간</th>
                 </tr>
-              ) : error ? (
-                <tr>
-                  <td colSpan="5" className="history-empty">
-                    실행 기록을 불러오지 못했습니다.
-                  </td>
-                </tr>
-              ) : history.length === 0 ? (
-                <tr>
-                  <td colSpan="5" className="history-empty">
-                    실행 기록이 없습니다.
-                  </td>
-                </tr>
-              ) : (
-                history.map((job) => {
-                  const presentation = getHistoryPresentation(job);
+              </thead>
 
-                  return (
-                    <tr key={job.job_id}>
-                      <td>
-                        <button type="button" className="history-job-link">
-                          {job.job_id}
-                        </button>
-                      </td>
+              <tbody>
+                {isLoading ? (
+                  <tr>
+                    <td colSpan="5" className="history-empty">
+                      실행 기록을 불러오는 중입니다.
+                    </td>
+                  </tr>
+                ) : error ? (
+                  <tr>
+                    <td colSpan="5" className="history-empty">
+                      실행 기록을 불러오지 못했습니다.
+                    </td>
+                  </tr>
+                ) : history.length === 0 ? (
+                  <tr>
+                    <td colSpan="5" className="history-empty">
+                      실행 기록이 없습니다.
+                    </td>
+                  </tr>
+                ) : (
+                  history.map((job) => {
+                    const presentation = getHistoryPresentation(job);
 
-                      <td>
-                        <span
-                          className={`history-result history-result-${presentation.state}`}
-                        >
-                          {presentation.state === "success"
-                            ? "정상 종료"
-                            : presentation.state === "blocked"
-                              ? "차단"
-                              : "실패"}
-                        </span>
-                      </td>
+                    return (
+                      <tr key={job.job_id}>
+                        <td>
+                          <button
+                            type="button"
+                            className="history-job-link"
+                            onClick={() => setSelectedExecution(job)}
+                          >
+                            {job.job_id}
+                          </button>
+                        </td>
 
-                      <td>
-                        <strong className="history-reason">
-                          {presentation.label}
-                        </strong>
-
-                        {job.error_message && (
-                          <span className="history-reason-detail">
-                            {job.error_message}
+                        <td>
+                          <span
+                            className={`history-result history-result-${presentation.state}`}
+                          >
+                            {presentation.state === "success"
+                              ? "정상 종료"
+                              : presentation.state === "blocked"
+                                ? "차단"
+                                : "실패"}
                           </span>
-                        )}
-                      </td>
+                        </td>
 
-                      <td>{getLimitLabel(job.reason_code)}</td>
+                        <td>
+                          <strong className="history-reason">
+                            {presentation.label}
+                          </strong>
 
-                      <td>{job.started_at ?? job.created_at ?? "-"}</td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+                          {job.error_message && (
+                            <span className="history-reason-detail">
+                              {job.error_message}
+                            </span>
+                          )}
+                        </td>
+
+                        <td>{getLimitLabel(job.reason_code)}</td>
+
+                        <td>{job.started_at ?? job.created_at ?? "-"}</td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <ExecutionDetailPanel
+          execution={selectedExecution}
+          onClose={() => setSelectedExecution(null)}
+        />
+      </div>
     </div>
   );
 }
