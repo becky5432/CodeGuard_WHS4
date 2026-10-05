@@ -94,7 +94,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
             mount for mount in container.attrs["Mounts"]
             if mount["Destination"] == "/workspace"
         )
-        self.assertFalse(execution_mount["RW"])
+        self.assertTrue(execution_mount["RW"])
         self.assertEqual(host_config["NetworkMode"], "none")
         self.assertEqual(container.attrs["Config"]["User"], "0:0")
         self.assertEqual(host_config["CapDrop"], ["ALL"])
@@ -119,7 +119,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
             self.assertFalse(result.output_limit_exceeded)
         return result
 
-    def test_c_hello_succeeds_with_read_only_filesystem(self) -> None:
+    def test_c_hello_succeeds_with_read_only_rootfs(self) -> None:
         result = self._compile_and_execute(r'''
             #include <stdio.h>
             int main(void) {
@@ -133,7 +133,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
         self.assertEqual(result.stderr, "")
         self.assertEqual(classify_execution(result).status, RunnerStatus.SUCCESS)
 
-    def test_cpp_hello_succeeds_with_read_only_filesystem(self) -> None:
+    def test_cpp_hello_succeeds_with_read_only_rootfs(self) -> None:
         result = self._compile_and_execute(r'''
             #include <iostream>
             int main() {
@@ -211,8 +211,54 @@ class FilesystemIntegrationTests(unittest.TestCase):
     def test_rootfs_write_fails_with_erofs(self) -> None:
         self._assert_write_is_read_only("/etc/codeguard_test")
 
-    def test_workspace_write_fails_with_erofs(self) -> None:
-        self._assert_write_is_read_only("/workspace/codeguard_test")
+    def test_writes_outside_workspace_never_mutate_rootfs(self) -> None:
+        result = self._compile_and_execute(r'''
+            #include <stdio.h>
+            int main(void) {
+                const char *paths[] = {
+                    "/etc/codeguard-test", "/usr/codeguard-test",
+                    "/bin/codeguard-test", "/root/codeguard-test"
+                };
+                for (unsigned long i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
+                    FILE *f = fopen(paths[i], "w");
+                    if (f) { fclose(f); remove(paths[i]); return 1; }
+                }
+                return 0;
+            }
+        ''')
+        self.assertEqual(result.exit_code, 0, "a protected path was writable")
+
+    def test_workspace_file_and_directory_mutations_are_allowed(self) -> None:
+        result = self._compile_and_execute(r'''
+            #include <stdio.h>
+            #include <string.h>
+            #include <sys/stat.h>
+            #include <unistd.h>
+            int main(void) {
+                const char *a = "/workspace/codeguard-test.txt";
+                const char *b = "/workspace/codeguard-test-renamed.txt";
+                const char *dir = "/workspace/codeguard-test-dir";
+                const char *nested = "/workspace/codeguard-test-dir/file";
+                char buffer[16] = {0};
+                FILE *f = fopen(a, "w");
+                if (!f || fputs("first", f) < 0 || fclose(f)) return 1;
+                f = fopen(a, "r");
+                if (!f || !fgets(buffer, sizeof(buffer), f) || strcmp(buffer, "first")) return 2;
+                fclose(f);
+                f = fopen(a, "w");
+                if (!f || fputs("modified", f) < 0 || fclose(f)) return 3;
+                if (rename(a, b)) return 4;
+                if (unlink(b)) return 5;
+                if (mkdir(dir, 0700)) return 6;
+                f = fopen(nested, "w");
+                if (!f || fputs("file", f) < 0 || fclose(f)) return 7;
+                if (unlink(nested) || rmdir(dir)) return 8;
+                return 0;
+            }
+        ''')
+        self.assertEqual(result.exit_code, 0, result.stderr)
+        self.assertFalse(result.filesystem_limit_exceeded)
+        self.assertEqual(classify_execution(result).status, RunnerStatus.SUCCESS)
 
     def test_tmp_write_fails_with_erofs(self) -> None:
         self._assert_write_is_read_only("/tmp/codeguard_test")
@@ -231,29 +277,6 @@ class FilesystemIntegrationTests(unittest.TestCase):
         ''')
         self.assertEqual(classify_execution(result).status, RunnerStatus.SUCCESS)
         self.assertFalse(result.filesystem_limit_exceeded)
-
-    def _assert_mutation_detected(self, operation: str) -> None:
-        result = self._compile_and_execute('''
-            #include <stdio.h>
-            #include <unistd.h>
-            #include <sys/stat.h>
-            int main(void) { OPERATION; return 0; }
-        '''.replace("OPERATION", operation))
-        self.assertEqual(result.exit_code, 0)
-        self.assertEqual(classify_execution(result).status, RunnerStatus.BLOCKED)
-        self.assertEqual(classify_execution(result).reason_code, RunnerReasonCode.FILESYSTEM_LIMIT)
-
-    def test_unlink_is_detected_even_when_exit_zero(self) -> None:
-        self._assert_mutation_detected('unlink("/workspace/main")')
-
-    def test_rename_is_detected(self) -> None:
-        self._assert_mutation_detected('rename("/workspace/main", "/workspace/renamed")')
-
-    def test_mkdir_is_detected(self) -> None:
-        self._assert_mutation_detected('mkdir("/workspace/test", 0700)')
-
-    def test_child_write_is_detected(self) -> None:
-        self._assert_mutation_detected('if (fork() == 0) { mkdir("/workspace/child", 0700); _exit(0); } else { sleep(1); }')
 
     def test_sigsegv_is_runtime_error(self) -> None:
         result = self._compile_and_execute('#include <signal.h>\nint main(void) { raise(SIGSEGV); }')
@@ -397,9 +420,6 @@ class FilesystemIntegrationTests(unittest.TestCase):
 
     def test_rootfs_write_detected_with_exit_zero(self) -> None:
         self._assert_write_detected_with_exit_zero('/codeguard_test.txt')
-
-    def test_workspace_write_detected_with_exit_zero(self) -> None:
-        self._assert_write_detected_with_exit_zero('/workspace/codeguard_test.txt')
 
     def test_metadata_ioctl_on_read_descriptor_is_detected(self) -> None:
         result = self._compile_and_execute(r'''

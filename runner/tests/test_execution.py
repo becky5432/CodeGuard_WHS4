@@ -66,7 +66,7 @@ class ExecutionTests(unittest.TestCase):
                 "CapAdd": ["SYS_PTRACE", "SETUID", "SETGID"],
                 "SecurityOpt": ["no-new-privileges=true"],
             },
-            "Mounts": [{"Destination": "/workspace", "RW": False}],
+            "Mounts": [{"Destination": "/workspace", "RW": True}],
             "State": {"OOMKilled": False},
         }
         self.workspace = VolumeWorkspace(
@@ -104,7 +104,7 @@ class ExecutionTests(unittest.TestCase):
             volumes={
                 self.workspace.volume_name: {
                     "bind": "/workspace",
-                    "mode": "ro",
+                    "mode": "rw",
                 }
             },
             detach=True,
@@ -1016,7 +1016,7 @@ class ExecutionTests(unittest.TestCase):
                 "CapAdd": ["SYS_PTRACE", "SETUID", "SETGID"],
                 "SecurityOpt": ["no-new-privileges=true"],
             },
-            "Mounts": [{"Destination": "/workspace", "RW": False}],
+            "Mounts": [{"Destination": "/workspace", "RW": True}],
             "NetworkSettings": {
                 "Networks": {
                     "test-net": {

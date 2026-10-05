@@ -79,12 +79,22 @@ class SecurityConfigTests(unittest.TestCase):
             )
         self.container.start.assert_not_called()
 
-    def test_execution_read_write_workspace_fails_closed(self) -> None:
+    def test_execution_read_write_workspace_is_verified(self) -> None:
+        verify_container_security_config(
+            self.container,
+            stage="execute",
+            workspace_mode="rw",
+        )
+        self.container.reload.assert_called_once_with()
+        self.container.start.assert_not_called()
+
+    def test_execution_read_only_workspace_fails_closed(self) -> None:
+        self.container.attrs["Mounts"][0]["RW"] = False
         with self.assertRaises(SecurityVerificationError):
             verify_container_security_config(
                 self.container,
                 stage="execute",
-                workspace_mode="ro",
+                workspace_mode="rw",
             )
         self.container.start.assert_not_called()
 

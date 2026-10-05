@@ -1,8 +1,8 @@
 # Filesystem detection trust boundary
 
-Execute keeps the root filesystem and `/workspace` read-only. Compile mounts
-`/workspace` read-write. `/tmp` remains read-only; Docker's existing `/dev/shm`
-mount is writable. Detection does not change these policies.
+Execute keeps the root filesystem read-only and mounts `/workspace` read-write.
+Compile also mounts `/workspace` read-write. `/tmp` remains read-only; Docker's
+existing `/dev/shm` mount is writable. Detection does not change these policies.
 
 The trusted tracer runs as UID/GID 0, with only SYS_PTRACE, SETUID and SETGID
 added after dropping ALL capabilities. `strace -u codeguard` runs user code as

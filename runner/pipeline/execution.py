@@ -251,7 +251,7 @@ def create_execution_container(
         "volumes": {
             workspace.volume_name: {
                 "bind": "/workspace",
-                "mode": "ro",
+                "mode": "rw",
             }
         },
         "detach": True,
@@ -285,7 +285,7 @@ def create_execution_container(
             verify_container_security_config(
                 container,
                 stage="execute",
-                workspace_mode="ro",
+                workspace_mode="rw",
                 expected_user="0:0",
                 required_cap_add=TRACER_CAP_ADD,
             )
