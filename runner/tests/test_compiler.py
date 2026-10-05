@@ -5,7 +5,8 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import docker
-from requests.exceptions import ReadTimeout
+from requests.exceptions import ConnectionError, ReadTimeout
+from urllib3.exceptions import ReadTimeoutError
 
 from runner.config import settings
 from runner.exceptions import ContainerExecutionError, WorkspaceError
@@ -144,6 +145,42 @@ class CompilerTests(unittest.TestCase):
         self.container.wait.assert_any_call(timeout=10)
         self.container.wait.assert_any_call(timeout=2)
         self.container.remove.assert_not_called()
+
+    def test_compile_source_treats_wrapped_read_timeout_as_timeout(self) -> None:
+        read_timeout = ReadTimeoutError(None, None, "Read timed out.")
+        self.container.wait.side_effect = [
+            ConnectionError(read_timeout),
+            {"StatusCode": 137},
+        ]
+
+        with self.assertLogs("runner", level="WARNING") as logs:
+            result = compile_source(
+                container=self.container,
+                workspace=self.workspace,
+                language="CPP",
+                code="int main() { return 0; }",
+            )
+
+        self.assertTrue(result.timed_out)
+        self.container.kill.assert_called_once_with()
+        self.assertTrue(
+            any("event=compile_timeout" in message for message in logs.output)
+        )
+
+    def test_compile_source_does_not_treat_connection_error_as_timeout(self) -> None:
+        self.container.wait.side_effect = ConnectionError(
+            "Docker socket disconnected",
+        )
+
+        with self.assertRaises(ConnectionError):
+            compile_source(
+                container=self.container,
+                workspace=self.workspace,
+                language="CPP",
+                code="int main() { return 0; }",
+            )
+
+        self.container.kill.assert_not_called()
 
     def test_compile_source_returns_compile_error(self) -> None:
         self.container.wait.return_value = {"StatusCode": 1}

@@ -1,7 +1,9 @@
 from dataclasses import dataclass
+import logging
 
 import docker
-from requests.exceptions import Timeout
+from requests.exceptions import ConnectionError, Timeout
+from urllib3.exceptions import ReadTimeoutError
 
 from runner.config import settings
 from runner.exceptions import (
@@ -22,6 +24,9 @@ from runner.security import (
     security_environment,
     verify_container_security_config,
 )
+
+
+logger = logging.getLogger("runner")
 
 
 @dataclass
@@ -53,6 +58,30 @@ COMPILER_CONFIG = {
         "standard": "-std=c++17",
     },
 }
+
+
+def _is_compile_wait_timeout(exc: BaseException) -> bool:
+    """Docker wait가 ConnectionError로 감싼 read timeout인지 확인한다."""
+
+    pending = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+
+        if isinstance(current, (Timeout, ReadTimeoutError)):
+            return True
+
+        for linked in (current.__cause__, current.__context__):
+            if isinstance(linked, BaseException):
+                pending.append(linked)
+        pending.extend(
+            arg for arg in current.args if isinstance(arg, BaseException)
+        )
+
+    return False
 
 
 def get_docker_client():
@@ -193,7 +222,14 @@ def compile_source(
         container.start()
         try:
             wait_result = container.wait(timeout=COMPILE_TIMEOUT_SECONDS)
-        except Timeout:
+        except (Timeout, ConnectionError) as exc:
+            if not _is_compile_wait_timeout(exc):
+                raise
+
+            logger.warning(
+                "event=compile_timeout timeout_seconds=%s",
+                COMPILE_TIMEOUT_SECONDS,
+            )
             try:
                 container.kill()
             except docker.errors.DockerException:
@@ -202,6 +238,9 @@ def compile_source(
 
             try:
                 container.wait(timeout=2)
+            except ConnectionError as exc:
+                if not _is_compile_wait_timeout(exc):
+                    raise
             except (Timeout, docker.errors.DockerException):
                 pass
 
