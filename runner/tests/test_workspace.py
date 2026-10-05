@@ -159,6 +159,14 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(mount["Target"], target)
             self.assertIs(mount["ReadOnly"], ro)
 
+    def test_execution_job_volumes_disable_image_population(self):
+        mounts = ws.execution_mounts(self.workspace())
+        for mount in mounts[:3]:
+            with self.subTest(target=mount["Target"]):
+                self.assertIs(mount.get("VolumeOptions", {}).get("NoCopy"), True)
+        # The private evidence volume retains its existing initialization.
+        self.assertNotIn("NoCopy", mounts[3].get("VolumeOptions", {}))
+
 
 class WorkspacePreparationTests(unittest.TestCase):
     def setUp(self):
@@ -217,6 +225,12 @@ class WorkspacePreparationTests(unittest.TestCase):
         self.container.attrs["Image"] = "sha256:pinned"
         self.prepare(image_id="sha256:pinned")
         self.assertEqual(self.client.containers.create.call_args.kwargs["image"], "sha256:pinned")
+
+    def test_prepare_job_volumes_disable_image_population(self):
+        self.prepare()
+        for mount in self.client.containers.create.call_args.kwargs["mounts"]:
+            with self.subTest(target=mount["Target"]):
+                self.assertIs(mount.get("VolumeOptions", {}).get("NoCopy"), True)
 
     def test_prepare_rejects_pinned_image_mismatch_before_upload_or_start(self):
         self.container.attrs["Image"] = "sha256:other"

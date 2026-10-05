@@ -16,6 +16,25 @@ Runner가 선택한 Linux amd64 이미지의 C/C++ 제출 프로그램에 적용
 
 파일 작업의 기본 상대경로는 `/workspace/work`이다. 입력이 없어도 빈 `stdin` 파일을 만들고 FD 0에 연결한다. 기존 FD 1·2를 통한 출력은 유지한다.
 
+### 작업 영역 소유권 유지
+
+준비 helper가 세 Volume의 루트 소유자를 `10001:10001`로 설정한다. app/input은 `0755`, work는 `0700`이다. 실행 단계의 app/input RO와 work RW 및 Landlock 규칙은 그대로 유지한다. RW 마운트나 Landlock 허용은 Linux 파일 권한을 추가로 부여하지 않는다.
+
+준비·실행 단계의 세 Job Volume 마운트에 Docker SDK `no_copy=True` (`VolumeOptions.NoCopy`)를 지정한다. work는 준비 후에도 비어 있으므로, 재연결 시 기본 이미지 초기 복사가 준비한 Volume 루트의 소유권·모드에 개입하지 않도록 한다. 익명 내부 기록 Volume의 기존 초기화와 컴파일 단계의 app Volume 경로는 변경하지 않는다. [Docker Volume 초기 복사와 volume-nocopy](https://docs.docker.com/engine/storage/volumes/)
+
+VM에서 확인한 실패는 사용자 `10001:10001`이 작업 영역을 `root:root / 0755`로 보아 `fopen`이 `Permission denied`를 반환한 사례다. 이 변경의 실제 해결 여부는 같은 VM에서 아래 회귀 테스트로 확인해야 한다. 호스트에 `/workspace`를 만들거나 `chmod 777`·사용자 root 실행으로 우회하지 않는다.
+
+```bash
+# 업데이트한 PR 브랜치 및 프로젝트 가상환경에서 실행
+EXECUTION_NETWORK=none CPP_IMAGE=codeguard-cpp:dev RUNNER_DOCKER_TESTS=1 \
+  python -m pytest \
+  runner/tests/test_filesystem_integration.py::FilesystemIntegrationTests::test_relative_work_file_and_directory_lifecycle \
+  runner/tests/test_filesystem_integration.py::FilesystemIntegrationTests::test_cross_boundary_rename_and_hardlink_are_denied \
+  -vv -s -x
+```
+
+작업 영역 회귀 테스트는 실행 사용자와 디렉터리 소유자가 `10001:10001`, 모드가 `0700`인지 확인한 뒤 파일 생성·읽기·수정·삭제·내부 이름 변경을 검증한다. 생성 실패 시 실제 오류를 출력한다. 통합 테스트의 네트워크 구성 검사는 Runner 설정값과 비교하며, 위 명령은 테스트 프로세스에서만 `none`을 지정한다.
+
 ## 이미지와 정책 준비
 
 이미지 빌드 스크립트 `runner/container/cpp/build-filesystem-manifest.py`가 고정된 신뢰 C/C++ 예제의 동적 로더·런타임 의존성을 확인하고 `/usr/local/share/codeguard/filesystem-runtime.json`을 생성한다. 사용자 제출 실행 파일에 `ldd`를 실행하지 않는다. 런타임 디렉터리 전체를 허용하지 않는다.

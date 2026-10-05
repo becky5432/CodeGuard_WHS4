@@ -88,10 +88,13 @@ def build_stdin_archive(stdin: str = "") -> bytes:
 
 
 def execution_mounts(workspace: VolumeWorkspace) -> list:
+    # work remains empty after preparation. Docker's default volume population
+    # can overwrite its prepared root ownership/mode when attaching it again.
+    # Job data and permissions come from our helper, never from image contents.
     return [
-        docker.types.Mount("/workspace/app", workspace.app_volume, type="volume", read_only=True),
-        docker.types.Mount("/workspace/input", workspace.input_volume, type="volume", read_only=True),
-        docker.types.Mount("/workspace/work", workspace.work_volume, type="volume", read_only=False),
+        docker.types.Mount("/workspace/app", workspace.app_volume, type="volume", read_only=True, no_copy=True),
+        docker.types.Mount("/workspace/input", workspace.input_volume, type="volume", read_only=True, no_copy=True),
+        docker.types.Mount("/workspace/work", workspace.work_volume, type="volume", read_only=False, no_copy=True),
         docker.types.Mount("/run/codeguard-trace", None, type="volume", read_only=False),
     ]
 
@@ -181,7 +184,7 @@ def prepare_workspace(client, workspace: VolumeWorkspace, language, code: str, s
         container = client.containers.create(
             image=image_id if image_id is not None else settings.cpp_image,
             command=[WORKSPACE_PREPARE_PATH], entrypoint=[],
-            mounts=[docker.types.Mount(f"/workspace/{purpose}", name, type="volume", read_only=False)
+            mounts=[docker.types.Mount(f"/workspace/{purpose}", name, type="volume", read_only=False, no_copy=True)
                     for purpose, name in (("app", workspace.app_volume), ("input", workspace.input_volume),
                                           ("work", workspace.work_volume))],
             detach=True, read_only=True, network_mode="none", user="0:0",

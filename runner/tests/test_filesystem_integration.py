@@ -96,7 +96,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
             self.assertEqual(mounts[target]["Name"], name)
             self.assertEqual(mounts[target]["RW"], writable)
         self.assertEqual(container.attrs["Image"], self.image_id)
-        self.assertEqual(host_config["NetworkMode"], "none")
+        self.assertEqual(host_config["NetworkMode"], settings.execution_network)
         self.assertEqual(container.attrs["Config"]["User"], "0:0")
         self.assertEqual(host_config["CapDrop"], ["ALL"])
         self.assertEqual(set(host_config["CapAdd"]), {"SYS_PTRACE", "SETUID", "SETGID"})
@@ -195,8 +195,20 @@ class FilesystemIntegrationTests(unittest.TestCase):
             int main(void) {
                 char cwd[128], data[32] = {0};
                 if (!getcwd(cwd, sizeof(cwd)) || strcmp(cwd, "/workspace/work")) return 1;
+                struct stat st;
+                if (stat(".", &st)) { perror("stat work"); return 10; }
+                if (getuid() != 10001 || getgid() != 10001 ||
+                    st.st_uid != 10001 || st.st_gid != 10001 ||
+                    (st.st_mode & 07777) != 0700) {
+                    fprintf(stderr, "work owner=%u:%u mode=%o uid=%u gid=%u\n",
+                            (unsigned)st.st_uid, (unsigned)st.st_gid,
+                            (unsigned)(st.st_mode & 07777),
+                            (unsigned)getuid(), (unsigned)getgid());
+                    return 11;
+                }
                 FILE *f = fopen("result.txt", "w+");
-                if (!f || fputs("initial", f) == EOF) return 2;
+                if (!f) { perror("fopen work"); return 2; }
+                if (fputs("initial", f) == EOF) { perror("fputs work"); return 2; }
                 rewind(f);
                 if (!fgets(data, sizeof(data), f) || strcmp(data, "initial")) return 3;
                 if (ftruncate(fileno(f), 0)) return 4;
