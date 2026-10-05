@@ -29,6 +29,9 @@ class FakeTransport:
         process_at_user_task_peak: int = 0,
         thread_at_user_task_peak: int = 0,
         error_flags: int = 0,
+        root_tid: int = 0,
+        exec_start_ns: int = 0,
+        exec_end_ns: int = 0,
         magic: int = CG_TRACKER_MAGIC,
         version: int = CG_TRACKER_VERSION,
     ) -> None:
@@ -38,10 +41,13 @@ class FakeTransport:
             version,
             0,
             status,
+            root_tid,
             user_task_peak,
             process_at_user_task_peak,
             thread_at_user_task_peak,
             error_flags,
+            exec_start_ns,
+            exec_end_ns,
         )
 
     def request(self, payload: bytes, response_size: int) -> bytes:
@@ -66,6 +72,9 @@ class TaskTrackerClientTests(unittest.TestCase):
         self.assertEqual(result.user_task_peak, 15)
         self.assertEqual(result.process_at_user_task_peak, 3)
         self.assertEqual(result.thread_at_user_task_peak, 12)
+        self.assertEqual(result.root_tid, 0)
+        self.assertEqual(result.exec_start_ns, 0)
+        self.assertEqual(result.exec_end_ns, 0)
         request = REQUEST_STRUCT.unpack(transport.requests[0])
         self.assertEqual(request[2], CG_OP_SNAPSHOT)
         self.assertEqual(UUID(bytes=request[3]), run_id)
@@ -105,6 +114,32 @@ class TaskTrackerClientTests(unittest.TestCase):
         with self.assertRaises(TaskTrackingError):
             client.snapshot(uuid4())
 
+    def test_snapshot_returns_exec_boundaries_and_root_tid(self) -> None:
+        client = TaskTrackerClient(
+            transport=FakeTransport(
+                root_tid=4321,
+                exec_start_ns=10_000_000,
+                exec_end_ns=510_000_000,
+            ),
+        )
+
+        snapshot = client.snapshot(uuid4())
+
+        self.assertEqual(snapshot.root_tid, 4321)
+        self.assertEqual(snapshot.exec_start_ns, 10_000_000)
+        self.assertEqual(snapshot.exec_end_ns, 510_000_000)
+
+    def test_snapshot_rejects_end_before_start(self) -> None:
+        client = TaskTrackerClient(
+            transport=FakeTransport(
+                exec_start_ns=20,
+                exec_end_ns=10,
+            ),
+        )
+
+        with self.assertRaises(TaskTrackingError):
+            client.snapshot(uuid4())
+
     def test_response_rejects_protocol_version_mismatch(self) -> None:
         client = TaskTrackerClient(
             transport=FakeTransport(version=CG_TRACKER_VERSION + 1),
@@ -134,10 +169,21 @@ class TaskTrackerClientTests(unittest.TestCase):
             "process_at_user_task_peak",
             "thread_at_user_task_peak",
             "error_flags",
+            "root_tid",
+            "exec_start_ns",
+            "exec_end_ns",
         ):
             self.assertIn(field, header)
+        self.assertEqual(CG_TRACKER_VERSION, 3)
         self.assertEqual(REQUEST_STRUCT.size, 40)
-        self.assertEqual(RESPONSE_STRUCT.size, 28)
+        self.assertEqual(RESPONSE_STRUCT.size, 48)
+        for size_assertion in (
+            "sizeof(struct cg_run_metrics) == 56",
+            "sizeof(struct cg_peak_snapshot) == 32",
+            "sizeof(struct cg_request) == 40",
+            "sizeof(struct cg_response) == 48",
+        ):
+            self.assertIn(size_assertion, header)
 
     def test_ebpf_metrics_only_track_user_task_lineage(self) -> None:
         native_dir = (
@@ -163,6 +209,7 @@ class TaskTrackerClientTests(unittest.TestCase):
         )
 
         for token in (
+            'SEC("tp_btf/sched_process_exec")',
             'SEC("tp_btf/sched_process_fork")',
             'SEC("tp_btf/sched_process_exit")',
             "tracked_cgroups SEC(\".maps\")",
@@ -170,7 +217,7 @@ class TaskTrackerClientTests(unittest.TestCase):
             "process_tasks SEC(\".maps\")",
             "run_metrics SEC(\".maps\")",
             "process_at_user_task_peak = metrics->process_current",
-            "thread_at_user_task_peak = metrics->thread_current",
+            "metrics->user_task_current - metrics->process_current",
         ):
             self.assertIn(token, source)
 
@@ -265,6 +312,37 @@ class TaskTrackerClientTests(unittest.TestCase):
         self.assertIn("bpf_spin_lock(&process_value->lock);", source)
         self.assertIn("bpf_spin_unlock(&process_value->lock);", source)
         self.assertNotIn("__sync_fetch_and_sub", source)
+
+    def test_bpf_exec_boundaries_use_root_exec_and_last_user_exit(self) -> None:
+        native_dir = (
+            Path(__file__).resolve().parents[1] / "native" / "task_tracker"
+        )
+        source = (native_dir / "task_tracker.bpf.c").read_text(
+            encoding="utf-8"
+        )
+        daemon = (native_dir / "task_trackerd.c").read_text(
+            encoding="utf-8"
+        )
+
+        for token in (
+            "metrics->root_tid == current_tid",
+            "metrics->exec_start_ns == 0",
+            "metrics->exec_start_ns = exec_start_ns",
+            "metrics->user_task_current == 0",
+            "metrics->exec_end_ns == 0",
+            "exit_ns > metrics->last_exit_ns",
+            "metrics->last_exit_ns = exit_ns",
+            "metrics->exec_end_ns = metrics->last_exit_ns",
+            "bpf_ktime_get_ns()",
+        ):
+            self.assertIn(token, source)
+        for token in (
+            "metrics.root_tid = request->root_tid",
+            "response->root_tid = metrics.root_tid",
+            "response->metrics.exec_start_ns = metrics.exec_start_ns",
+            "response->metrics.exec_end_ns = metrics.exec_end_ns",
+        ):
+            self.assertIn(token, daemon)
 
     def test_native_controller_exposes_all_protocol_operations(self) -> None:
         native_dir = (

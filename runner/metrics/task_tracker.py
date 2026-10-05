@@ -13,7 +13,7 @@ from runner.exceptions import TaskTrackingError
 
 
 CG_TRACKER_MAGIC = 0x43475452
-CG_TRACKER_VERSION = 2
+CG_TRACKER_VERSION = 3
 
 CG_OP_HEALTH = 1
 CG_OP_REGISTER_CGROUP = 2
@@ -28,7 +28,10 @@ CG_ERR_COUNTER = 1 << 2
 CG_ERR_CAPACITY = 1 << 3
 
 REQUEST_STRUCT = struct.Struct("<IHH16sQII")
-RESPONSE_STRUCT = struct.Struct("<IHHiIIII")
+RESPONSE_STRUCT = struct.Struct("<IHHiIIIIIQQ")
+
+assert REQUEST_STRUCT.size == 40
+assert RESPONSE_STRUCT.size == 48
 
 
 class TaskTrackerTransport(Protocol):
@@ -65,6 +68,9 @@ class PidsPeakSnapshot:
     user_task_peak: int
     process_at_user_task_peak: int
     thread_at_user_task_peak: int
+    root_tid: int = 0
+    exec_start_ns: int = 0
+    exec_end_ns: int = 0
 
 
 @dataclass(frozen=True)
@@ -159,10 +165,13 @@ def resolve_execution_cgroup(
 
 @dataclass(frozen=True)
 class _TrackerResponse:
+    root_tid: int
     user_task_peak: int
     process_at_user_task_peak: int
     thread_at_user_task_peak: int
     error_flags: int
+    exec_start_ns: int
+    exec_end_ns: int
 
 
 class TaskTrackerClient:
@@ -203,6 +212,14 @@ class TaskTrackerClient:
 
     def snapshot(self, run_id: UUID) -> PidsPeakSnapshot:
         response = self._request(CG_OP_SNAPSHOT, run_id)
+        if (
+            response.exec_end_ns != 0
+            and (
+                response.exec_start_ns == 0
+                or response.exec_end_ns < response.exec_start_ns
+            )
+        ):
+            raise TaskTrackingError("Invalid task tracker exec timing state.")
         return PidsPeakSnapshot(
             user_task_peak=response.user_task_peak,
             process_at_user_task_peak=(
@@ -211,6 +228,9 @@ class TaskTrackerClient:
             thread_at_user_task_peak=(
                 response.thread_at_user_task_peak
             ),
+            root_tid=response.root_tid,
+            exec_start_ns=response.exec_start_ns,
+            exec_end_ns=response.exec_end_ns,
         )
 
     def remove(self, run_id: UUID) -> None:
@@ -240,10 +260,13 @@ class TaskTrackerClient:
             version,
             _reserved,
             status,
+            root_tid,
             user_task_peak,
             process_at_user_task_peak,
             thread_at_user_task_peak,
             error_flags,
+            exec_start_ns,
+            exec_end_ns,
         ) = RESPONSE_STRUCT.unpack(raw_response)
 
         if magic != CG_TRACKER_MAGIC or version != CG_TRACKER_VERSION:
@@ -259,8 +282,11 @@ class TaskTrackerClient:
             )
 
         return _TrackerResponse(
+            root_tid=root_tid,
             user_task_peak=user_task_peak,
             process_at_user_task_peak=process_at_user_task_peak,
             thread_at_user_task_peak=thread_at_user_task_peak,
             error_flags=error_flags,
+            exec_start_ns=exec_start_ns,
+            exec_end_ns=exec_end_ns,
         )
