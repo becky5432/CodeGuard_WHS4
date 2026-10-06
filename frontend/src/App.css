@@ -2492,6 +2492,11 @@ body,
   flex: 0 0 auto;
   align-items: center;
   cursor: pointer;
+  position: relative;
+  top: 12px;
+
+  transform: translateX(-20px) scale(0.8);
+  transform-origin: center;
 }
 
 .network-toggle input {
@@ -2527,4 +2532,11 @@ body,
 
 .network-toggle input:checked + .network-toggle-slider::after {
   transform: translateX(16px);
+}
+
+.network-control-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
 }

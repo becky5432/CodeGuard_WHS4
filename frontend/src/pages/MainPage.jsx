@@ -573,7 +573,9 @@ function MainPage() {
                     <div className="fixed-control-info">
                       <strong>네트워크 차단</strong>
                       <small className="limit-status-badge">
-                        {networkPreset === "none" ? "완전 차단" : "확장 허용"}
+                        {networkPreset === "none"
+                          ? "외부 연결 차단"
+                          : "외부 연결 허용"}
                       </small>
                     </div>
 
