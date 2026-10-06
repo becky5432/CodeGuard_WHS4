@@ -2331,7 +2331,7 @@ body,
 }
 
 .history-layout-detail-open {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
 }
 
 .history-detail-panel {
@@ -2390,23 +2390,36 @@ body,
 .history-detail-section {
   min-width: 0;
 }
+.history-detail-output .io-result-output {
+  flex: 0 0 auto;
+}
+.history-detail-output .io-output-panel {
+  flex: 0 0 auto;
+}
+.history-detail-output .io-section {
+  display: block;
+  flex: none;
+  min-height: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
 
 .history-detail-code-meta {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
-  padding: 16px;
-}
-
-.history-detail-code-meta > div {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
+  align-items: center;
+  gap: 6px;
+  color: var(--gray-600);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
-.history-detail-code-block,
+.history-detail-code-block {
+  padding: 12px 16px 16px;
+}
+
 .history-detail-stdin {
-  padding: 0 16px 16px;
+  padding: 0 16px;
 }
 
 .history-detail-label {
@@ -2424,18 +2437,18 @@ body,
   overflow: auto;
   border: 1px solid var(--gray-200);
   border-radius: 8px;
-  background-color: var(--gray-50);
+  background-color: var(--white);
   color: var(--gray-950);
-  font-family: Consolas, Monaco, "Courier New", monospace;
   font-size: 13px;
   white-space: pre-wrap;
 }
 
-.history-detail-policy-grid,
-.history-detail-fixed-grid,
-.history-detail-panel .resource-card-grid,
-.history-detail-panel .resource-charts {
-  grid-template-columns: 1fr;
+.history-detail-code-block pre {
+  font-family: Consolas, Monaco, "Courier New", monospace;
+}
+
+.history-detail-stdin pre {
+  font-family: inherit;
 }
 
 .history-summary-card {
@@ -2446,4 +2459,21 @@ body,
 .history-summary-card.selected {
   border-color: var(--blue-600);
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
+}
+.history-filter-reset {
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--gray-300);
+  border-radius: 8px;
+  background-color: var(--white);
+  color: var(--gray-700);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.history-filter-reset:hover {
+  background-color: var(--gray-50);
+  border-color: var(--gray-400);
 }

@@ -70,31 +70,34 @@ function ExecutionDetailPanel({ execution, onClose }) {
         <section className="workspace-panel history-detail-section">
           <div className="workspace-panel-header">
             <h2>코드 및 입출력</h2>
-          </div>
 
-          <div className="history-detail-code-meta">
-            <div>
-              <span>언어</span>
-              <strong>{execution.language ?? "-"}</strong>
+            <div className="history-detail-code-meta">
+              <span>
+                {execution.language === "CPP"
+                  ? "C++"
+                  : (execution.language ?? "-")}
+              </span>
+
+              <span>·</span>
+
+              <span>
+                {execution.created_at
+                  ? new Date(execution.created_at).toLocaleString("ko-KR")
+                  : "-"}
+              </span>
             </div>
-
-            <div>
-              <span>실행 시각</span>
-              <strong>{execution.created_at ?? "-"}</strong>
-            </div>
           </div>
-
           <div className="history-detail-code-block">
             <span className="history-detail-label">실행 코드</span>
             <pre>{execution.code ?? ""}</pre>
           </div>
-
           <div className="history-detail-stdin">
             <span className="history-detail-label">표준 입력 (stdin)</span>
             <pre>{execution.stdin || "입력값이 없습니다."}</pre>
           </div>
-
-          <OutputPanel executionResult={execution} />
+          <div className="history-detail-output">
+            <OutputPanel executionResult={execution} />
+          </div>
         </section>
 
         {/* 당시 자원 제한 설정 */}
@@ -104,7 +107,7 @@ function ExecutionDetailPanel({ execution, onClose }) {
           </div>
 
           <div className="settings-content">
-            <div className="environment-limit-grid-top history-detail-policy-grid">
+            <div className="environment-limit-grid-top policy-setting-grid">
               {POLICY_FIELDS.map((field) => (
                 <div className="environment-limit-card" key={field.key}>
                   <span
@@ -119,7 +122,9 @@ function ExecutionDetailPanel({ execution, onClose }) {
                     <strong>
                       {execution.policy?.[field.key] ?? "-"}
                       {execution.policy?.[field.key] != null && (
-                        <small> {field.unit}</small>
+                        <span className="history-detail-policy-unit">
+                          {field.unit}
+                        </span>
                       )}
                     </strong>
                   </div>
