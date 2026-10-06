@@ -2477,3 +2477,14 @@ body,
   background-color: var(--gray-50);
   border-color: var(--gray-400);
 }
+
+.policy-violation-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.policy-violation-messages .policy-violation-message {
+  margin: 0;
+}

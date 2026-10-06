@@ -379,7 +379,7 @@ function HistoryPage() {
                           </strong>
                         </td>
                         <td>{getLimitLabel(job.reason_code)}</td>
-                        <td>{formatDateTime(job.created_at)}</td>{" "}
+                        <td>{formatDateTime(job.created_at)}</td>
                       </tr>
                     );
                   })
