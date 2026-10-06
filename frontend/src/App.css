@@ -2488,3 +2488,67 @@ body,
 .policy-violation-messages .policy-violation-message {
   margin: 0;
 }
+
+
+.network-control-item {
+  position: relative;
+}
+
+.network-control-item .fixed-control-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.network-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  cursor: pointer;
+  position: relative;
+  top: 12px;
+
+  transform: translateX(-20px) scale(0.8);
+  transform-origin: center;
+}
+
+.network-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.network-toggle-slider {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: 999px;
+  background-color: var(--gray-300);
+  transition: background-color 0.2s ease;
+}
+
+.network-toggle-slider::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background-color: var(--white);
+  content: "";
+  transition: transform 0.2s ease;
+}
+
+.network-toggle input:checked + .network-toggle-slider {
+  background-color: #86d89b;
+}
+
+.network-toggle input:checked + .network-toggle-slider::after {
+  transform: translateX(16px);
+}
+
+.network-control-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+}

@@ -154,6 +154,8 @@ function MainPage() {
     "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
   );
   const [policyInputMessage, setPolicyInputMessage] = useState(null);
+  const [networkPreset, setNetworkPreset] = useState("none");
+
   const showPolicyInputMessage = (key) => {
     setPolicyInputMessage(key);
 
@@ -193,6 +195,7 @@ function MainPage() {
 
   const handlePolicyReset = () => {
     setSelectedPolicy(DEFAULT_POLICY);
+    setNetworkPreset("none");
   };
 
   const terminationReason = executionResult?.reason_code;
@@ -261,7 +264,6 @@ function MainPage() {
       "cpu_time_limit_ms",
       "output_limit_bytes",
     ];
-
     const hasInvalidPolicy = POLICY_FIELDS.some(({ key }) => {
       const value = Number(selectedPolicy[key]);
 
@@ -300,6 +302,7 @@ function MainPage() {
         cpu_bandwidth: Number(selectedPolicy.cpu_bandwidth),
         cpu_time_limit_ms: Number(selectedPolicy.cpu_time_limit_ms),
         output_limit_bytes: Number(selectedPolicy.output_limit_bytes),
+        network_preset: networkPreset,
       },
     };
 
@@ -562,7 +565,7 @@ function MainPage() {
                   </article>
 
                   <article
-                    className={`planned-feature-item ${
+                    className={`planned-feature-item network-control-item ${
                       hasPolicyViolation("NETWORK_BLOCKED")
                         ? "limit-triggered"
                         : ""
@@ -574,8 +577,26 @@ function MainPage() {
 
                     <div className="fixed-control-info">
                       <strong>네트워크 차단</strong>
-                      <small className="limit-status-badge">제한 중</small>
+                      <small className="limit-status-badge">
+                        {networkPreset === "none"
+                          ? "외부 연결 차단"
+                          : "외부 연결 허용"}
+                      </small>
                     </div>
+
+                    <label className="network-toggle" title="외부 인터넷 연결">
+                      <input
+                        type="checkbox"
+                        checked={networkPreset === "none"}
+                        onChange={(event) =>
+                          setNetworkPreset(
+                            event.target.checked ? "none" : "web",
+                          )
+                        }
+                      />
+
+                      <span className="network-toggle-slider" />
+                    </label>
                   </article>
 
                   <article

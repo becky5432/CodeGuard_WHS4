@@ -27,6 +27,7 @@ def create_execution(
         cpu_bandwidth=limits["cpu_bandwidth"],
         cpu_time_limit_ms=limits["cpu_time_limit_ms"],
         output_limit_bytes=limits["output_limit_bytes"],
+        network_preset=limits.get("network_preset"),
     )
 
     db.add(execution)

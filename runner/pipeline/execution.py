@@ -221,6 +221,8 @@ def create_execution_container(
     cpu_bandwidth: float,
     pids_limit: int,
     cgroup_scope: ExecutionCgroupScope | None = None,
+    network_mode: str | None = None,
+    dns: list[str] | None = None,
 ):
     """Job Volume을 연결한 실행 컨테이너를 생성하고 반환한다."""
 
@@ -257,7 +259,7 @@ def create_execution_container(
         "detach": True,
         "read_only": True,
         
-        "network_mode": settings.execution_network,
+        "network_mode": network_mode or settings.execution_network,
         "user": "0:0",
         "cap_drop": list(EXECUTION_CAP_DROP),
         "cap_add": list(TRACER_CAP_ADD),
@@ -274,6 +276,10 @@ def create_execution_container(
             "codeguard.stage": "execute",
         },
     }
+    # 프리셋 DNS: None 이면 Docker 기본(내장 resolver) 유지, 리스트면 resolv.conf 고정.
+    # P0 는 ["127.0.0.1"] 로 내장 resolver 를 제거해 DNS 해석까지 차단한다.
+    if dns is not None:
+        container_options["dns"] = dns
     if cgroup_scope is not None:
         container_options["cgroup_parent"] = cgroup_scope.docker_parent
 
