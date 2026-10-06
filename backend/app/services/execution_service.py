@@ -296,6 +296,18 @@ class ExecutionService:
 
         return ExecutionResultResponse(
             job_id=UUID(execution.job_id),
+            code=execution.code,
+            stdin=execution.stdin,
+            language=execution.language,
+            created_at=execution.created_at,
+            policy=PolicyLimits(
+                timeout_ms=execution.timeout_ms,
+                memory_limit_mb=execution.memory_limit_mb,
+                pids_limit=execution.pids_limit,
+                cpu_bandwidth=execution.cpu_bandwidth,
+                cpu_time_limit_ms=execution.cpu_time_limit_ms,
+                output_limit_bytes=execution.output_limit_bytes,
+            ),
             status=ExecutionStatus(execution.status),
             reason_code=(
                 ExecutionReasonCode(execution.reason_code)
