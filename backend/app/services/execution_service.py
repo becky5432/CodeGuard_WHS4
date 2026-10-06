@@ -213,6 +213,10 @@ class ExecutionService:
                 thread_at_user_task_peak=(
                     usage.thread_at_user_task_peak if usage else None
                 ),
+                policy_violations=[
+                    violation.value
+                    for violation in runner_response.policy_violations
+                ],
             )
 
         # DB 오류, 응답 변환 오류 등 Backend 내부 오류
@@ -318,4 +322,5 @@ class ExecutionService:
             resource_usage=resource_usage,
             stage_summary=stage_summary,
             finished_at=execution.finished_at,
+            policy_violations=execution.policy_violations or [],
         )

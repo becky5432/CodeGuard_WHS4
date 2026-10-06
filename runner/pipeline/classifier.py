@@ -17,13 +17,6 @@ class Classification:
 
 def classify_execution(result) -> Classification:
     """Execution 증거를 우선순위에 따라 대표 결과 하나로 변환한다."""
-    if result.network_blocked:
-        return Classification(
-            status=RunnerStatus.BLOCKED,
-            reason_code=RunnerReasonCode.NETWORK_BLOCKED,
-            stage=RunnerStage.EXECUTE,
-            error_message="네트워크 접근이 차단되었습니다.",
-        )
     if result.system_error:
         return Classification(
             status=RunnerStatus.ERROR,
@@ -66,13 +59,6 @@ def classify_execution(result) -> Classification:
             stage=RunnerStage.EXECUTE,
             error_message="출력 제한을 초과했습니다.",
         )
-    if result.filesystem_limit_exceeded:
-        return Classification(
-            status=RunnerStatus.BLOCKED,
-            reason_code=RunnerReasonCode.FILESYSTEM_LIMIT,
-            stage=RunnerStage.EXECUTE,
-            error_message="허용되지 않은 파일시스템 쓰기 시도가 감지되었습니다.",
-        )
     if result.exit_code == 0:
         return Classification(
             status=RunnerStatus.SUCCESS,
@@ -86,3 +72,21 @@ def classify_execution(result) -> Classification:
         stage=RunnerStage.EXECUTE,
         error_message="프로그램 실행 중 오류가 발생했습니다.",
     )
+
+def classify_policy_violations(
+    result,
+) -> list[RunnerReasonCode]:
+
+    violations: list[RunnerReasonCode] = []
+
+    if result.network_blocked:
+        violations.append(
+            RunnerReasonCode.NETWORK_BLOCKED
+        )
+
+    if result.filesystem_limit_exceeded:
+        violations.append(
+            RunnerReasonCode.FILESYSTEM_LIMIT
+        )
+
+    return violations
