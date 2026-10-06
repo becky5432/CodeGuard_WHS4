@@ -579,8 +579,8 @@ function MainPage() {
                       <strong>네트워크 차단</strong>
                       <small className="limit-status-badge">
                         {networkPreset === "none"
-                          ? "외부 연결 허용"
-                          : "외부 연결 차단"}
+                          ? "외부 연결 차단"
+                          : "외부 연결 허용"}
                       </small>
                     </div>
 
