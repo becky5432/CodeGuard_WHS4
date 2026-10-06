@@ -39,6 +39,7 @@ class Execution(Base):
     compile_log = Column(Text, default="")                     # 저장 시 64KB 절단
     stage_summary = Column(JSON)                               # 단계별 성공·실패·오류
     finished_at = Column(DateTime(timezone=True))
+    policy_violations = Column(JSON, nullable=False, default=list)
 
     # --- 자원 사용량 (제한값 대비 비교용) ---
     wall_time_ms = Column(Integer)                             # 전체 실행 시간 ↔ timeout_ms

@@ -146,7 +146,7 @@ function MainPage() {
   const [standardInput, setStandardInput] = useState("");
   const [executionState, setExecutionState] = useState("idle");
   const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
-  //const [jobId, setJobId] = useState(null);
+  const [jobId, setJobId] = useState(null);
   const [executionResult, setExecutionResult] = useState(null);
   const [executionStatusText, setExecutionStatusText] = useState("실행 전");
   const [requestErrorCode, setRequestErrorCode] = useState(null);
@@ -199,6 +199,11 @@ function MainPage() {
   };
 
   const terminationReason = executionResult?.reason_code;
+
+  const policyViolations = executionResult?.policy_violations ?? [];
+
+  const hasPolicyViolation = (reasonCode) =>
+    policyViolations.includes(reasonCode);
 
   const isLimitTriggered = (...reasonCodes) =>
     reasonCodes.includes(terminationReason);
@@ -544,7 +549,7 @@ function MainPage() {
                 <div className="environment-limit-grid-bottom">
                   <article
                     className={`planned-feature-item ${
-                      isLimitTriggered("FILESYSTEM_LIMIT")
+                      hasPolicyViolation("FILESYSTEM_LIMIT")
                         ? "limit-triggered"
                         : ""
                     }`}
@@ -561,7 +566,7 @@ function MainPage() {
 
                   <article
                     className={`planned-feature-item network-control-item ${
-                      isLimitTriggered("NETWORK_BLOCKED")
+                      hasPolicyViolation("NETWORK_BLOCKED")
                         ? "limit-triggered"
                         : ""
                     }`}
@@ -627,7 +632,7 @@ function MainPage() {
           {/* 자원 사용량 요약 영역 */}
           <ResourceUsagePanel
             executionResult={executionResult}
-            policy={selectedPolicy}
+            policy={executionResult?.policy ?? selectedPolicy}
           />
         </div>
       </div>

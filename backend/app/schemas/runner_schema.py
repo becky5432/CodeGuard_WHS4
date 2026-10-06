@@ -91,3 +91,4 @@ class RunnerResponse(BaseModel):
     resource_usage: ResourceUsage | None = None
     stage_summary: StageSummary          # 필수 (단일 stage는 제거)
     finished_at: datetime                # 필수로 변경
+    policy_violations: list[RunnerReasonCode] = Field(default_factory=list)

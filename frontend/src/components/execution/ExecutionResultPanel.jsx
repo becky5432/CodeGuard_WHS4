@@ -42,6 +42,11 @@ function getExecutionStageLabel(status) {
   return labels[status];
 }
 
+const POLICY_VIOLATION_MESSAGES = {
+  FILESYSTEM_LIMIT: "파일 접근이 차단되었습니다.",
+  NETWORK_BLOCKED: "네트워크 접근이 차단되었습니다.",
+};
+
 function ExecutionResultPanel({
   executionResult,
   executionState,
@@ -52,10 +57,10 @@ function ExecutionResultPanel({
   const derivedPresentation = getExecutionResultPresentation(executionResult);
 
   const displayState = executionState ?? derivedPresentation.state;
-
   const displayStatusText = executionStatusText ?? derivedPresentation.label;
-
   const displayMessage = message ?? derivedPresentation.message;
+
+  const policyViolations = executionResult?.policy_violations ?? [];
 
   const executionReasonCode =
     executionResult?.reason_code ?? requestErrorCode ?? "-";
@@ -81,6 +86,30 @@ function ExecutionResultPanel({
       </div>
 
       <div className="execution-result-content">
+        {policyViolations.length > 0 && (
+          <div className="policy-violation-messages">
+            {policyViolations.map((violation) => {
+              const violationMessage = POLICY_VIOLATION_MESSAGES[violation];
+
+              if (!violationMessage) {
+                return null;
+              }
+
+              return (
+                <p
+                  className="execution-message execution-message-blocked policy-violation-message"
+                  key={violation}
+                >
+                  <span>
+                    <ResultMessageIcon status="blocked" />
+                  </span>
+                  {violationMessage}
+                </p>
+              );
+            })}
+          </div>
+        )}
+
         {displayState !== "idle" && displayMessage && (
           <p className={`execution-message execution-message-${displayState}`}>
             <span>

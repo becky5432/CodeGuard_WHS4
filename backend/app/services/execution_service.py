@@ -215,6 +215,10 @@ class ExecutionService:
                 thread_at_user_task_peak=(
                     usage.thread_at_user_task_peak if usage else None
                 ),
+                policy_violations=[
+                    violation.value
+                    for violation in runner_response.policy_violations
+                ],
             )
 
         # DB 오류, 응답 변환 오류 등 Backend 내부 오류
@@ -294,6 +298,18 @@ class ExecutionService:
 
         return ExecutionResultResponse(
             job_id=UUID(execution.job_id),
+            code=execution.code,
+            stdin=execution.stdin,
+            language=execution.language,
+            created_at=execution.created_at,
+            policy=PolicyLimits(
+                timeout_ms=execution.timeout_ms,
+                memory_limit_mb=execution.memory_limit_mb,
+                pids_limit=execution.pids_limit,
+                cpu_bandwidth=execution.cpu_bandwidth,
+                cpu_time_limit_ms=execution.cpu_time_limit_ms,
+                output_limit_bytes=execution.output_limit_bytes,
+            ),
             status=ExecutionStatus(execution.status),
             reason_code=(
                 ExecutionReasonCode(execution.reason_code)
@@ -313,4 +329,5 @@ class ExecutionService:
             resource_usage=resource_usage,
             stage_summary=stage_summary,
             finished_at=execution.finished_at,
+            policy_violations=execution.policy_violations or [],
         )
