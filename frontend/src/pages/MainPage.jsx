@@ -587,10 +587,10 @@ function MainPage() {
                     <label className="network-toggle" title="외부 인터넷 연결">
                       <input
                         type="checkbox"
-                        checked={networkPreset === "web"}
+                        checked={networkPreset === "none"}
                         onChange={(event) =>
                           setNetworkPreset(
-                            event.target.checked ? "web" : "none",
+                            event.target.checked ? "none" : "web",
                           )
                         }
                       />
