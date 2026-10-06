@@ -19,7 +19,7 @@ function HomeIcon() {
     </svg>
   );
 }
-/* 중간발표 이후 실행 기록 메뉴 활성화 시 함께 복원
+
 function HistoryIcon() {
   return (
     <svg
@@ -39,7 +39,6 @@ function HistoryIcon() {
     </svg>
   );
 }
-*/
 
 function ChevronIcon({ isCollapsed }) {
   return (
@@ -101,21 +100,23 @@ function Sidebar({ isCollapsed, onToggle }) {
           {!isCollapsed && <span className="navigation-label">메인</span>}
         </NavLink>
 
-        {/* 중간발표 이후 실행 기록 화면 구현 시 다시 활성화
-        <NavLink
-          className={({ isActive }) =>
-            `navigation-item${isActive ? " active" : ""}`
-          }
-          to="/history"
-          title={isCollapsed ? "실행 기록" : undefined}
-        >
-          <span className="navigation-icon">
-            <HistoryIcon />
-          </span>
+        {
+          <NavLink
+            className={({ isActive }) =>
+              `navigation-item${isActive ? " active" : ""}`
+            }
+            to="/history"
+            title={isCollapsed ? "실행 기록" : undefined}
+          >
+            <span className="navigation-icon">
+              <HistoryIcon />
+            </span>
 
-          {!isCollapsed && <span className="navigation-label">실행 기록</span>}
-        </NavLink>
-        */}
+            {!isCollapsed && (
+              <span className="navigation-label">실행 기록</span>
+            )}
+          </NavLink>
+        }
       </nav>
 
       <button
