@@ -2527,7 +2527,7 @@ body,
 }
 
 .network-toggle input:checked + .network-toggle-slider {
-  background-color: var(--blue-600);
+  background-color: #86d89b;
 }
 
 .network-toggle input:checked + .network-toggle-slider::after {
