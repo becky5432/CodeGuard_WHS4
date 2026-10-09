@@ -99,6 +99,49 @@ class NativeTrackerInstallTests(unittest.TestCase):
         self.assertIn("sleep 0.1", installer)
         self.assertIn("[[ -S /run/codeguard/task-tracker.sock ]]", installer)
 
+    def _run_package_install(self, bpftool_status: int = 0):
+        installer = INSTALLER.read_text(encoding="utf-8")
+        package_steps = installer.split("sudo apt-get update", 1)[1].split(
+            'venv_dir=', 1,
+        )[0]
+        # Exercise the actual package commands against Ubuntu's virtual-package
+        # failure, without invoking apt, sudo or modifying the host.
+        script = r'''
+set -Eeuo pipefail
+die() { printf '%s\n' "$*" >&2; exit 1; }
+uname() { printf 'test-kernel\n'; }
+sudo() { "$@"; }
+apt-get() {
+    printf 'APT'; printf ' <%s>' "$@"; printf '\n'
+    for package in "$@"; do
+        if [[ "$package" == bpftool ]]; then
+            printf "bpftool is virtual and has no installation candidate\n" >&2
+            return 100
+        fi
+    done
+}
+'''
+        script += f"bpftool() {{ return {bpftool_status}; }}\n"
+        result = subprocess.run(
+            [self.bash, "-s"], input=script + package_steps, text=True,
+            encoding="utf-8", errors="replace", capture_output=True,
+            check=False, timeout=10,
+        )
+        return result
+
+    def test_ubuntu_virtual_bpftool_uses_concrete_kernel_tools(self) -> None:
+        result = self._run_package_install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("<linux-tools-common>", result.stdout)
+        self.assertIn("<linux-tools-test-kernel>", result.stdout)
+        self.assertIn("<linux-headers-test-kernel>", result.stdout)
+
+    def test_unusable_bpftool_stops_before_build(self) -> None:
+        result = self._run_package_install(bpftool_status=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("bpftool", result.stderr)
+        self.assertNotIn("installation candidate", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
