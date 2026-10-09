@@ -36,6 +36,11 @@ native tracker 바이너리 및 systemd 서비스를 설치한다.
 bash runner/native/task_tracker/install.sh
 ```
 
+Ubuntu 24.04의 `bpftool`은 가상 패키지이므로 설치 스크립트는
+`linux-tools-common`과 현재 커널용 `linux-tools-$(uname -r)`를 설치한다.
+빌드 전 `bpftool version`이 성공하는지도 확인한다. 현재 커널의 tools·headers
+패키지를 제공하는 저장소가 필요하다.
+
 기존 설치를 업데이트할 때도 같은 명령을 재실행하면 빌드·설치 후 서비스를
 재시작한다. 설치 스크립트는 방화벽 규칙이나 Runner 네트워크 설정을 변경하지
 않는다. Python 패키지 목록은 `runner/requirements.txt`에만 유지한다.

@@ -30,8 +30,14 @@ sudo -v
 sudo apt-get update
 sudo apt-get install -y \
   python3 python3-venv \
-  clang llvm libbpf-dev bpftool \
-  "linux-headers-$(uname -r)" build-essential pkg-config
+  clang llvm libbpf-dev linux-tools-common \
+  "linux-tools-$(uname -r)" "linux-headers-$(uname -r)" \
+  build-essential pkg-config
+
+# Ubuntu 24.04 exposes bpftool as a virtual package. The common package
+# supplies its wrapper, and the matching kernel tools supply the executable.
+command -v bpftool >/dev/null || die "bpftool 명령을 찾을 수 없습니다."
+bpftool version >/dev/null 2>&1 || die "bpftool을 실행할 수 없습니다. 현재 커널용 linux-tools 패키지를 확인하세요."
 
 venv_dir="$repo_root/.venv-runner"
 if [[ ! -d "$venv_dir" ]]; then
