@@ -27,6 +27,7 @@ def create_execution(
         cpu_bandwidth=limits["cpu_bandwidth"],
         cpu_time_limit_ms=limits["cpu_time_limit_ms"],
         output_limit_bytes=limits["output_limit_bytes"],
+        network_preset=limits.get("network_preset"),
     )
 
     db.add(execution)
@@ -102,6 +103,7 @@ def save_result(
     process_at_user_task_peak: int | None = None,
     thread_at_user_task_peak: int | None = None,
     finished_at: datetime | None = None,
+    policy_violations: list[str] | None = None,
 ) -> Execution | None:
     """Runner 결과를 실행 기록에 반영하고 최종 상태로 갱신
 
@@ -124,6 +126,11 @@ def save_result(
     execution.compile_log = _truncate_bytes(compile_log, limit)
     execution.stage_summary = stage_summary
     execution.finished_at = finished_at or datetime.now(timezone.utc)
+    execution.policy_violations = (
+        list(policy_violations)
+        if policy_violations is not None
+        else []
+    )
 
     execution.wall_time_ms = wall_time_ms
     execution.cpu_time_ms = cpu_time_ms

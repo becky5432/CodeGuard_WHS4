@@ -10,6 +10,12 @@ class Language(str, Enum):
     CPP = "CPP"
 
 
+class NetworkPreset(str, Enum):
+    """네트워크 차단 프리셋 (2단계)."""
+    NONE = "none"   # P0: 완전 차단 (egress 0) — 기본값
+    WEB = "web"     # P1: 확장 허용 (공인 80/443/53)
+
+
 class PolicyLimits(BaseModel):
     # TODO: Runner와 실제 필드/단위/상한 확정 후 범위 검증 추가
     timeout_ms: int = Field(gt=0)
@@ -18,6 +24,8 @@ class PolicyLimits(BaseModel):
     cpu_bandwidth: float = Field(gt=0)    # CPU 처리량 한도 (quota 제한)
     cpu_time_limit_ms: int = Field(gt=0)    # CPU 시간 제한
     output_limit_bytes: int = Field(gt=0)   # 실행 단계 stdout·stderr 합산 출력 제한
+    # 네트워크 차단 프리셋. 미지정 시 P0(완전 차단)로 fail-safe.
+    network_preset: NetworkPreset = NetworkPreset.NONE
 
 
 
@@ -107,8 +115,14 @@ class ExecutionCreateResponse(BaseModel): # 실행 요청 직후 응답
 class ExecutionResultResponse(BaseModel): # 상태/결과 조회
     # 필요한 부분은 나중에 추가하기
     job_id: UUID
+    language: Language
+    code: str
+    stdin: str
+    created_at: datetime
+    policy: PolicyLimits 
     status: ExecutionStatus
     reason_code: ExecutionReasonCode | None = None
+    network_preset: NetworkPreset | None = None  # 실행에 적용된 네트워크 프리셋
     error_message: str | None = None
     exit_code: int | None = None
     stdout: str | None = None
@@ -117,3 +131,11 @@ class ExecutionResultResponse(BaseModel): # 상태/결과 조회
     resource_usage: ResourceUsage | None = None
     stage_summary: StageSummary | None = None
     finished_at: datetime | None = None
+    policy_violations: list[ExecutionReasonCode] = Field(default_factory=list)
+
+class ExecutionListItem(BaseModel): # 실행 기록 조회
+    job_id: UUID
+    language: Language
+    created_at: datetime
+    status: ExecutionStatus
+    reason_code: ExecutionReasonCode | None = None

@@ -24,4 +24,5 @@ DEFAULT_POLICY = {
     "cpu_bandwidth": 1.0,
     "cpu_time_limit_ms": 1000,
     "output_limit_bytes": 1048576,
+    "network_preset": "none",   # P0 완전 차단 (기본값)
 }

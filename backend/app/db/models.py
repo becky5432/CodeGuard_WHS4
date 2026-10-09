@@ -27,6 +27,7 @@ class Execution(Base):
     cpu_bandwidth = Column(Float)                              # CPU 할당 한도(대역폭)
     cpu_time_limit_ms = Column(Integer)                        # 최대 CPU 시간(ms)
     output_limit_bytes= Column(Integer)                        # 최대 출력 크기(bytes)
+    network_preset = Column(String(8))                         # 적용된 네트워크 프리셋 (none/web)
 
     # --- Runner 결과 수신 후 갱신 ---
     run_id = Column(String(36))                                # Runner 발급 실행 ID
@@ -38,6 +39,7 @@ class Execution(Base):
     compile_log = Column(Text, default="")                     # 저장 시 64KB 절단
     stage_summary = Column(JSON)                               # 단계별 성공·실패·오류
     finished_at = Column(DateTime(timezone=True))
+    policy_violations = Column(JSON, nullable=False, default=list)
 
     # --- 자원 사용량 (제한값 대비 비교용) ---
     wall_time_ms = Column(Integer)                             # 전체 실행 시간 ↔ timeout_ms
