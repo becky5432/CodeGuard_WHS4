@@ -170,7 +170,7 @@ function ResourceUsagePanel({ executionResult, policy }) {
         >
           <div className="resource-pids-heading">
             <div>
-              <span>최대 PIDs 개수</span>
+              <span>최대 PID 개수</span>
 
               <strong>
                 {pidsPeak == null ? (
