@@ -1548,7 +1548,7 @@ body,
 
 .cpu-chart-label {
   fill: var(--gray-600);
-  font-size: 25px;
+  font-size: 23px;
 }
 
 /* CPU 그래프 */
@@ -2488,7 +2488,6 @@ body,
 .policy-violation-messages .policy-violation-message {
   margin: 0;
 }
-
 
 .network-control-item {
   position: relative;
