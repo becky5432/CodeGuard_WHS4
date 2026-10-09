@@ -65,3 +65,9 @@ ABI7 이상 Linux 호스트에서 새 이미지와 [정책 문서의 통합 테�
 - PR 코드 재검토: Critical/Important 결함 없음. trace 익명 할당의 독립 inspect 검증 한계와 ABI7 실제 적용 미확인은 유지한다.
 - 이번 Linux 전체 테스트·실제 컨테이너 재검증은 WSL이 상태 조회에도 응답하지 않아 결과를 얻지 못했다. 대기 중인 검증 클라이언트를 중단했으며 통과로 기록하지 않는다. 위의 Linux 및 컨테이너 결과는 동기화 전 수행 기록이다.
 - 네트워크·DNS 옵션의 전달 확인은 Landlock 적용 환경에서 DNS 이름 해석 성공을 보장하는 검증이 아니다. 외부 resolver 설정 파일을 허용 목록에 추가하지 않았다.
+
+## VMware 실제 smoke 검사 수정
+
+사용자가 제공한 VMware Linux 실행 기록에서 실제 smoke가 규칙 적용·읽기 및 작업 파일 검사 후 장치 생성 assertion에서 실패했다. 기존 테스트는 문자 장치 번호0:0에 CAP_MKNOD 제거 후 EPERM을 기대했으나, Linux는 이 번호를 whiteout으로 취급해 해당 capability 검사에서 예외로 처리한다. 테스트를 일반 장치 번호 `makedev(1, 3)`으로 수정하고 sys/sysmacros.h를 포함했다. CAP_MKNOD 제거·EPERM 확인과 부모의 정확한 테스트 경로 정리를 유지한다. [Linux v6.12 커널 코드](https://github.com/torvalds/linux/blob/v6.12/fs/namei.c#L3865)
+
+수정 후 Windows 회귀는 486 passed/78 skipped였다. 로컬 WSL 조회는 응답 시간 초과였으며 수정된 실제 smoke의 Linux 실행 결과는 아직 확인하지 못했다. VMware에서 수정본을 받은 뒤 동일 smoke를 다시 실행해야 한다. 이 변경은 테스트 파일에 한정되며 운영 Landlock 권한과 C 런처는 바꾸지 않는다.

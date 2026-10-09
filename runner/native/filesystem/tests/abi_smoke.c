@@ -8,6 +8,7 @@
 #include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -106,7 +107,9 @@ int main(int argc, char **argv)
         fd = open(file, O_RDONLY); assert(fd >= 0 && close(fd) == 0);
         drop_mknod_capability();
         errno = 0;
-        assert(mknod(charpath, S_IFCHR | 0600, 0) == -1 && errno == EPERM);
+        /* A 0:0 character node is a whiteout and bypasses CAP_MKNOD checks.
+         * Use an ordinary device number to verify the dropped capability. */
+        assert(mknod(charpath, S_IFCHR | 0600, makedev(1, 3)) == -1 && errno == EPERM);
         sock = socket(AF_UNIX, SOCK_STREAM, 0);
         assert(sock >= 0 && strlen(sockpath) < sizeof(address.sun_path));
         strcpy(address.sun_path, sockpath);
