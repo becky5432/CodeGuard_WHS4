@@ -765,13 +765,18 @@ class FilesystemIntegrationTests(unittest.TestCase):
         from app.schemas.runner_schema import RunnerResponse as BackendRunnerResponse
         from app.schemas.execution_schema import ExecutionResultResponse
 
+        request_payload = {
+            'job_id': str(uuid4()), 'language': 'C',
+            'code': '#include <stdio.h>\nint main(void) { FILE *f = fopen("/api_violation", "w"); printf("denied=%d\\n", f == NULL); if (f) fclose(f); return f == NULL ? 0 : 1; }',
+            'stdin': '', 'created_at': datetime.now(timezone.utc).isoformat(),
+            'policy': {
+                'timeout_ms': 3000, 'memory_limit_mb': 128, 'pids_limit': 32,
+                'cpu_bandwidth': 1.0, 'cpu_time_limit_ms': 2000,
+                'output_limit_bytes': 1024 * 1024,
+            },
+        }
         with TestClient(app) as client:
-            response = client.post('/execute', json={
-                'job_id': str(uuid4()), 'language': 'C',
-                'code': '#include <stdio.h>\nint main(void) { FILE *f = fopen("/api_violation", "w"); printf("denied=%d\\n", f == NULL); if (f) fclose(f); return f == NULL ? 0 : 1; }',
-                'stdin': '', 'created_at': datetime.now(timezone.utc).isoformat(),
-                'policy': {'timeout_ms': 3000, 'memory_limit_mb': 128, 'pids_limit': 32, 'cpu_bandwidth': 1.0, 'cpu_time_limit_ms': 2000,},
-            })
+            response = client.post('/execute', json=request_payload)
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()
         self.assertEqual(payload['exit_code'], 0)
@@ -780,7 +785,11 @@ class FilesystemIntegrationTests(unittest.TestCase):
         self.assertIsNone(payload['reason_code'])
         self.assertIn(payload['policy_violations'], ([], ['FILESYSTEM_LIMIT']))
         backend = BackendRunnerResponse.model_validate(payload)
-        result = ExecutionResultResponse.model_validate(backend.model_dump(mode='json'))
+        # Backend lookup combines stored request fields with the Runner result.
+        result = ExecutionResultResponse.model_validate({
+            **request_payload,
+            **backend.model_dump(mode='json'),
+        })
         self.assertEqual([reason.value for reason in result.policy_violations], payload['policy_violations'])
 
     def test_nonzero_exit_is_not_filesystem_limit(self) -> None:

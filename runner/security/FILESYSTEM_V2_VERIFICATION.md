@@ -71,3 +71,15 @@ ABI7 이상 Linux 호스트에서 새 이미지와 [정책 문서의 통합 테�
 사용자가 제공한 VMware Linux 실행 기록에서 실제 smoke가 규칙 적용·읽기 및 작업 파일 검사 후 장치 생성 assertion에서 실패했다. 기존 테스트는 문자 장치 번호0:0에 CAP_MKNOD 제거 후 EPERM을 기대했으나, Linux는 이 번호를 whiteout으로 취급해 해당 capability 검사에서 예외로 처리한다. 테스트를 일반 장치 번호 `makedev(1, 3)`으로 수정하고 sys/sysmacros.h를 포함했다. CAP_MKNOD 제거·EPERM 확인과 부모의 정확한 테스트 경로 정리를 유지한다. [Linux v6.12 커널 코드](https://github.com/torvalds/linux/blob/v6.12/fs/namei.c#L3865)
 
 수정 후 Windows 회귀는 486 passed/78 skipped였다. 로컬 WSL 조회는 응답 시간 초과였으며 수정된 실제 smoke의 Linux 실행 결과는 아직 확인하지 못했다. VMware에서 수정본을 받은 뒤 동일 smoke를 다시 실행해야 한다. 이 변경은 테스트 파일에 한정되며 운영 Landlock 권한과 C 런처는 바꾸지 않는다.
+
+## VMware 실제 적용 결과 및 API 테스트 수정
+
+2026-10-09 사용자가 제공한 VMware Linux/Python 3.12.3 실행 기록을 확인했다. 아래 결과는 사용자의 호스트에서 수행한 증거이며 로컬 Windows에서 실제 컨테이너를 재실행한 결과로 기록하지 않는다.
+
+- `39903a1`을 받은 뒤 실제 커널 smoke: **1 passed, 7 deselected**. 요구 ABI7 이상과 실제 규칙 적용, 허용·거부 및 상속 검사를 통과했다. 출력에 정확한 ABI 숫자는 표시되지 않았다.
+- 새 이미지의 파일시스템·권한 Docker 통합 테스트: **50 passed, 1 failed, 15 subtests passed**. C/C++ 실행, workspace 변경·실행·링크 생성, 외부 읽기·실행·쓰기 차단, 선택 장치, 자식·스레드 상속, 보호된 증거, 시작 승인·APPLIED 및 테스트에 포함된 자원 제한을 확인했다.
+- 유일한 실패는 `test_real_runner_api_filesystem_limit_validates_with_backend`의 마지막 스키마 변환이다. 실제 `/execute` 응답의 HTTP200·exit0·denied=1·SUCCESS 및 Backend RunnerResponse 검증까지 통과했으며, 반환된 위반 목록에는 FILESYSTEM_LIMIT가 있었다.
+- Backend 조회 응답은 저장된 요청 정보와 Runner 결과를 함께 사용한다. 테스트가 Runner 결과만 전달해 language/code/stdin/created_at/policy가 누락됐다. 요청을 보존하고 필수 output_limit_bytes를 명시한 뒤 요청 정보와 검증된 Runner 응답을 합쳐 조회 응답 스키마를 검사하도록 수정했다.
+- 수정 전 동일한 5개 필드 누락 오류를 로컬에서 재현했다. 수정 후 실제 Pydantic 모델과 해당 테스트 메서드의 스키마 부분은 빈 위반 목록 및 FILESYSTEM_LIMIT 목록 모두 통과했다. 이 확인에는 제공된 HTTP 응답을 사용했으며 Docker 실행을 포함하지 않는다. 관련 API·응답 계약 단위 테스트는 **26 passed**, 기존 경고4개였다.
+
+수정된 API 테스트의 VMware 재실행은 아직 남아 있다. TASK_TRACKER_ENABLED=false로 실행한 통합 결과이므로 eBPF task tracker를 활성화한 전체 측정 경로의 검증으로 확대하지 않는다. 로그의 resource_monitor_close_error 경고는 이번 스키마 실패의 원인이 아니며, 이 테스트 수정에서 해당 자원 모니터 코드를 변경하지 않았다.
