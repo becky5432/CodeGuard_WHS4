@@ -71,8 +71,8 @@ CPP_IMAGE=codeguard-cpp:filesystem-workspace-v2 RUNNER_DOCKER_TESTS=1 python -m 
 
 ## 차단과 감지의 범위
 
-Landlock은 접근을 차단한다. 현재 strace 판정은 추적된 변경 요청의 `EROFS` 실패를 사용하며, `EACCES`·`EPERM`을 자동으로 `FILESYSTEM_LIMIT`로 분류하지 않는다. 오류를 처리하는 프로그램은 계속 실행할 수 있다. 자세한 기록 계약은 [filesystem detection](FILESYSTEM_DETECTION.md)을 따른다.
+Landlock은 처리 대상으로 지정한 접근을 차단한다. strace 판정은 추적된 변경 요청의 `EROFS`와, Landlock이 중재하는 경로 변경·쓰기 open이 정책상 쓰기 허용 경로 밖에서 `EACCES`로 실패한 경우를 사용한다. `EPERM`과 `/workspace` 안의 일반 Unix 권한 오류는 자동으로 `FILESYSTEM_LIMIT`로 분류하지 않는다. 오류를 처리하는 프로그램은 계속 실행할 수 있다. 자세한 기록 계약은 [filesystem detection](FILESYSTEM_DETECTION.md)을 따른다.
 
 develop의 응답 계약에 따라 감지한 위반은 `policy_violations`에 기록하며 실행 결과의 `status`와 구분한다. 차단 오류를 처리하고 0으로 종료한 프로그램은 `SUCCESS`와 `policy_violations=["FILESYSTEM_LIMIT"]`를 함께 반환할 수 있다.
 
-파일 실행 권한은 exec 계열을 제어한다. 읽기만 허용한 공유 라이브러리도 실행 가능한 코드로 로딩될 수 있다. 모든 메타데이터 조회·실행 가능한 메모리 매핑·통신을 제어하는 기능은 아니다. 적용 전에 열린 FD를 모두 회수하는 기능도 아니므로 init의 FD 정리를 유지한다. 마운트·DAC·capability·seccomp와 기존 자원 제한은 계속 적용한다.
+파일 실행 권한은 exec 계열을 제어한다. 읽기만 허용한 공유 라이브러리도 실행 가능한 코드로 로딩될 수 있다. Landlock은 이 정책의 파일 내용·경로 구조 변경 권한을 중재하지만 모든 메타데이터 조회·변경, 실행 가능한 메모리 매핑·통신을 제어하는 기능은 아니다. Linux Landlock은 현재 `chmod`, `chown`, `setxattr`, `utime` 계열 자체를 제한하지 않는다. ABI7 네이티브 측정에서 정책 밖의 사용자 소유 파일 `chmod`, `setxattr`, `utimensat`는 성공했다. 따라서 해당 메타데이터 변경의 차단을 Landlock만으로 보장하지 않는다. 적용 전에 열린 FD를 모두 회수하는 기능도 아니므로 init의 FD 정리를 유지한다. 마운트·DAC·capability·seccomp와 기존 자원 제한은 계속 적용한다.

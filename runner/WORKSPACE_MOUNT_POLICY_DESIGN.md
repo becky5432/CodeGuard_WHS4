@@ -37,6 +37,7 @@
 - `TMPDIR`, `TMP`, `TEMP`는 `/workspace`이다. `/tmp`·`/var/tmp`·`/dev/shm`에는 Landlock 허용 규칙을 두지 않는다.
 - 외부 로더는 읽기·실행, manifest의 공유 라이브러리 4개와 선택적 캐시는 읽기만 허용한다.
 - 개별 장치의 서버 선택 시 권한은 [파일시스템 정책](security/FILESYSTEM_POLICY.md)을 따른다. 허용 목록 밖의 처리 대상 접근은 거부한다.
+- Landlock의 처리 대상은 파일 내용·경로 구조 작업이다. `chmod`·`chown`·`setxattr`·`utime` 같은 메타데이터 변경은 Landlock 권한에 포함되지 않으며 RootFS RO, DAC, capability에 따라 별도로 제한된다.
 - 내부 증거 볼륨은 사용자 허용 목록에 포함하지 않는다. 저장 공간·inode 한도 및 추가 라이브러리·장치 지원은 별도 범위다.
 
 ## 완료 기준

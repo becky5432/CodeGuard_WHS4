@@ -27,7 +27,7 @@ from runner.metrics.cpu_usage_sampler import CpuUsageSampler
 from runner.metrics.memory_usage_sampler import MemoryUsageSampler
 from runner.models.result import CpuUsageSample, MemoryUsageSample
 from runner.pipeline.workspace import VolumeWorkspace, execution_mounts
-from runner.policies.filesystem import FilesystemPolicy, validate_filesystem_policy
+from runner.policies.filesystem import FsProfile, FilesystemPolicy, validate_filesystem_policy
 from runner.security.filesystem_startup import (
     POLICY_PATH, STATUS_PATH, build_policy_archive,
     wait_for_filesystem_prepared, verify_filesystem_applied,
@@ -351,6 +351,7 @@ def execute_program(
     task_tracker: TaskTrackerClient | None = None,
     cpu_time_limit_ms: int | None = None,
     filesystem_policy_id: str | None = None,
+    filesystem_policy: FilesystemPolicy | None = None,
 ) -> ExecutionResult:
     """제한을 감시하며 실행 컨테이너의 종료 정보와 출력을 수집한다."""
 
@@ -359,6 +360,14 @@ def execute_program(
         or any(c not in "0123456789abcdef" for c in filesystem_policy_id)
     ):
         raise ContainerExecutionError("파일시스템 정책 식별값을 확인하지 못했습니다.")
+    if filesystem_policy is not None:
+        validate_filesystem_policy(filesystem_policy)
+        if filesystem_policy.policy_id != filesystem_policy_id:
+            raise ContainerExecutionError("파일시스템 정책 식별값이 일치하지 않습니다.")
+    allowed_write_paths = frozenset({"/workspace"} | {
+        rule.path for rule in filesystem_policy.rules
+        if rule.profile == FsProfile.DEVICE_RW
+    }) if filesystem_policy is not None else frozenset({"/workspace"})
 
     operation_start_ns = _monotonic_ns()
     gate_start_ns: int | None = None
@@ -1043,6 +1052,7 @@ def execute_program(
                 filesystem_violation = collect_filesystem_trace(
                     container,
                     interrupted=final_policy_kill or oom_killed or pids_limit_exceeded,
+                    allowed_write_paths=allowed_write_paths,
                 )
             except Exception as exc:
                 system_error = "파일시스템 추적 증거 수집 또는 분석에 실패했습니다."

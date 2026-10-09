@@ -55,6 +55,7 @@ int main(int argc, char **argv)
     char root[] = "/tmp/cg-landlock-XXXXXX", work[4096], first[4096], second[4096];
     char allowed[4096], denied[4096], file[4096], renamed[4096], linked[4096];
     char fifo[4096], sockpath[4096], executable[4096], charpath[4096];
+    char escape[4096], escaped_file[4096], outside_sock[4096];
     struct landlock_ruleset_attr attr = {.handled_access_fs = CG_FS_HANDLED};
     int rules, status;
     pid_t child;
@@ -73,6 +74,9 @@ int main(int argc, char **argv)
     snprintf(sockpath, sizeof(sockpath), "%s/work/socket", root);
     snprintf(charpath, sizeof(charpath), "%s/work/device", root);
     snprintf(executable, sizeof(executable), "%s/work/exe", root);
+    snprintf(escape, sizeof(escape), "%s/work/outside", root);
+    snprintf(escaped_file, sizeof(escaped_file), "%s/work/outside/escaped", root);
+    snprintf(outside_sock, sizeof(outside_sock), "%s/outside-socket", root);
     snprintf(allowed, sizeof(allowed), "%s/allowed", root);
     snprintf(denied, sizeof(denied), "%s/denied", root);
     assert(mkdir(work, 0700) == 0 && mkdir(first, 0700) == 0 && mkdir(second, 0700) == 0);
@@ -104,6 +108,9 @@ int main(int argc, char **argv)
         assert(rename(file, renamed) == 0 && link(renamed, linked) == 0);
         assert(rename(renamed, denied) == -1 && link(allowed, file) == -1);
         assert(symlink(allowed, file) == 0 && mkfifo(fifo, 0600) == 0);
+        assert(symlink(root, escape) == 0);
+        errno = 0;
+        assert(open(escaped_file, O_WRONLY | O_CREAT, 0600) == -1 && errno == EACCES);
         fd = open(file, O_RDONLY); assert(fd >= 0 && close(fd) == 0);
         drop_mknod_capability();
         errno = 0;
@@ -114,6 +121,12 @@ int main(int argc, char **argv)
         assert(sock >= 0 && strlen(sockpath) < sizeof(address.sun_path));
         strcpy(address.sun_path, sockpath);
         assert(bind(sock, (struct sockaddr *)&address, sizeof(address)) == 0);
+        assert(close(sock) == 0);
+        sock = socket(AF_UNIX, SOCK_STREAM, 0);
+        assert(sock >= 0 && strlen(outside_sock) < sizeof(address.sun_path));
+        strcpy(address.sun_path, outside_sock);
+        errno = 0;
+        assert(bind(sock, (struct sockaddr *)&address, sizeof(address)) == -1 && errno == EACCES);
         assert(close(sock) == 0);
         nested = fork();
         assert(nested >= 0);
@@ -136,9 +149,10 @@ int main(int argc, char **argv)
     /* Parent remains unrestricted and cleans only exact test-owned paths. */
     (void)unlink(file); (void)unlink(renamed); (void)unlink(linked);
     (void)unlink(fifo); (void)unlink(sockpath); (void)unlink(charpath);
+    (void)unlink(escape); (void)unlink(outside_sock);
     assert(unlink(executable) == 0 && unlink(allowed) == 0 && unlink(denied) == 0);
     assert(rmdir(first) == 0 && rmdir(second) == 0 && rmdir(work) == 0 && rmdir(root) == 0);
     assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
-    printf("PASS actual Landlock ABI=%d: reads/work/special/exec/link/rename/inheritance\n", abi);
+    printf("PASS actual Landlock ABI=%d: reads/work/special/exec/link/rename/symlink/bind/inheritance\n", abi);
     return 0;
 }

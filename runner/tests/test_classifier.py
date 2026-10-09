@@ -6,6 +6,33 @@ from runner.pipeline.classifier import classify_execution, classify_policy_viola
 
 
 class ClassifierTests(unittest.TestCase):
+    def test_execution_status_and_policy_violation_matrix(self) -> None:
+        cases = (
+            (0, {}, RunnerStatus.SUCCESS, None, []),
+            (0, {"filesystem_limit_exceeded": True}, RunnerStatus.SUCCESS, None,
+             [RunnerReasonCode.FILESYSTEM_LIMIT]),
+            (0, {"network_blocked": True}, RunnerStatus.SUCCESS, None,
+             [RunnerReasonCode.NETWORK_BLOCKED]),
+            (0, {"filesystem_limit_exceeded": True, "network_blocked": True},
+             RunnerStatus.SUCCESS, None,
+             [RunnerReasonCode.NETWORK_BLOCKED, RunnerReasonCode.FILESYSTEM_LIMIT]),
+            (None, {"timed_out": True, "filesystem_limit_exceeded": True},
+             RunnerStatus.BLOCKED, RunnerReasonCode.TIME_LIMIT,
+             [RunnerReasonCode.FILESYSTEM_LIMIT]),
+            (137, {"oom_killed": True, "filesystem_limit_exceeded": True},
+             RunnerStatus.BLOCKED, RunnerReasonCode.MEMORY_LIMIT,
+             [RunnerReasonCode.FILESYSTEM_LIMIT]),
+            (1, {"filesystem_limit_exceeded": True}, RunnerStatus.ERROR,
+             RunnerReasonCode.RUNTIME_ERROR, [RunnerReasonCode.FILESYSTEM_LIMIT]),
+        )
+        for exit_code, evidence, status, reason, violations in cases:
+            with self.subTest(exit_code=exit_code, evidence=evidence):
+                result = ExecutionResult(exit_code, "", "", **evidence)
+                classification = classify_execution(result)
+                self.assertEqual((classification.status, classification.reason_code),
+                                 (status, reason))
+                self.assertEqual(classify_policy_violations(result), violations)
+
     def test_exit_zero_is_success(self) -> None:
         result = classify_execution(ExecutionResult(0, "ok", ""))
 

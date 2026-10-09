@@ -2,6 +2,7 @@
 
 import ast
 import io
+import posixpath
 import re
 import tarfile
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ MUTATION_IOCTLS = frozenset({
 MUTATION_SYSCALLS = frozenset({
     "creat", "unlink", "unlinkat", "rename", "renameat", "renameat2",
     "mkdir", "mkdirat", "rmdir", "link", "linkat", "symlink", "symlinkat",
+    "bind",  # pathname AF_UNIX sockets create filesystem entries
     "truncate", "ftruncate", "mknod", "mknodat",
     *RAW_WRITE_SYSCALLS.split(","), "fallocate",
     "chmod", "fchmod", "fchmodat", "fchmodat2",
@@ -28,10 +30,18 @@ MUTATION_SYSCALLS = frozenset({
     "setxattr", "lsetxattr", "fsetxattr",
     "removexattr", "lremovexattr", "fremovexattr",
 })
+# Landlock mediates these path operations. Other mutation calls (notably
+# chmod/chown and writes to an already-open fd) can fail with ordinary EACCES.
+LANDLOCK_PATH_MUTATIONS = frozenset({
+    "creat", "unlink", "unlinkat", "rename", "renameat", "renameat2",
+    "mkdir", "mkdirat", "rmdir", "link", "linkat", "symlink", "symlinkat",
+    "truncate", "mknod", "mknodat", "bind",
+})
 # User-installed seccomp can fabricate errno; io_uring submits filesystem work
 # without ordinary write syscall stops. Successful use invalidates this detector.
 TRACE_SYSCALLS = ",".join([
-    "execve", "seccomp", "prctl", "io_uring_setup", "clone", "clone3", "ioctl",
+    "execve", "seccomp", "prctl", "io_uring_setup", "clone", "clone3",
+    "fork", "vfork", "chdir", "fchdir", "ioctl",
     *OPEN_FLAG_ARGUMENT, *sorted(MUTATION_SYSCALLS),
 ])
 _PREFIX = re.compile(r"^(?:(\d+)\s+|\[pid\s+(\d+)\]\s+)?(.*)$")
@@ -104,6 +114,16 @@ def _calls(trace: str):
 
 
 def _path(syscall: str, args: list[str]) -> str | None:
+    if syscall == "bind":
+        if len(args) < 2 or "sa_family=AF_UNIX" not in args[1]:
+            return None
+        pathname = re.search(r'\bsun_path=("(?:\\.|[^"\\])*")', args[1])
+        if pathname is None:
+            return None
+        try:
+            return ast.literal_eval(pathname[1])
+        except (ValueError, SyntaxError):
+            return None
     # For *at calls the first argument is a directory fd. ftruncate has only an fd.
     index = 1 if syscall in {
         "openat", "openat2", "unlinkat", "renameat", "renameat2", "mkdirat",
@@ -126,7 +146,82 @@ def _path(syscall: str, args: list[str]) -> str | None:
     return fd_path[1] if fd_path else None
 
 
-def analyze_filesystem_trace(trace: str) -> FilesystemViolation:
+def _mutation_paths(syscall: str, args: list[str]) -> list[tuple[str, str | None]]:
+    """Return path arguments and their directory-fd arguments, if any."""
+    positions = {
+        "bind": ((1, None),),
+        "rename": ((0, None), (1, None)),
+        "link": ((0, None), (1, None)),
+        "symlink": ((1, None),),
+        "renameat": ((1, 0), (3, 2)),
+        "renameat2": ((1, 0), (3, 2)),
+        "linkat": ((1, 0), (3, 2)),
+        "symlinkat": ((2, 1),),
+    }.get(syscall)
+    if positions is None:
+        positions = ((1, 0),) if syscall in {
+            "openat", "openat2", "unlinkat", "mkdirat", "mknodat",
+        } else ((0, None),)
+    if syscall == "bind":
+        path = _path(syscall, args)
+        return [(repr(path), None)] if path and path.startswith("/") else []
+    return [(args[i], args[fd] if fd is not None and fd < len(args) else None)
+            for i, fd in positions if i < len(args)]
+
+
+def _absolute_path(
+    value: str, dirfd: str | None, cwd: str | None,
+    symlinks: dict[str, str] | None = None,
+) -> str | None:
+    try:
+        path = ast.literal_eval(value) if value.startswith(('"', "'")) else None
+    except (ValueError, SyntaxError):
+        return None
+    if path is None:
+        fd_path = re.fullmatch(r"\d+<(/[^>]+)>", value)
+        path = fd_path[1] if fd_path else None
+    if not isinstance(path, str):
+        return None
+    if path.startswith("/"):
+        combined = path
+    else:
+        if dirfd is None or re.fullmatch(r"AT_FDCWD(?:<[^>]+>)?", dirfd):
+            base = cwd
+        else:
+            match = re.fullmatch(r"\d+<(/[^>]+)>", dirfd)
+            base = match[1] if match else None
+        if not base:
+            return None
+        combined = posixpath.join(base, path)
+    links = symlinks or {}
+    for _ in range(41):
+        parts = combined.split("/")
+        resolved: list[str] = []
+        for index, part in enumerate(parts):
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                if resolved:
+                    resolved.pop()
+                continue
+            resolved.append(part)
+            current = "/" + "/".join(resolved)
+            if current in links:
+                target = links[current]
+                combined = posixpath.join(
+                    target if target.startswith("/") else
+                    posixpath.join(posixpath.dirname(current), target),
+                    *parts[index + 1:],
+                )
+                break
+        else:
+            return "/" + "/".join(resolved)
+    return None  # A loop or excessive symlink chain is not reliable evidence.
+
+
+def analyze_filesystem_trace(
+    trace: str, *, allowed_write_paths: frozenset[str] = frozenset({"/workspace"}),
+) -> FilesystemViolation:
     calls = list(_calls(trace))
     for _, syscall, args, result, _ in calls:
         seccomp_install = (
@@ -156,8 +251,31 @@ def analyze_filesystem_trace(trace: str) -> FilesystemViolation:
             and (result is None or result >= 0)
         ):
             raise ValueError("user syscall filtering, asynchronous IO or untraced cloning invalidates filesystem evidence")
-    for _, syscall, args, result, errno in calls:
-        if result != -1 or errno != "EROFS":
+    cwd_by_pid: dict[str, str | None] = {}
+    symlinks: dict[str, str] = {}
+    for pid, syscall, args, result, errno in calls:
+        cwd = cwd_by_pid.setdefault(pid, "/workspace")
+        if syscall in {"chdir", "fchdir"} and result == 0 and args:
+            cwd_by_pid[pid] = _absolute_path(args[0], None, cwd, symlinks)
+        if syscall in {"clone", "clone3", "fork", "vfork"} and result is not None and result > 0:
+            cwd_by_pid.setdefault(str(result), cwd)
+        if syscall in {"rename", "renameat", "renameat2"} and result == 0:
+            symlinks.clear()  # A renamed directory may change any observed alias.
+        if syscall in {"unlink", "unlinkat"} and result == 0:
+            for value, dirfd in _mutation_paths(syscall, args):
+                removed = _absolute_path(value, dirfd, cwd)
+                if removed:
+                    symlinks.pop(removed, None)
+        if syscall in {"symlink", "symlinkat"} and result == 0 and args:
+            paths = _mutation_paths(syscall, args)
+            created = _absolute_path(*paths[0], cwd) if paths else None
+            try:
+                target = ast.literal_eval(args[0])
+            except (ValueError, SyntaxError):
+                target = None
+            if created and isinstance(target, str):
+                symlinks[created] = target
+        if result != -1 or errno not in {"EROFS", "EACCES"}:
             continue
         if syscall in OPEN_FLAG_ARGUMENT:
             index = OPEN_FLAG_ARGUMENT[syscall]
@@ -174,11 +292,31 @@ def analyze_filesystem_trace(trace: str) -> FilesystemViolation:
                 continue
         elif syscall not in MUTATION_SYSCALLS:
             continue
-        return FilesystemViolation(True, syscall, _path(syscall, args), errno)
+        path = _path(syscall, args)
+        if syscall == "bind" and path is None:
+            continue
+        if errno == "EACCES":
+            if syscall not in LANDLOCK_PATH_MUTATIONS and syscall not in OPEN_FLAG_ARGUMENT:
+                continue
+            # The verified v2 policy gives write access to /workspace and may
+            # give it to a selected device. Unix permission failures in those
+            # locations are not filesystem policy evidence.
+            targets = [_absolute_path(value, dirfd, cwd, symlinks)
+                       for value, dirfd in _mutation_paths(syscall, args)]
+            path = next((target for target in targets if target and
+                         not any(target == allowed or
+                                 (allowed == "/workspace" and target.startswith(allowed + "/"))
+                                 for allowed in allowed_write_paths)), None)
+            if path is None:
+                continue
+        return FilesystemViolation(True, syscall, path, errno)
     return FilesystemViolation()
 
 
-def collect_filesystem_trace(container, *, interrupted: bool = False) -> FilesystemViolation:
+def collect_filesystem_trace(
+    container, *, interrupted: bool = False,
+    allowed_write_paths: frozenset[str] = frozenset({"/workspace"}),
+) -> FilesystemViolation:
     """Read a stopped container's dedicated volume with a bounded archive size.
 
     Missing/truncated evidence or a tracer startup failure raises an internal error.
@@ -221,4 +359,4 @@ def collect_filesystem_trace(container, *, interrupted: bool = False) -> Filesys
                 terminated.add(prefix[1] or prefix[2] or "main")
         if not {pid for pid, *_ in calls}.issubset(terminated):
             raise ValueError("filesystem trace is incomplete")
-    return analyze_filesystem_trace(trace)
+    return analyze_filesystem_trace(trace, allowed_write_paths=allowed_write_paths)

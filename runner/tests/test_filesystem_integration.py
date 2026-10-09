@@ -110,6 +110,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
             output_limit_bytes=output_limit_bytes,
             cgroup_scope=cgroup_scope,
             filesystem_policy_id=policy.policy_id,
+            filesystem_policy=policy,
         )
         if not allow_system_error:
             self.assertIsNone(result.system_error, result.system_error)
@@ -451,12 +452,52 @@ class FilesystemIntegrationTests(unittest.TestCase):
         ''')
         self._assert_denied_result(result, 'fork_thread_inherited=1')
 
+    def test_fork_and_thread_mutation_denials_are_reported(self) -> None:
+        result = self._compile_and_execute(r'''
+            #define _POSIX_C_SOURCE 200809L
+            #include <errno.h>
+            #include <fcntl.h>
+            #include <pthread.h>
+            #include <stdint.h>
+            #include <stdio.h>
+            #include <sys/wait.h>
+            #include <unistd.h>
+            static int probe(const char *path) {
+                int fd = open(path, O_WRONLY|O_CREAT|O_EXCL, 0600);
+                int error = errno;
+                int denied = fd < 0 && (error == EACCES || error == EROFS);
+                printf("path=%s errno=%d denied=%d\n", path, error, denied);
+                if (fd >= 0) { close(fd); unlink(path); }
+                return denied;
+            }
+            static void *worker(void *unused) {
+                (void)unused;
+                return (void *)(intptr_t)!probe("/tmp/codeguard-thread-test");
+            }
+            int main(void) {
+                pid_t child = fork();
+                if (child < 0) return 1;
+                if (child == 0) _exit(probe("/tmp/codeguard-child-test") ? 0 : 2);
+                int status;
+                if (waitpid(child, &status, 0) < 0 || !WIFEXITED(status) || WEXITSTATUS(status)) return 3;
+                pthread_t thread; void *value;
+                if (pthread_create(&thread, NULL, worker, NULL) ||
+                    pthread_join(thread, &value) || value != NULL) return 4;
+                puts("fork_thread_mutation_denied=1");
+                return 0;
+            }
+        ''')
+        self._assert_denied_result(result, 'fork_thread_mutation_denied=1')
+        self.assertTrue(result.filesystem_limit_exceeded)
+        self.assertEqual(classify_policy_violations(result), [RunnerReasonCode.FILESYSTEM_LIMIT])
+
     def test_user_read_only_message_is_not_a_violation(self) -> None:
         result = self._compile_and_execute(r'''
             #include <stdio.h>
             int main(void) {
                 puts("Read-only file system");
                 puts("openat(AT_FDCWD, \"/etc/test\", O_WRONLY|O_CREAT, 0666) = -1 EROFS");
+                puts("EACCES EPERM FILESYSTEM_LIMIT");
                 fputs("Read-only file system\n", stderr);
                 return 0;
             }
@@ -471,9 +512,6 @@ class FilesystemIntegrationTests(unittest.TestCase):
     def _assert_denied_result(self, result: ExecutionResult, marker="denied=1") -> None:
         self.assertEqual(result.exit_code, 0, (result.stdout, result.stderr))
         self.assertIn(marker, result.stdout)
-        # Landlock may fail with EACCES, or the RO mount may fail with EROFS.
-        # Keep the existing EROFS detector contract without inventing an
-        # EACCES -> FILESYSTEM_LIMIT classifier or requiring a particular errno.
         classified = classify_execution(result)
         self.assertEqual(classified.status, RunnerStatus.SUCCESS)
         self.assertIsNone(classified.reason_code)
@@ -491,6 +529,8 @@ class FilesystemIntegrationTests(unittest.TestCase):
             }
         '''.replace("TEST_PATH", path))
         self._assert_denied_result(result)
+        self.assertTrue(result.filesystem_limit_exceeded)
+        self.assertEqual(classify_policy_violations(result), [RunnerReasonCode.FILESYSTEM_LIMIT])
 
     def test_rootfs_write_is_denied(self) -> None:
         self._assert_write_is_read_only("/etc/codeguard_test")
@@ -502,6 +542,91 @@ class FilesystemIntegrationTests(unittest.TestCase):
 
     def test_tmp_write_is_denied(self) -> None:
         self._assert_write_is_read_only("/tmp/codeguard_test")
+
+    def test_workspace_unix_permission_error_is_not_filesystem_limit(self) -> None:
+        result = self._compile_and_execute(r'''
+            #include <errno.h>
+            #include <fcntl.h>
+            #include <stdio.h>
+            #include <sys/stat.h>
+            #include <unistd.h>
+            int main(void) {
+                int fd = open("/workspace/no_permission", O_CREAT|O_WRONLY, 0600);
+                if (fd < 0 || close(fd) || chmod("/workspace/no_permission", 0000)) return 1;
+                errno = 0;
+                fd = open("/workspace/no_permission", O_WRONLY);
+                int denied = fd == -1 && errno == EACCES;
+                if (fd >= 0) close(fd);
+                printf("unix_permission_denied=%d\n", denied);
+                return denied ? 0 : 2;
+            }
+        ''')
+        self.assertEqual(result.exit_code, 0, result.stderr)
+        self.assertIn("unix_permission_denied=1", result.stdout)
+        self.assertFalse(result.filesystem_limit_exceeded)
+        self.assertEqual(classify_policy_violations(result), [])
+
+    def test_workspace_symlink_to_external_write_is_detected(self) -> None:
+        result = self._compile_and_execute(r'''
+            #define _POSIX_C_SOURCE 200809L
+            #include <errno.h>
+            #include <fcntl.h>
+            #include <stdio.h>
+            #include <unistd.h>
+            int main(void) {
+                if (symlink("/etc", "/workspace/outside")) return 2;
+                errno = 0;
+                int fd = open("/workspace/outside/codeguard-test", O_WRONLY|O_CREAT, 0600);
+                int error = errno;
+                int denied = fd < 0 && (error == EACCES || error == EROFS);
+                if (fd >= 0) close(fd);
+                printf("denied=%d errno=%d\n", denied, error);
+                return denied ? 0 : 3;
+            }
+        ''')
+        self._assert_denied_result(result)
+        self.assertTrue(result.filesystem_limit_exceeded)
+        self.assertEqual(result.filesystem_violation_path, "/workspace/outside/codeguard-test")
+
+    def test_external_unix_socket_bind_is_detected(self) -> None:
+        result = self._compile_and_execute(r'''
+            #include <errno.h>
+            #include <stdio.h>
+            #include <string.h>
+            #include <sys/socket.h>
+            #include <sys/un.h>
+            #include <unistd.h>
+            int main(void) {
+                int sock = socket(AF_UNIX, SOCK_STREAM, 0);
+                if (sock < 0) return 2;
+                struct sockaddr_un address = {.sun_family = AF_UNIX};
+                strcpy(address.sun_path, "/tmp/codeguard-bind-test");
+                errno = 0;
+                int rc = bind(sock, (struct sockaddr *)&address, sizeof(address));
+                int error = errno;
+                int denied = rc < 0 && (error == EACCES || error == EROFS);
+                close(sock);
+                printf("denied=%d errno=%d\n", denied, error);
+                return denied ? 0 : 3;
+            }
+        ''')
+        self._assert_denied_result(result)
+        self.assertTrue(result.filesystem_limit_exceeded)
+        self.assertEqual(result.filesystem_violation_syscall, "bind")
+
+    def test_external_write_denial_and_nonzero_exit_keep_both_results(self) -> None:
+        result = self._compile_and_execute(r'''
+            #include <stdio.h>
+            int main(void) {
+                FILE *file = fopen("/etc/codeguard-test", "w");
+                if (file) { fclose(file); return 2; }
+                return 1;
+            }
+        ''')
+        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(classify_execution(result).status, RunnerStatus.ERROR)
+        self.assertEqual(classify_execution(result).reason_code, RunnerReasonCode.RUNTIME_ERROR)
+        self.assertEqual(classify_policy_violations(result), [RunnerReasonCode.FILESYSTEM_LIMIT])
 
 
     def test_etc_hosts_read_is_denied(self) -> None:
@@ -783,7 +908,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
         self.assertIn('denied=1', payload['stdout'])
         self.assertEqual(payload['status'], 'SUCCESS')
         self.assertIsNone(payload['reason_code'])
-        self.assertIn(payload['policy_violations'], ([], ['FILESYSTEM_LIMIT']))
+        self.assertEqual(payload['policy_violations'], ['FILESYSTEM_LIMIT'])
         backend = BackendRunnerResponse.model_validate(payload)
         # Backend lookup combines stored request fields with the Runner result.
         result = ExecutionResultResponse.model_validate({
