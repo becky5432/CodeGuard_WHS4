@@ -1,98 +1,78 @@
-# 경로별 파일시스템 정책
+# 파일 경로 접근 정책 v2
 
-## 적용 범위
+## 작업 영역과 외부 허용 목록
 
-Runner가 선택한 Linux amd64 이미지의 C/C++ 제출 프로그램에 적용한다. 실행 RootFS는 RO이며, Job마다 독립적인 app/input/work Volume을 만든다. 컴파일 컨테이너는 app Volume을 `/workspace` RW로 사용하고, 종료 후 실행 컨테이너가 같은 Volume을 `/workspace/app` RO로 사용한다. 재컴파일하거나 실행 파일을 복사하지 않는다.
+준비·컴파일·실행 컨테이너가 실행별 단일 Job 볼륨을 `/workspace` RW로 사용한다. 컴파일·실행 컨테이너는 분리하며, 사용자 Landlock 정책은 실행 시작 전에 init이 적용한다. 기존 app/input/work 세 영역 구성은 사용하지 않는다.
 
-| 대상 | 실행 단계의 허용 작업 |
+| 대상 | 사용자 프로그램의 허용 작업 |
 | --- | --- |
-| `/workspace/app/main` | 읽기·파일 실행 |
-| 실제 제공한 소스 및 `/workspace/input/stdin` | 읽기 |
-| `/workspace/app`, `/workspace/input` | 디렉터리 목록 조회 |
-| `/workspace/work` 하위 | 일반 파일·디렉터리 생성·읽기·쓰기·수정·삭제·내부 이름 변경·이동 |
-| 검증된 동적 로더 | 읽기·파일 실행 |
-| 이미지 프로파일에 등록한 런타임·캐시 | 읽기·로딩 |
-| `/proc`, `/sys`, `/dev`(포함 `/dev/null`), 내부 운영 경로, 기타 외부 경로 | 위 정책이 처리하는 파일 작업 기본 거부 |
+| `/workspace` 및 하위 경로 | 읽기·목록·쓰기·잘라내기·생성·삭제·이름 변경·내부 링크·파일 실행 |
+| 검증된 외부 동적 로더 | 읽기·파일 실행 |
+| manifest에서 검증한 공유 라이브러리 4개 | 읽기·동적 로딩 |
+| `/etc/ld.so.cache` | manifest에 포함된 경우 읽기 |
+| 서버가 선택한 `/dev/null` | 장치 데이터 읽기·쓰기 |
+| 서버가 선택한 `/dev/urandom`, `/dev/zero`, `/dev/random` | 장치 데이터 읽기 |
+| 허용 목록 밖의 경로 | Landlock이 처리하도록 지정한 접근 기본 거부 |
 
-파일 작업의 기본 상대경로는 `/workspace/work`이다. 입력이 없어도 빈 `stdin` 파일을 만들고 FD 0에 연결한다. 기존 FD 1·2를 통한 출력은 유지한다.
+`/workspace/main`, 소스 및 `/workspace/stdin`은 같은 계층 권한을 받는다. main만 실행하도록 제한하지 않으며, 소스·입력을 실행 중 변경·삭제·교체할 수 있다. 심볼릭 링크·FIFO·경로형 Unix 소켓·장치 파일 생성에도 workspace의 생성 권한을 부여한다. capability 추가는 없으므로 문자·블록 장치 생성은 Linux의 별도 권한 조건을 만족해야 한다. 외부 대상으로 연결되는 링크를 만들 수 있어도 그 대상 접근은 허용 목록을 따른다.
 
-### 작업 영역 소유권 유지
+## 볼륨과 임시 파일
 
-준비 helper가 세 Volume의 루트 소유자를 `10001:10001`로 설정한다. app/input은 `0755`, work는 `0700`이다. 실행 단계의 app/input RO와 work RW 및 Landlock 규칙은 그대로 유지한다. RW 마운트나 Landlock 허용은 Linux 파일 권한을 추가로 부여하지 않는다.
+Job 볼륨 루트는 UID/GID10001:10001, 모드0700이며 소스·stdin은 해당 사용자 소유0600이다. Job 마운트는 `no_copy=True`로 준비된 소유권을 유지한다. 컴파일 산출물의 일반 파일·ELF·소유권·실행 권한 검증도 유지한다.
 
-준비·실행 단계의 세 Job Volume 마운트에 Docker SDK `no_copy=True` (`VolumeOptions.NoCopy`)를 지정한다. work는 준비 후에도 비어 있으므로, 재연결 시 기본 이미지 초기 복사가 준비한 Volume 루트의 소유권·모드에 개입하지 않도록 한다. 익명 내부 기록 Volume의 기존 초기화와 컴파일 단계의 app Volume 경로는 변경하지 않는다. [Docker Volume 초기 복사와 volume-nocopy](https://docs.docker.com/engine/storage/volumes/)
+실행 RootFS는 RO이다. 명시적 실행 마운트는 Job RW `/workspace`와 별도 익명 RW `/run/codeguard-trace` 두 개이다. 정책·상태·strace는 root가 기록하며 사용자 허용 목록에 넣지 않는다. 추가 마운트·tmpfs·중복 경로·다른 Job 볼륨·잘못된 RW 설정은 거부한다.
 
-VM에서 확인한 실패는 사용자 `10001:10001`이 작업 영역을 `root:root / 0755`로 보아 `fopen`이 `Permission denied`를 반환한 사례다. 이 변경의 실제 해결 여부는 같은 VM에서 아래 회귀 테스트로 확인해야 한다. 호스트에 `/workspace`를 만들거나 `chmod 777`·사용자 root 실행으로 우회하지 않는다.
+`TMPDIR`, `TMP`, `TEMP`는 `/workspace`이다. `/tmp`·`/var/tmp`·`/dev/shm`에는 허용 규칙을 두지 않는다. `/tmp` 하드코딩이나 POSIX 공유 메모리 사용까지 지원하는 구성은 아니다. Docker의 별도 마운트가 RW여도 Landlock 허용 규칙을 대체하지 않는다.
 
-```bash
-# 업데이트한 PR 브랜치 및 프로젝트 가상환경에서 실행
-EXECUTION_NETWORK=none CPP_IMAGE=codeguard-cpp:dev RUNNER_DOCKER_TESTS=1 \
-  python -m pytest \
-  runner/tests/test_filesystem_integration.py::FilesystemIntegrationTests::test_relative_work_file_and_directory_lifecycle \
-  runner/tests/test_filesystem_integration.py::FilesystemIntegrationTests::test_cross_boundary_rename_and_hardlink_are_denied \
-  -vv -s -x
-```
+## 선택적 장치 설정
 
-작업 영역 회귀 테스트는 실행 사용자와 디렉터리 소유자가 `10001:10001`, 모드가 `0700`인지 확인한 뒤 파일 생성·읽기·수정·삭제·내부 이름 변경을 검증한다. 생성 실패 시 실제 오류를 출력한다. 통합 테스트의 네트워크 구성 검사는 Runner 설정값과 비교하며, 위 명령은 테스트 프로세스에서만 `none`을 지정한다.
-
-## 이미지와 정책 준비
-
-이미지 빌드 스크립트 `runner/container/cpp/build-filesystem-manifest.py`가 고정된 신뢰 C/C++ 예제의 동적 로더·런타임 의존성을 확인하고 `/usr/local/share/codeguard/filesystem-runtime.json`을 생성한다. 사용자 제출 실행 파일에 `ldd`를 실행하지 않는다. 런타임 디렉터리 전체를 허용하지 않는다.
-
-Runner는 설정된 이미지 태그를 Job 시작 시 불변 이미지 ID로 한 번 해석한다. 준비·컴파일·실행에 같은 ID를 사용한다. 준비 helper에서 읽은 보호된 manifest를 해당 ID에 결합하고, 실제 제공한 소스·입력 및 작업 영역 규칙과 함께 TSV 정책을 만든다. 임의 경로·프로파일을 사용자 요청에 추가하지 않는다.
-
-정책은 `/run/codeguard-trace/filesystem.policy`에 root 소유 0400으로 전달한다. 상태 파일은 root 소유 0600이다. 내부 기록용 Volume은 RW이지만 사용자 허용 규칙에 포함하지 않는다.
-
-## 시작 순서
-
-1. 신뢰된 root 시작 주체가 권한 증거 FD 3, 정책 읽기 FD 4, 적용 상태 FD 5를 열고 기존 strace를 실행한다.
-2. init이 인자와 내부 FD를 확인한 뒤 기존 UID/GID/capability/NNP 검증을 먼저 수행한다. PASS/FAIL 증거를 기록·동기화하고 권한 증거 FD를 닫는다. 검증 실패 시 입력 연결·work 진입·Landlock 준비·시작 승인 없이 종료한다. 검증에 통과한 경우에만 입력 연결과 work 기준 경로 설정을 수행한다.
-3. 별도 C 모듈이 TSV를 파싱하고 ABI와 각 객체를 검사하여 ruleset을 준비한다. init이 `PREPARED`를 기록한다.
-4. Runner가 보호된 `PREPARED`와 정책 ID를 확인하고 기존 Task·자원 감시를 준비한 뒤 `start.ready`를 만든다.
-5. init이 Landlock을 실제 적용하고 `APPLIED`를 기록한다. 내부 FD를 닫고 `/workspace/app/main`으로 exec한다.
-6. Runner는 종료 후에도 일치하는 `PREPARED → APPLIED` 증거를 확인한다. 초기화·적용·필수 기록 실패 시 사용자 프로그램을 실행하지 않으며, 공개 응답은 기존 내부 오류 경로를 사용한다.
-
-Landlock ABI 7 이상이 필요하다. 지원하지 않는 환경에서 제한 없이 실행하는 fallback은 없다. 신뢰된 strace·Runner에는 사용자 Landlock을 적용하지 않는다. 이후 생성되는 사용자 자손은 제한을 상속한다.
-
-## 검증 및 배포 전 확인
-
-기존 이미지는 새 helper·manifest·init을 포함하지 않으므로 반드시 다시 빌드한다. 먼저 전용 테스트 태그를 사용한다.
+`FILESYSTEM_DEVICE_PATHS`는 서버 설정이며 기본값은 빈 목록이다. 사용자 제출 API에는 장치 선택 필드를 추가하지 않는다. 예시는 다음과 같다.
 
 ```bash
-docker build -f runner/container/cpp/Dockerfile \
-  -t codeguard-cpp:filesystem-design-test .
-
-python -m pytest runner/tests -q
-
-# 실제 Linux Docker 호스트의 /proc·cgroup 접근 및 기존 Runner 운영 설정 필요
-CPP_IMAGE=codeguard-cpp:filesystem-design-test RUNNER_DOCKER_TESTS=1 \
-  python -m pytest runner/tests/test_filesystem_integration.py -q
+FILESYSTEM_DEVICE_PATHS='["/dev/null","/dev/urandom"]'
 ```
 
-설정 기본값은 `FILESYSTEM_POLICY_PROFILE=cpp-amd64-v1`, `FILESYSTEM_STARTUP_TIMEOUT_SECONDS=5.0`이다. Docker 기본 seccomp에서 Landlock 및 init에 필요한 호출이 가능한지 실제 VM에서 검증한다. `seccomp=unconfined`로 바꾸지 않는다. 이미지 manifest 생성만으로 실제 제한·로딩 검증이 완료된 것은 아니다.
+| 정책 프로파일 | 허용할 수 있는 경로 | Landlock `allowed_access` |
+| --- | --- | --- |
+| `DEVICE_RW` | `/dev/null` | `READ_FILE`·`WRITE_FILE` |
+| `DEVICE_READ` | `/dev/urandom`, `/dev/zero`, `/dev/random` | `READ_FILE` |
 
-### 현재 확인한 결과 (2026-10-05)
+프로파일은 CodeGuard가 정의한 이름이다. 실제 커널에는 해당 권한 비트를 전달한다. 장치에 실행·잘라내기·생성·삭제·이름 변경이나 `IOCTL_DEV`를 부여하지 않는다. `IOCTL_DEV`가 제한하는 ioctl은 거부하지만 일부 일반 ioctl 예외도 있으므로 모든 ioctl의 전면 차단으로 설명하지 않는다.
 
-- Windows에서 `CODEGUARD_TEST_NATIVE=1 python -m pytest runner/tests -q`: **468 passed, 76 skipped**, 기존 FastAPI deprecation 경고 4개. 이 옵션에는 WSL을 이용한 준비 helper의 실제 UID·모드 변경 및 제한된 capability 테스트가 포함된다.
-- WSL Ubuntu-24.04(root)에서 `CG_RUN_LANDLOCK_SMOKE=1 CODEGUARD_TEST_NATIVE=1 python3 -m unittest runner.tests.test_native_filesystem runner.tests.test_native_start_gate -v`: **10개 중 8개 통과, 2개 건너뜀**. C 모듈은 `-O2 -Wall -Wextra -Werror`로 빌드했다. init의 준비·승인·적용·FD 정리 및 실패 시 exec 금지는 시스템 호출 주입 테스트로 확인했다.
-- 실제 WSL 커널은 `6.6.87.2-microsoft-standard-WSL2`, Landlock ABI는 **3**이었다. 따라서 ABI 7 이상에서의 실제 제한 smoke test는 건너뛰었다. strace도 설치되지 않아 해당 경유 테스트는 건너뛰었다. 주입 테스트의 통과를 실제 Landlock 적용 검증으로 해석하지 않는다.
-- 현재 Windows Docker daemon에는 연결할 수 없다. 새 이미지의 Docker 빌드 및 VM에서의 C/C++ 실행·마운트·strace·자원 제한 통합 검증은 **미완료**이다. 위 테스트 수의 skipped 항목에는 이 opt-in 통합 테스트가 포함된다.
+장치는 `O_PATH`·`O_NOFOLLOW`·`O_CLOEXEC`로 열고 같은 FD에서 문자 장치 타입·실제 대상·기대 장치 번호를 검사한다. 임의 일반 파일·링크·다른 장치로 교체된 경로는 거부한다. 전체 `/dev` 허용 규칙은 추가하지 않는다. 표준 입출력은 init이 전달한 FD0·1·2를 사용하며 이 때문에 `/dev/stdin` 등의 경로를 자동 허용하지 않는다.
 
-배포 전에는 위 전용 이미지 빌드 후, ABI 7 이상인 실제 Linux Docker 호스트에서 다음 통합 테스트를 반드시 실행한다. opt-in 상태의 Docker 연결·이미지·환경 오류는 테스트 실패로 취급하며 제한을 약화하여 통과시키지 않는다.
+## 정책 생성과 시작 순서
+
+지원 이미지의 신뢰된 C/C++ 예제에서 로더·공유 라이브러리 4개·선택적 캐시를 검증하여 runtime manifest를 만든다. 사용자 제출 바이너리에 `ldd`를 실행하거나 제출별 의존성을 분석하는 기능은 아니다. 준비·컴파일·실행은 동일한 불변 이미지 ID를 사용한다.
+
+TSV 정책은 `CGFS` 버전2이며 runtime manifest 스키마1·프로파일 `cpp-amd64-v1`, 상태 레코드 `CGFS_STATUS 1`과 구분한다. 이전 v1 정책은 거부한다. Python 생성기와 C 파서는 경로·프로파일·크기·중복을 검증하며, workspace 루트도 `O_NOFOLLOW` 경로 확인 대상에 포함한다.
+
+1. root tracer가 보호된 권한·정책·상태 FD를 준비한다.
+2. init이 사용자10001:10001·capability·NNP를 검증한다. 검증 통과 후 stdin과 현재 디렉토리 `/workspace`를 연결한다.
+3. C 모듈이 정책과 실제 파일을 확인하고 ruleset을 준비한다. init이 `PREPARED`를 기록한다.
+4. Runner가 정책 ID·상태를 확인하고 기존 감시를 준비한 후 시작 승인한다.
+5. init이 Landlock을 적용하고 `APPLIED`를 기록한다. 내부 FD 및 불필요한 상속 FD를 닫고 `/workspace/main`을 실행한다.
+6. Runner가 일치하는 증거와 결과를 수집하고 실행 자원을 정리한다.
+
+**Landlock ABI7 이상이 필요하다.** 정책 준비·적용·필수 증거 실패 시 사용자 코드를 시작하지 않는다. ABI 요구를 낮추거나 제한 없는 실행으로 바꾸는 fallback은 없다. 이후 생성된 사용자 자식과 스레드에도 제한이 상속된다. 신뢰된 Runner·strace에는 사용자 Landlock 정책을 적용하지 않는다.
+
+## 검증과 배포
+
+이전 이미지의 런처와 새 정책을 혼합하지 않는다. 저장소 루트에서 새 이미지를 빌드한 뒤 같은 태그를 Runner에 설정한다.
 
 ```bash
-CPP_IMAGE=codeguard-cpp:filesystem-design-test RUNNER_DOCKER_TESTS=1 \
-  python -m pytest runner/tests/test_filesystem_integration.py \
-  runner/tests/test_permission_integration.py \
-  runner/tests/integration/test_task_tracker_integration.py -q
+docker build -f runner/container/cpp/Dockerfile -t codeguard-cpp:filesystem-workspace-v2 .
+python -m pytest -q runner/tests
+CG_RUN_LANDLOCK_SMOKE=1 CODEGUARD_TEST_NATIVE=1 python -m pytest -q runner/tests/test_native_filesystem.py runner/tests/test_workspace.py
+CPP_IMAGE=codeguard-cpp:filesystem-workspace-v2 RUNNER_DOCKER_TESTS=1 python -m pytest -q runner/tests/test_filesystem_integration.py runner/tests/test_permission_integration.py
 ```
 
-Task tracker 테스트에는 기존 eBPF 서비스와 cgroup 설정이 필요하다. 테스트가 끝난 뒤 준비·컴파일·실행 컨테이너, 해당 Job의 세 Volume 및 전용 cgroup이 정리됐는지도 확인한다. 위 결과는 로컬 검증 결과이며 배포 완료를 의미하지 않는다.
+실제 적용 테스트에는 ABI7 이상 Linux 커널이 필요하다. 통합 자원 측정에는 Docker 호스트의 `/proc`·cgroup v2 접근 및 기존 운영 설정이 필요하다. skipped 테스트나 시스템 호출 주입 테스트를 실제 Landlock 적용 검증으로 계산하지 않는다. 테스트 종료 후 해당 Job 볼륨·익명 증거 볼륨·컨테이너·cgroup을 확인한다.
 
-## 보장하지 않는 사항
+## 차단과 감지의 범위
 
-- Audit/eBPF를 이용한 새 위반 감지·자동 종료·응답 코드 분류는 추가하지 않는다. 금지된 파일 작업은 커널이 거부하지만 프로그램이 오류를 처리하고 계속 실행할 수 있다. 기존 strace의 RO 변경 판정은 유지하며 새 실행 경로를 인식하도록 연결한다.
-- 동적 로더의 파일 실행을 허용하므로 직접 실행도 가능하다. 모든 코드 로딩·실행 가능한 mmap·memfd를 포괄 차단하는 기능이 아니다.
-- `work` 내부의 정책 조건을 만족하는 하드 링크까지 일괄 금지하지 않는다. 심볼릭 링크·특수 파일 생성 권한은 부여하지 않는다.
-- chmod/chown 등 모든 메타데이터 작업을 Landlock으로 제어하지 않는다. 보호 원본에는 RO 마운트와 Linux 권한을 함께 사용한다.
-- 저장 공간·inode 한도, 네트워크 정책 변경, TLS/DNS/CA 파일 제공, 파일 다운로드·영구 저장은 이번 기능에 포함하지 않는다.
+Landlock은 접근을 차단한다. 현재 strace 판정은 추적된 변경 요청의 `EROFS` 실패를 사용하며, `EACCES`·`EPERM`을 자동으로 `FILESYSTEM_LIMIT`로 분류하지 않는다. 오류를 처리하는 프로그램은 계속 실행할 수 있다. 자세한 기록 계약은 [filesystem detection](FILESYSTEM_DETECTION.md)을 따른다.
+
+develop의 응답 계약에 따라 감지한 위반은 `policy_violations`에 기록하며 실행 결과의 `status`와 구분한다. 차단 오류를 처리하고 0으로 종료한 프로그램은 `SUCCESS`와 `policy_violations=["FILESYSTEM_LIMIT"]`를 함께 반환할 수 있다.
+
+파일 실행 권한은 exec 계열을 제어한다. 읽기만 허용한 공유 라이브러리도 실행 가능한 코드로 로딩될 수 있다. 모든 메타데이터 조회·실행 가능한 메모리 매핑·통신을 제어하는 기능은 아니다. 적용 전에 열린 FD를 모두 회수하는 기능도 아니므로 init의 FD 정리를 유지한다. 마운트·DAC·capability·seccomp와 기존 자원 제한은 계속 적용한다.

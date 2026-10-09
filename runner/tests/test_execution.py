@@ -75,9 +75,7 @@ class ExecutionTests(unittest.TestCase):
         }
         self.workspace = VolumeWorkspace(
             job_id=uuid4(),
-            app_volume="codeguard-job-test-app",
-            input_volume="codeguard-job-test-input",
-            work_volume="codeguard-job-test-work",
+            volume_name="codeguard-job-test-app",
         )
         self.container.attrs = container_fixture(self.workspace, policy_fixture()).attrs
         self.container.attrs["State"] = {"OOMKilled": False}
@@ -164,10 +162,11 @@ class ExecutionTests(unittest.TestCase):
         self.assertIs(result, self.container)
         self.client.containers.create.assert_called_once_with(
             image=policy_fixture().image_id,
-            command=["sh", "-c", f"umask 077; set -Ce; exec 3>/run/codeguard-trace/security.status; exec 4</run/codeguard-trace/filesystem.policy; exec 5>/run/codeguard-trace/filesystem.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 --filesystem-policy-fd 4 --filesystem-status-fd 5 --stdin /workspace/input/stdin --workdir /workspace/work -- /workspace/app/main"],
+            command=["sh", "-c", f"umask 077; set -Ce; exec 3>/run/codeguard-trace/security.status; exec 4</run/codeguard-trace/filesystem.policy; exec 5>/run/codeguard-trace/filesystem.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 --filesystem-policy-fd 4 --filesystem-status-fd 5 --stdin /workspace/stdin --workdir /workspace -- /workspace/main"],
             mounts=execution_mounts(self.workspace),
             detach=True,
             read_only=True,
+            environment={"TMPDIR": "/workspace", "TMP": "/workspace", "TEMP": "/workspace"},
             network_mode=settings.execution_network,
             user="0:0",
             cap_drop=["ALL"],
@@ -243,7 +242,7 @@ class ExecutionTests(unittest.TestCase):
         command = self.client.containers.create.call_args.kwargs["command"]
         self.assertEqual(
             command,
-            ["sh", "-c", f"umask 077; set -Ce; exec 3>/run/codeguard-trace/security.status; exec 4</run/codeguard-trace/filesystem.policy; exec 5>/run/codeguard-trace/filesystem.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 --filesystem-policy-fd 4 --filesystem-status-fd 5 --stdin /workspace/input/stdin --workdir /workspace/work -- /workspace/app/main"],
+            ["sh", "-c", f"umask 077; set -Ce; exec 3>/run/codeguard-trace/security.status; exec 4</run/codeguard-trace/filesystem.policy; exec 5>/run/codeguard-trace/filesystem.status; ulimit -f 2048; exec strace -f -q -yy -s 4096 -u codeguard -o {TRACE_PATH} -e trace={TRACE_SYSCALLS} -e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init --security-fd 3 --filesystem-policy-fd 4 --filesystem-status-fd 5 --stdin /workspace/stdin --workdir /workspace -- /workspace/main"],
         )
 
     def test_create_execution_container_uses_cgroup_parent(self) -> None:

@@ -14,7 +14,7 @@ from enum import Enum
 from pathlib import PurePosixPath
 
 
-POLICY_VERSION = 1
+POLICY_VERSION = 2
 MAX_RULES = 128
 MAX_POLICY_BYTES = 65536
 MAX_PATH_BYTES = 4095
@@ -32,10 +32,17 @@ _LIBRARY_PATTERNS = {
 }
 _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}")
 _POLICY_ID = re.compile(r"[0-9a-f]{64}")
-_WORKSPACE_FILES = frozenset({
-    "/workspace/app/main", "/workspace/app/main.c", "/workspace/app/main.cpp",
-    "/workspace/input/stdin",
-})
+DEVICE_PATHS = frozenset({"/dev/null", "/dev/urandom", "/dev/zero", "/dev/random"})
+
+
+def validate_device_paths(paths) -> tuple[str, ...]:
+    if (not isinstance(paths, (tuple, list))
+            or any(not isinstance(path, str) or path not in DEVICE_PATHS for path in paths)):
+        raise ValueError("filesystem devices must be selected from the allowed literal paths")
+    if len(set(paths)) != len(paths):
+        raise ValueError("duplicate filesystem device selection")
+    return tuple(paths)
+
 
 
 def _validate_image_id(image_id: str) -> None:
@@ -65,7 +72,8 @@ def _library_name(path: str) -> str | None:
 class FsProfile(str, Enum):
     FILE_READ = "FILE_READ"
     FILE_EXEC = "FILE_EXEC"
-    DIR_LIST = "DIR_LIST"
+    DEVICE_READ = "DEVICE_READ"
+    DEVICE_RW = "DEVICE_RW"
     WORK = "WORK"
 
 
@@ -81,14 +89,15 @@ class FsRule:
             raise ValueError("unknown filesystem profile") from exc
         _validate_path(self.path)
         if profile == FsProfile.WORK:
-            allowed = self.path == "/workspace/work"
-        elif profile == FsProfile.DIR_LIST:
-            allowed = self.path in {"/workspace/app", "/workspace/input"}
+            allowed = self.path == "/workspace"
+        elif profile == FsProfile.DEVICE_RW:
+            allowed = self.path == "/dev/null"
+        elif profile == FsProfile.DEVICE_READ:
+            allowed = self.path in DEVICE_PATHS - {"/dev/null"}
         elif profile == FsProfile.FILE_EXEC:
-            allowed = self.path in {"/workspace/app/main", RUNTIME_LOADER_PATH}
+            allowed = self.path == RUNTIME_LOADER_PATH
         else:
-            allowed = (self.path in _WORKSPACE_FILES
-                       or self.path in {RUNTIME_LOADER_PATH, "/etc/ld.so.cache"}
+            allowed = (self.path in {RUNTIME_LOADER_PATH, "/etc/ld.so.cache"}
                        or _library_name(self.path) is not None)
         if not allowed:
             raise ValueError("filesystem rule is outside the exact-file runtime allowlist")
@@ -123,7 +132,7 @@ class FilesystemPolicy:
         rules = tuple(sorted(self.rules, key=lambda rule: (rule.profile.value, rule.path)))
         if len({rule.path for rule in rules}) != len(rules):
             raise ValueError("duplicate or conflicting filesystem rules")
-        if len(("CGFS\t1\t" + "0" * 64 + "\n" + _wire_rules(rules)).encode()) > MAX_POLICY_BYTES:
+        if len(("CGFS\t2\t" + "0" * 64 + "\n" + _wire_rules(rules)).encode()) > MAX_POLICY_BYTES:
             raise ValueError("filesystem policy exceeds byte size limit")
         if (not isinstance(self.policy_id, str) or not _POLICY_ID.fullmatch(self.policy_id)
                 or self.policy_id != _policy_hash(self.version, self.image_id, rules)):
@@ -206,10 +215,10 @@ def parse_runtime_manifest(data: bytes | str, image_id: str) -> RuntimeFilesyste
     return profile
 
 
-def build_filesystem_policy(image_id: str, language, include_source: bool, *,
-                            runtime_profile: RuntimeFilesystemProfile | None = None,
-                            include_stdin: bool = True) -> FilesystemPolicy:
-    """Build only exact file rules from a verified server-selected runtime."""
+def build_filesystem_policy(image_id: str, language, *,
+                            runtime_profile: RuntimeFilesystemProfile,
+                            device_paths=()) -> FilesystemPolicy:
+    """Build workspace and exact runtime/device rules from server evidence."""
     _validate_image_id(image_id)
     if (type(runtime_profile) is not RuntimeFilesystemProfile or not runtime_profile._verified
             or runtime_profile.image_id != image_id):
@@ -217,21 +226,14 @@ def build_filesystem_policy(image_id: str, language, include_source: bool, *,
     language = getattr(language, "value", language)
     if not isinstance(language, str) or language not in {"C", "CPP"}:
         raise ValueError("unsupported filesystem policy language")
-    if type(include_source) is not bool or type(include_stdin) is not bool:
-        raise ValueError("provided source/stdin indicators must be booleans")
-    rules = [FsRule(FsProfile.FILE_EXEC, "/workspace/app/main"),
-             FsRule(FsProfile.FILE_EXEC, runtime_profile.loader),
-             FsRule(FsProfile.DIR_LIST, "/workspace/app"),
-             FsRule(FsProfile.DIR_LIST, "/workspace/input"),
-             FsRule(FsProfile.WORK, "/workspace/work")]
+    devices = validate_device_paths(device_paths)
+    rules = [FsRule(FsProfile.FILE_EXEC, runtime_profile.loader),
+             FsRule(FsProfile.WORK, "/workspace")]
     rules.extend(FsRule(FsProfile.FILE_READ, path) for path in runtime_profile.libraries)
     if runtime_profile.cache is not None:
         rules.append(FsRule(FsProfile.FILE_READ, runtime_profile.cache))
-    if include_source:
-        rules.append(FsRule(FsProfile.FILE_READ,
-                            "/workspace/app/main.c" if language == "C" else "/workspace/app/main.cpp"))
-    if include_stdin:
-        rules.append(FsRule(FsProfile.FILE_READ, "/workspace/input/stdin"))
+    rules.extend(FsRule(FsProfile.DEVICE_RW if path == "/dev/null" else FsProfile.DEVICE_READ, path)
+                 for path in devices)
     normalized = tuple(sorted(rules, key=lambda rule: (rule.profile.value, rule.path)))
     return FilesystemPolicy(POLICY_VERSION, _policy_hash(POLICY_VERSION, image_id, normalized),
                             image_id, normalized)
@@ -250,5 +252,5 @@ def validate_filesystem_policy(policy: FilesystemPolicy) -> FilesystemPolicy:
 
 
 def serialize_filesystem_policy(policy: FilesystemPolicy) -> bytes:
-    """Return bounded, canonical version-one TSV after full validation."""
+    """Return bounded, canonical version-two TSV after full validation."""
     return validate_filesystem_policy(policy).to_bytes()

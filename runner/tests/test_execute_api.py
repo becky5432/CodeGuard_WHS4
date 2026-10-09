@@ -44,6 +44,7 @@ class ExecuteApiTests(unittest.TestCase):
         "resource_usage",
         "finished_at",
         "stage_summary",
+        "policy_violations",
     }
 
     def setUp(self) -> None:
@@ -59,9 +60,7 @@ class ExecuteApiTests(unittest.TestCase):
 
         self.workspace = VolumeWorkspace(
             job_id=uuid4(),
-            app_volume="codeguard-job-test-app",
-            input_volume="codeguard-job-test-input",
-            work_volume="codeguard-job-test-work",
+            volume_name="codeguard-job-test-app",
         )
 
         self.get_client_patcher = patch(
@@ -153,6 +152,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "cpu_bandwidth",
                 "output_limit_bytes",
                 "cpu_time_limit_ms",
+                "network_preset",
             },
         )
 
@@ -302,6 +302,8 @@ class ExecuteApiTests(unittest.TestCase):
             cpu_bandwidth=body["policy"]["cpu_bandwidth"],
             pids_limit=body["policy"]["pids_limit"],
             filesystem_policy=policy_fixture("CPP"),
+            network_mode=Settings().execution_network,
+            dns=None,
         )
 
         self.remove_workspace_mock.assert_called_once_with(
@@ -371,11 +373,33 @@ class ExecuteApiTests(unittest.TestCase):
         response = self.client.post("/execute", json=self.make_request_body())
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["status"], "BLOCKED")
-        self.assertEqual(payload["reason_code"], "FILESYSTEM_LIMIT")
+        self.assertEqual(payload["status"], "SUCCESS")
+        self.assertIsNone(payload["reason_code"])
+        self.assertEqual(payload["policy_violations"], ["FILESYSTEM_LIMIT"])
         self.assertEqual(payload["stdout"], "user output")
-        self.assertEqual(payload["stage_summary"]["failed"], ["EXECUTE"])
-        BackendRunnerResponse.model_validate(payload)
+        self.assertEqual(payload["stage_summary"]["failed"], [])
+        backend = BackendRunnerResponse.model_validate(payload)
+        self.assertEqual([reason.value for reason in backend.policy_violations], ["FILESYSTEM_LIMIT"])
+
+    def test_network_presets_keep_filesystem_policy_in_execution_options(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
+            success=True, stdout="", stderr="", exit_code=0, artifact_ready=True,
+        )
+        self.execute_program_mock.return_value = ExecutionResult(0, "", "")
+        with patch("runner.pipeline.executor.settings.execution_network_none", "test-none"), \
+             patch("runner.pipeline.executor.settings.execution_network_web", "test-web"), \
+             patch("runner.pipeline.executor.settings.execution_dns_none", ["127.0.0.1"]):
+            for preset, network, dns in (("none", "test-none", ["127.0.0.1"]), ("web", "test-web", None)):
+                with self.subTest(preset=preset):
+                    body = self.make_request_body()
+                    body["policy"]["network_preset"] = preset
+                    response = self.client.post("/execute", json=body)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response.json()["status"], "SUCCESS")
+                    options = self.create_execution_container_mock.call_args.kwargs
+                    self.assertEqual(options["network_mode"], network)
+                    self.assertEqual(options["dns"], dns)
+                    self.assertEqual(options["filesystem_policy"], policy_fixture("CPP"))
 
     def test_workspace_preparation_failure_never_compiles_and_cleans_job(self) -> None:
         self.prepare_workspace_mock.side_effect = WorkspaceError("prepare failed")
@@ -859,7 +883,7 @@ class ExecuteApiTests(unittest.TestCase):
             "CPU_TIME_LIMIT",
         )
     
-    def test_execute_returns_network_blocked(self) -> None:
+    def test_execute_returns_network_violation_separately(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
             success=True,
             stdout="",
@@ -882,17 +906,15 @@ class ExecuteApiTests(unittest.TestCase):
 
         self.assertEqual(
             payload["status"],
-            "BLOCKED",
+            "SUCCESS",
         )
 
-        self.assertEqual(
-            payload["reason_code"],
-            "NETWORK_BLOCKED",
-        )
+        self.assertIsNone(payload["reason_code"])
+        self.assertEqual(payload["policy_violations"], ["NETWORK_BLOCKED"])
 
         self.assertEqual(
             payload["stage_summary"]["failed"],
-            ["EXECUTE"],
+            [],
         )
 
 

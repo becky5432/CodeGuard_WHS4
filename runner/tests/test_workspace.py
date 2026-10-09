@@ -31,78 +31,36 @@ def tar_bytes(name, content, *, mode=0o444, uid=0, gid=0, kind=tarfile.REGTYPE):
 
 class WorkspaceTests(unittest.TestCase):
     def workspace(self):
-        return ws.VolumeWorkspace(uuid4(), "job-app", "job-input", "job-work")
+        return ws.VolumeWorkspace(uuid4(), "job-volume")
 
-    def test_workspace_is_frozen_and_alias_is_app_only(self):
-        self.assertIn("app_volume", ws.VolumeWorkspace.__dataclass_fields__)
-        workspace = self.workspace()
-        self.assertEqual(workspace.volume_name, "job-app")
-        with self.assertRaises(FrozenInstanceError): workspace.work_volume = "other"
+    def test_workspace_has_only_two_frozen_fields(self):
+        self.assertEqual(set(ws.VolumeWorkspace.__dataclass_fields__), {"job_id", "volume_name"})
+        with self.assertRaises(FrozenInstanceError): self.workspace().volume_name = "other"
 
-    def test_create_workspace_creates_three_independent_labeled_volumes(self):
-        client = MagicMock()
-        client.volumes.create.side_effect = lambda **kw: MagicMock()
-        job_id = uuid4()
-        workspace = ws.create_workspace(client, job_id)
-        calls = client.volumes.create.call_args_list
-        self.assertEqual(len(calls), 3)
-        for purpose, call in zip(("app", "input", "work"), calls):
-            name = call.kwargs["name"]
-            self.assertTrue(name.startswith(f"{settings.volume_name_prefix}{job_id}-"))
-            self.assertTrue(name.endswith(f"-{purpose}"))
-            nonce = name[len(f"{settings.volume_name_prefix}{job_id}-"):-len(f"-{purpose}")]
-            self.assertEqual(len(nonce), 32)
-            self.assertTrue(all(c in "0123456789abcdef" for c in nonce))
-            self.assertEqual(call.kwargs, {"name": name, "labels": {
-                "codeguard.managed": "true", "codeguard.job_id": str(job_id),
-                "codeguard.purpose": purpose}})
-            self.assertEqual(getattr(workspace, f"{purpose}_volume"), name)
-        nonces = {c.kwargs["name"].rsplit("-", 2)[1] for c in calls}
-        self.assertEqual(len(nonces), 1)
-
-    def test_same_job_id_creations_never_reuse_another_instances_volumes(self):
+    def test_create_workspace_creates_one_nonce_isolated_labeled_volume(self):
         client = MagicMock()
         job_id = uuid4()
         first = ws.create_workspace(client, job_id)
         second = ws.create_workspace(client, job_id)
-        first_names = {first.app_volume, first.input_volume, first.work_volume}
-        second_names = {second.app_volume, second.input_volume, second.work_volume}
-        self.assertFalse(first_names & second_names)
+        self.assertEqual(client.volumes.create.call_count, 2)
+        self.assertNotEqual(first.volume_name, second.volume_name)
+        for workspace, call in zip((first, second), client.volumes.create.call_args_list):
+            prefix = f"{settings.volume_name_prefix}{job_id}-"
+            self.assertTrue(workspace.volume_name.startswith(prefix))
+            nonce = workspace.volume_name[len(prefix):]
+            self.assertEqual(len(nonce), 32)
+            self.assertTrue(all(c in "0123456789abcdef" for c in nonce))
+            self.assertEqual(call.kwargs, {"name": workspace.volume_name, "labels": {
+                "codeguard.managed": "true", "codeguard.job_id": str(job_id),
+                "codeguard.purpose": "job"}})
 
-    def test_partial_cleanup_never_removes_prior_instance_with_same_job_id(self):
-        client, volumes = MagicMock(), {}
-        count = 0
-        def create(**kw):
-            nonlocal count
-            count += 1
-            if count == 5: raise docker.errors.APIError("second instance input creation failed")
-            return volumes.setdefault(kw["name"], MagicMock())
-        client.volumes.create.side_effect = create
-        job_id = uuid4()
-        first = ws.create_workspace(client, job_id)
-        with self.assertRaises(WorkspaceError): ws.create_workspace(client, job_id)
-        for name in (first.app_volume, first.input_volume, first.work_volume):
-            volumes[name].remove.assert_not_called()
-        newly_created = [volume for name, volume in volumes.items()
-                         if name not in (first.app_volume, first.input_volume, first.work_volume)]
-        self.assertEqual(len(newly_created), 1)
-        newly_created[0].remove.assert_called_once_with(force=True)
-        client.volumes.get.assert_not_called()
-
-    def test_create_workspace_rolls_back_only_created_volumes(self):
-        client, first, second = MagicMock(), MagicMock(), MagicMock()
-        first.remove.side_effect = docker.errors.APIError("remove failed")
-        client.volumes.create.side_effect = [first, second, docker.errors.APIError("create failed")]
-        with self.assertRaises(WorkspaceError) as caught: ws.create_workspace(client, uuid4())
-        first.remove.assert_called_once_with(force=True)
-        second.remove.assert_called_once_with(force=True)
-        client.volumes.get.assert_not_called()
-        self.assertTrue(caught.exception.details["cleanup_errors"])
-
-    def test_create_workspace_wraps_first_create_failure(self):
+    def test_creation_failure_never_removes_prior_instance(self):
         client = MagicMock()
-        client.volumes.create.side_effect = docker.errors.APIError("failed")
+        prior = MagicMock()
+        client.volumes.create.side_effect = [prior, docker.errors.APIError("failed")]
+        ws.create_workspace(client, uuid4())
         with self.assertRaises(WorkspaceError): ws.create_workspace(client, uuid4())
+        prior.remove.assert_not_called()
         client.volumes.get.assert_not_called()
 
     def test_source_archive_is_single_fixed_file_with_owner(self):
@@ -124,48 +82,29 @@ class WorkspaceTests(unittest.TestCase):
             with tarfile.open(fileobj=io.BytesIO(ws.build_stdin_archive(stdin))) as archive:
                 self.assertEqual(archive.getnames(), ["stdin"])
                 member = archive.getmember("stdin")
-                self.assertEqual((member.uid, member.gid, member.mode), (10001, 10001, 0o444))
+                self.assertEqual((member.uid, member.gid, member.mode), (10001, 10001, 0o600))
                 self.assertEqual(archive.extractfile(member).read().decode(), stdin)
 
-    def test_remove_workspace_attempts_all_volumes_on_failure(self):
-        self.assertIn("app_volume", ws.VolumeWorkspace.__dataclass_fields__)
+    def test_remove_workspace_removes_exact_job_volume_and_reports_failure(self):
         client = MagicMock()
-        volumes = [MagicMock(), MagicMock(), MagicMock()]
-        volumes[0].remove.side_effect = docker.errors.APIError("remove failed")
-        client.volumes.get.side_effect = volumes
+        client.volumes.get.return_value.remove.side_effect = docker.errors.APIError("remove failed")
         with self.assertRaises(CleanupError): ws.remove_workspace(client, self.workspace())
-        self.assertEqual([c.args[0] for c in client.volumes.get.call_args_list],
-                         ["job-app", "job-input", "job-work"])
-        for volume in volumes: volume.remove.assert_called_once_with(force=True)
+        client.volumes.get.assert_called_once_with("job-volume")
+        client.volumes.get.return_value.remove.assert_called_once_with(force=True)
 
-    def test_remove_workspace_is_idempotent_for_missing_volumes(self):
-        self.assertIn("app_volume", ws.VolumeWorkspace.__dataclass_fields__)
+    def test_remove_workspace_is_idempotent_for_missing_volume(self):
         client = MagicMock()
         client.volumes.get.side_effect = docker.errors.NotFound("missing")
         ws.remove_workspace(client, self.workspace())
-        self.assertEqual(client.volumes.get.call_count, 3)
+        client.volumes.get.assert_called_once_with("job-volume")
 
-    def test_execution_mounts_are_independent_and_trace_is_anonymous(self):
-        self.assertTrue(callable(getattr(ws, "execution_mounts", None)))
+    def test_execution_mounts_job_and_separate_anonymous_trace_volume(self):
         mounts = ws.execution_mounts(self.workspace())
-        self.assertEqual(len(mounts), 4)
-        for mount, source, target, ro in zip(mounts,
-                ("job-app", "job-input", "job-work", None),
-                ("/workspace/app", "/workspace/input", "/workspace/work", "/run/codeguard-trace"),
-                (True, True, False, False)):
-            self.assertIsInstance(mount, docker.types.Mount)
-            self.assertEqual(mount["Type"], "volume")
-            self.assertEqual(mount.get("Source"), source)
-            self.assertEqual(mount["Target"], target)
-            self.assertIs(mount["ReadOnly"], ro)
-
-    def test_execution_job_volumes_disable_image_population(self):
-        mounts = ws.execution_mounts(self.workspace())
-        for mount in mounts[:3]:
-            with self.subTest(target=mount["Target"]):
-                self.assertIs(mount.get("VolumeOptions", {}).get("NoCopy"), True)
-        # The private evidence volume retains its existing initialization.
-        self.assertNotIn("NoCopy", mounts[3].get("VolumeOptions", {}))
+        self.assertEqual(len(mounts), 2)
+        self.assertEqual([(m.get("Source"), m["Target"], m["ReadOnly"]) for m in mounts],
+                         [("job-volume", "/workspace", False), (None, "/run/codeguard-trace", False)])
+        self.assertIs(mounts[0]["VolumeOptions"]["NoCopy"], True)
+        self.assertNotIn("NoCopy", mounts[1].get("VolumeOptions", {}))
 
 
 class WorkspacePreparationTests(unittest.TestCase):
@@ -182,8 +121,7 @@ class WorkspacePreparationTests(unittest.TestCase):
             "HostConfig": {"ReadonlyRootfs": True, "NetworkMode": "none", "Privileged": False,
                            "CapDrop": ["ALL"], "CapAdd": ["CHOWN", "FOWNER", "DAC_OVERRIDE"],
                            "SecurityOpt": ["no-new-privileges=true"]},
-            "Mounts": [{"Type": "volume", "Name": f"job-{p}", "Destination": f"/workspace/{p}", "RW": True}
-                       for p in ("app", "input", "work")]}
+            "Mounts": [{"Type": "volume", "Name": "job-volume", "Destination": "/workspace", "RW": True}]}
         self.container.attrs = copy.deepcopy(self.attrs)
 
     def set_archive(self, payload, size=2, mode=0o444, link=""):
@@ -193,7 +131,7 @@ class WorkspacePreparationTests(unittest.TestCase):
 
     def prepare(self, language="CPP", **kw):
         self.assertTrue(callable(getattr(ws, "prepare_workspace", None)))
-        return ws.prepare_workspace(self.client, ws.VolumeWorkspace(uuid4(), "job-app", "job-input", "job-work"),
+        return ws.prepare_workspace(self.client, ws.VolumeWorkspace(uuid4(), "job-volume"),
                                     language, "int main() { return 0; }", "", **kw)
 
     def test_prepare_uploads_before_start_and_returns_trusted_manifest(self):
@@ -205,13 +143,13 @@ class WorkspacePreparationTests(unittest.TestCase):
                     "security_opt": ["no-new-privileges=true"]}
         for key, value in expected.items(): self.assertEqual(kw[key], value)
         self.assertEqual([(m["Source"], m["Target"], m["ReadOnly"]) for m in kw["mounts"]],
-                         [(f"job-{p}", f"/workspace/{p}", False) for p in ("app", "input", "work")])
+                         [("job-volume", "/workspace", False)])
         names = [c[0] for c in self.container.method_calls]
         self.assertLess(names.index("reload"), names.index("put_archive"))
         self.assertLess(max(i for i,n in enumerate(names) if n == "put_archive"), names.index("start"))
         self.assertEqual(self.container.put_archive.call_count, 2)
         for call, path, name in zip(self.container.put_archive.call_args_list,
-                                  ("/workspace/app", "/workspace/input"), ("main.cpp", "stdin")):
+                                  ("/workspace", "/workspace"), ("main.cpp", "stdin")):
             self.assertEqual(call.kwargs["path"], path)
             with tarfile.open(fileobj=io.BytesIO(call.kwargs["data"])) as archive:
                 self.assertEqual(archive.getnames(), [name])
@@ -244,7 +182,7 @@ class WorkspacePreparationTests(unittest.TestCase):
                  ("Config", "Entrypoint", ["sh"]), ("HostConfig", "ReadonlyRootfs", False),
                  ("HostConfig", "NetworkMode", "bridge"), ("HostConfig", "Privileged", True),
                  ("HostConfig", "CapDrop", []), ("HostConfig", "CapAdd", ["SYS_ADMIN"]),
-                 ("HostConfig", "SecurityOpt", [])]
+                 ("HostConfig", "SecurityOpt", []), ("HostConfig", "Tmpfs", {"/tmp": "rw"})]
         for section, key, value in cases:
             with self.subTest(key=key):
                 self.container.reset_mock()
@@ -327,7 +265,7 @@ class NativeWorkspaceHelperTests(unittest.TestCase):
         self.assertTrue(path.is_file(), "native workspace helper missing")
         source = path.read_text(encoding="utf-8")
         for required in ("O_DIRECTORY", "O_NOFOLLOW", "fstat(", "S_ISDIR(", "fchown(", "fchmod(",
-                         '"/workspace/app"', '"/workspace/input"', '"/workspace/work"', "0700", "0755", "10001"):
+                         '"/workspace"', "0700", "10001"):
             self.assertIn(required, source)
         for forbidden in ("system(", "exec", "nftw", "readdir"):
             self.assertNotIn(forbidden, source)
@@ -336,7 +274,7 @@ class NativeWorkspaceHelperTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "posix" or os.environ.get("CODEGUARD_TEST_NATIVE") == "1",
                          "native Linux helper check: opt in with CODEGUARD_TEST_NATIVE=1 on Windows/WSL")
     def test_native_helper_compiles_and_prepares_only_directory_roots(self):
-        # The harness remaps only the three fixed open() calls into an isolated
+        # The harness remaps only the fixed workspace open() into an isolated
         # mkdtemp tree. All ownership/mode/directory syscalls remain real Linux
         # calls; nothing under the host /workspace is created or modified.
         native = Path(__file__).resolve().parents[1] / "native/filesystem/workspace_prepare.c"
@@ -358,8 +296,8 @@ class NativeWorkspaceHelperTests(unittest.TestCase):
 #include <unistd.h>
 static char paths[3][256];
 static int mapped_open(const char *name, int flags) {
-    const char *names[] = {"/workspace/app", "/workspace/input", "/workspace/work"};
-    for (unsigned i = 0; i < 3; ++i)
+    const char *names[] = {"/workspace"};
+    for (unsigned i = 0; i < 1; ++i)
         if (!strcmp(name, names[i])) return open(paths[i], flags);
     errno = EPERM;
     return -1;
@@ -383,14 +321,21 @@ int main(int argc, char **argv) {
     int fd = open(child, O_CREAT | O_WRONLY | O_EXCL, 0640);
     if (fd < 0 || close(fd)) goto done;
     snprintf(target, sizeof(target), "%s/outside", base);
+    if (strcmp(argv[1], "success") && strcmp(argv[1], "args")) {
+        /* Keep a root-owned sentinel outside the invalid root. */
+        if (unlink(child)) goto done;
+        snprintf(child, sizeof(child), "%s/source", paths[1]);
+        fd = open(child, O_CREAT | O_WRONLY | O_EXCL, 0640);
+        if (fd < 0 || close(fd)) goto done;
+    }
     if (!strcmp(argv[1], "symlink")) {
-        if (mkdir(target, 0700) || rmdir(paths[2]) || symlink(target, paths[2])) goto done;
+        if (mkdir(target, 0700) || rmdir(paths[0]) || symlink(target, paths[0])) goto done;
     } else if (!strcmp(argv[1], "file")) {
-        if (rmdir(paths[2])) goto done;
-        fd = open(paths[2], O_CREAT | O_WRONLY | O_EXCL, 0600);
+        if (rmdir(paths[0])) goto done;
+        fd = open(paths[0], O_CREAT | O_WRONLY | O_EXCL, 0600);
         if (fd < 0 || close(fd)) goto done;
     } else if (!strcmp(argv[1], "missing")) {
-        if (rmdir(paths[2])) goto done;
+        if (rmdir(paths[0])) goto done;
     }
     struct __user_cap_header_struct cap_header = {_LINUX_CAPABILITY_VERSION_3, 0};
     struct __user_cap_data_struct caps[2] = {{0}, {0}};
@@ -399,16 +344,16 @@ int main(int argc, char **argv) {
     int outcome = prepare_main(!strcmp(argv[1], "args") ? 2 : 1, argv);
     if (!strcmp(argv[1], "success")) {
         if (outcome) goto done;
-        /* Retry after work is uid 10001 and 0700 exercises DAC_OVERRIDE. */
+        /* Retry after the root is uid 10001 and 0700 exercises DAC_OVERRIDE. */
         if (prepare_main(1, argv)) goto done;
-        for (unsigned i = 0; i < 3; ++i) {
+        for (unsigned i = 0; i < 1; ++i) {
             if (stat(paths[i], &st) || st.st_uid != 10001 || st.st_gid != 10001 ||
-                (st.st_mode & 07777) != (i == 2 ? 0700 : 0755)) goto done;
+                (st.st_mode & 07777) != 0700) goto done;
         }
     } else {
         if (!outcome) goto done;
-        /* All fds are checked before changing any roots, including app/input. */
-        if (stat(paths[0], &st) || st.st_uid != 0 || (st.st_mode & 07777) != 0755) goto done;
+        /* Invalid roots never change an external directory or file. */
+        if (stat(paths[1], &st) || st.st_uid != 0 || (st.st_mode & 07777) != 0755) goto done;
         if (!strcmp(argv[1], "symlink") &&
             (stat(target, &st) || st.st_uid != 0 || (st.st_mode & 07777) != 0700)) goto done;
     }

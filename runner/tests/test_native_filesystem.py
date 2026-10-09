@@ -42,7 +42,7 @@ class NativeFilesystemTests(unittest.TestCase):
             stdin.chmod(0o444)
             policy_id = "a" * 64
             policy = root / "policy"
-            payload = f"CGFS\t1\t{policy_id}\nFILE_READ\t/etc/ld.so.cache\n"
+            payload = f"CGFS\t2\t{policy_id}\nFILE_READ\t/etc/ld.so.cache\n"
             policy.write_text(payload, encoding="ascii")
             policy.chmod(0o400)
             libc = ctypes.CDLL(None, use_errno=True)

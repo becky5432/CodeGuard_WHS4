@@ -209,7 +209,7 @@ static void recover_policy_id(int fd, struct cg_fs_policy *policy)
     ssize_t count;
     if (fd < 0 || cg_fs_valid_id(policy->policy_id)) return;
     do { count = pread(fd, header, 72, 0); } while (count < 0 && errno == EINTR);
-    if (count != 72 || memcmp(header, "CGFS\t1\t", 7) || header[71] != '\n') return;
+    if (count != 72 || memcmp(header, "CGFS\t2\t", 7) || header[71] != '\n') return;
     header[71] = 0;
     if (cg_fs_valid_id(header + 7)) memcpy(policy->policy_id, header + 7, 65);
 }

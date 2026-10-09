@@ -200,12 +200,8 @@ def create_compile_container(
                 "-o",
                 "/workspace/main",
             ],
-            volumes={
-                workspace.app_volume: {
-                    "bind": "/workspace",
-                    "mode": "rw",
-                }
-            },
+            mounts=[docker.types.Mount("/workspace", workspace.volume_name, type="volume",
+                                      read_only=False, no_copy=True)],
             detach=True,
             network_mode="none",
             user=f"{SECURITY_UID}:{SECURITY_GID}",
@@ -225,14 +221,13 @@ def create_compile_container(
                 workspace_mode="rw",
                 expected_image_id=image_id,
             )
-            # The execution verifier has a different three-volume layout.
-            # Compile must see only this job's app volume at the legacy path.
+            # Compile must see only this job's single volume.
             mounts = container.attrs.get("Mounts", [])
             if (len(mounts) != 1 or mounts[0].get("Destination") != "/workspace"
                     or mounts[0].get("Type") != "volume"
-                    or mounts[0].get("Name") != workspace.app_volume
+                    or mounts[0].get("Name") != workspace.volume_name
                     or mounts[0].get("RW") is not True):
-                raise SecurityVerificationError("Compile app volume identity verification failed.")
+                raise SecurityVerificationError("Compile job volume identity verification failed.")
         except RunnerError:
             try:
                 container.remove(force=True)
@@ -264,8 +259,8 @@ def compile_source(
     _get_compiler_config(language)
 
     try:
-        # Preparation owns stdin in its independent input volume. Re-uploading
-        # the fixed source file here is idempotent for existing compile callers.
+        # Preparation owns stdin in the job volume. Re-uploading the fixed
+        # source file here is idempotent for existing compile callers.
         source_archive = build_source_archive(language, code)
         try:
             uploaded = container.put_archive(

@@ -27,7 +27,7 @@ def runtime_manifest_fixture():
 
 def policy_fixture(language="C"):
     profile = parse_runtime_manifest(runtime_manifest_fixture(), "sha256:" + "a" * 64)
-    return build_filesystem_policy(profile.image_id, language, True, runtime_profile=profile)
+    return build_filesystem_policy(profile.image_id, language, runtime_profile=profile)
 
 
 def container_fixture(workspace, policy):
@@ -43,17 +43,15 @@ def container_fixture(workspace, policy):
             "SecurityOpt": ["no-new-privileges=true"],
         },
         "Mounts": [
-            {"Type": "volume", "Name": workspace.app_volume, "Destination": "/workspace/app", "RW": False},
-            {"Type": "volume", "Name": workspace.input_volume, "Destination": "/workspace/input", "RW": False},
-            {"Type": "volume", "Name": workspace.work_volume, "Destination": "/workspace/work", "RW": True},
+            {"Type": "volume", "Name": workspace.volume_name, "Destination": "/workspace", "RW": True},
             {"Type": "volume", "Name": "anonymous-trace", "Destination": "/run/codeguard-trace", "RW": True},
         ],
     }
     return container
 
 
-def test_execution_uploads_protected_policy_and_mounts_three_volumes():
-    workspace = VolumeWorkspace(uuid4(), "app", "input", "work")
+def test_execution_uploads_protected_policy_and_mounts_single_job_volume():
+    workspace = VolumeWorkspace(uuid4(), "job-volume")
     policy = policy_fixture()
     container = container_fixture(workspace, policy)
     client = MagicMock()
@@ -68,26 +66,27 @@ def test_execution_uploads_protected_policy_and_mounts_three_volumes():
     assert options["image"] == policy.image_id
     assert "volumes" not in options
     assert [(m["Target"], m["ReadOnly"]) for m in options["mounts"]] == [
-        ("/workspace/app", True), ("/workspace/input", True),
-        ("/workspace/work", False), ("/run/codeguard-trace", False),
+        ("/workspace", False), ("/run/codeguard-trace", False),
     ]
+    assert options["environment"] == {"TMPDIR": "/workspace", "TMP": "/workspace", "TEMP": "/workspace"}
+    assert options["mounts"][0]["VolumeOptions"]["NoCopy"] is True
     command = options["command"][2]
     assert "--filesystem-policy-fd 4" in command
     assert "--filesystem-status-fd 5" in command
-    assert "--stdin /workspace/input/stdin" in command  # also for empty input
-    assert "--workdir /workspace/work -- /workspace/app/main" in command
+    assert "--stdin /workspace/stdin" in command  # also for empty input
+    assert "--workdir /workspace -- /workspace/main" in command
     destination, payload = container.put_archive.call_args.args
     assert destination == "/run/codeguard-trace"
     with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
         member = archive.getmember("filesystem.policy")
         assert member.uid == member.gid == 0
         assert member.mode == 0o400
-        assert archive.extractfile(member).read().startswith(b"CGFS\t1\t")
+        assert archive.extractfile(member).read().startswith(b"CGFS\t2\t")
 
 
-@pytest.mark.parametrize("mutation", ["wrong_source", "extra_rw", "hidden_tmpfs", "root_rw", "wrong_image", "duplicate"])
+@pytest.mark.parametrize("mutation", ["wrong_source", "extra_rw", "hidden_tmpfs", "root_rw", "wrong_image", "duplicate", "wrong_rw", "trace_shared", "missing", "wrong_type", "empty_trace"])
 def test_mount_or_image_mismatch_never_starts_container(mutation):
-    workspace = VolumeWorkspace(uuid4(), "app", "input", "work")
+    workspace = VolumeWorkspace(uuid4(), "job-volume")
     policy = policy_fixture()
     container = container_fixture(workspace, policy)
     if mutation == "wrong_source":
@@ -101,6 +100,16 @@ def test_mount_or_image_mismatch_never_starts_container(mutation):
         container.attrs["HostConfig"]["ReadonlyRootfs"] = False
     elif mutation == "wrong_image":
         container.attrs["Image"] = "sha256:" + "b" * 64
+    elif mutation == "wrong_rw":
+        container.attrs["Mounts"][0]["RW"] = False
+    elif mutation == "trace_shared":
+        container.attrs["Mounts"][1]["Name"] = workspace.volume_name
+    elif mutation == "missing":
+        container.attrs["Mounts"].pop()
+    elif mutation == "wrong_type":
+        container.attrs["Mounts"][0]["Type"] = "bind"
+    elif mutation == "empty_trace":
+        container.attrs["Mounts"][1]["Name"] = ""
     else:
         container.attrs["Mounts"].append(dict(container.attrs["Mounts"][0]))
     client = MagicMock()
@@ -115,7 +124,7 @@ def test_mount_or_image_mismatch_never_starts_container(mutation):
 
 
 def test_policy_upload_failure_cleans_created_container():
-    workspace = VolumeWorkspace(uuid4(), "app", "input", "work")
+    workspace = VolumeWorkspace(uuid4(), "job-volume")
     policy = policy_fixture()
     container = container_fixture(workspace, policy)
     container.put_archive.return_value = False

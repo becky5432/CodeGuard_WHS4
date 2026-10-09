@@ -26,7 +26,7 @@ def prepare_filesystem_policy(client, workspace, image_id, language, code, stdin
         client, workspace, language, code, stdin, image_id=image_id,
     )
     profile = parse_runtime_manifest(manifest, image_id)
-    return build_filesystem_policy(image_id, language, True, runtime_profile=profile)
+    return build_filesystem_policy(image_id, language, runtime_profile=profile, device_paths=settings.filesystem_device_paths)
 
 
 def prepare_and_compile(testcase, workspace, code, stdin="", language="C"):

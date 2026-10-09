@@ -52,9 +52,7 @@ class CompilerTests(unittest.TestCase):
         }
         self.workspace = VolumeWorkspace(
             job_id=uuid4(),
-            app_volume="codeguard-job-test-app",
-            input_volume="codeguard-job-test-input",
-            work_volume="codeguard-job-test-work",
+            volume_name="codeguard-job-test-app",
         )
 
     def test_create_compile_container_returns_registered_container(self) -> None:
@@ -78,12 +76,7 @@ class CompilerTests(unittest.TestCase):
                 "-o",
                 "/workspace/main",
             ],
-            volumes={
-                self.workspace.app_volume: {
-                    "bind": "/workspace",
-                    "mode": "rw",
-                }
-            },
+            mounts=[docker.types.Mount("/workspace", self.workspace.volume_name, type="volume", read_only=False, no_copy=True)],
             detach=True,
             network_mode="none",
             user="10001:10001",
@@ -265,11 +258,11 @@ class CompilerTests(unittest.TestCase):
             with self.subTest(change=change):
                 self.setUp()
                 mount = self.container.attrs["Mounts"][0]
-                if change == "source": mount["Name"] = self.workspace.input_volume
+                if change == "source": mount["Name"] = "other-job"
                 elif change == "type": mount["Type"] = "bind"
                 elif change == "duplicate": self.container.attrs["Mounts"].append(dict(mount))
                 else: self.container.attrs["Mounts"].append({"Destination": "/workspace/work", "RW": True,
-                                                            "Type": "volume", "Name": self.workspace.work_volume})
+                                                            "Type": "volume", "Name": "other-work"})
                 with self.assertRaises(SecurityVerificationError):
                     create_compile_container(self.client, self.workspace, "CPP")
                 self.container.start.assert_not_called()

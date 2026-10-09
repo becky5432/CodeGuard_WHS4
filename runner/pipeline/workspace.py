@@ -21,47 +21,25 @@ MANIFEST_ARCHIVE_MAX_BYTES = 128 * 1024
 
 @dataclass(frozen=True)
 class VolumeWorkspace:
-    """Independent per-job application, input and scratch volumes."""
+    """One nonce-isolated named volume shared by all stages of a job."""
 
     job_id: UUID
-    app_volume: str
-    input_volume: str
-    work_volume: str
-
-    @property
-    def volume_name(self) -> str:
-        """Read-only compatibility alias, never the complete runtime workspace."""
-        return self.app_volume
+    volume_name: str
 
 
 def create_workspace(client, job_id: UUID) -> VolumeWorkspace:
-    # Docker's create-volume endpoint reuses an existing name. A fresh nonce
-    # isolates retries/parallel submissions that share the same logical job ID.
-    nonce = uuid4().hex
-    created = []
-    names = {}
+    # Docker reuses existing names: isolate retries sharing a logical job ID.
+    name = f"{settings.volume_name_prefix}{job_id}-{uuid4().hex}"
     try:
-        for purpose in ("app", "input", "work"):
-            name = f"{settings.volume_name_prefix}{job_id}-{nonce}-{purpose}"
-            volume = client.volumes.create(name=name, labels={
-                "codeguard.managed": "true", "codeguard.job_id": str(job_id),
-                "codeguard.purpose": purpose,
-            })
-            created.append(volume)
-            names[purpose] = name
+        client.volumes.create(name=name, labels={
+            "codeguard.managed": "true", "codeguard.job_id": str(job_id),
+            "codeguard.purpose": "job",
+        })
     except docker.errors.DockerException as exc:
-        cleanup_errors = []
-        for volume in created:
-            try:
-                volume.remove(force=True)
-            except docker.errors.NotFound:
-                pass
-            except docker.errors.DockerException as cleanup_exc:
-                cleanup_errors.append(str(cleanup_exc))
         raise WorkspaceError("Job volume creation failed.", details={
-            "job_id": str(job_id), "reason": str(exc), "cleanup_errors": cleanup_errors,
+            "job_id": str(job_id), "reason": str(exc),
         }) from exc
-    return VolumeWorkspace(job_id, names["app"], names["input"], names["work"])
+    return VolumeWorkspace(job_id, name)
 
 
 def _file_archive(filename: str, data: bytes, mode: int) -> bytes:
@@ -84,17 +62,14 @@ def build_source_archive(language: str, code: str) -> bytes:
 
 def build_stdin_archive(stdin: str = "") -> bytes:
     """Always create the single fixed stdin file, including empty input."""
-    return _file_archive("stdin", stdin.encode("utf-8"), 0o444)
+    return _file_archive("stdin", stdin.encode("utf-8"), 0o600)
 
 
 def execution_mounts(workspace: VolumeWorkspace) -> list:
-    # work remains empty after preparation. Docker's default volume population
-    # can overwrite its prepared root ownership/mode when attaching it again.
-    # Job data and permissions come from our helper, never from image contents.
+    # Prepared job data must never be populated from the image. The separate
+    # trace volume inherits the image's protected root and survives job exit.
     return [
-        docker.types.Mount("/workspace/app", workspace.app_volume, type="volume", read_only=True, no_copy=True),
-        docker.types.Mount("/workspace/input", workspace.input_volume, type="volume", read_only=True, no_copy=True),
-        docker.types.Mount("/workspace/work", workspace.work_volume, type="volume", read_only=False, no_copy=True),
+        docker.types.Mount("/workspace", workspace.volume_name, type="volume", read_only=False, no_copy=True),
         docker.types.Mount("/run/codeguard-trace", None, type="volume", read_only=False),
     ]
 
@@ -118,13 +93,11 @@ def _verify_prepare_config(container, workspace: VolumeWorkspace, image_id: str 
     if image_id is not None:
         checks["image_id"] = attrs.get("Image") == image_id
     mounts = attrs.get("Mounts", [])
-    expected = {"/workspace/app": workspace.app_volume,
-                "/workspace/input": workspace.input_volume,
-                "/workspace/work": workspace.work_volume}
-    checks["mounts"] = len(mounts) == 3 and all(
-        sum(m.get("Destination") == target and m.get("Type") == "volume"
-            and m.get("Name") == name and m.get("RW") is True for m in mounts) == 1
-        for target, name in expected.items())
+    checks["mounts"] = (len(mounts) == 1 and mounts[0].get("Destination") == "/workspace"
+                        and mounts[0].get("Type") == "volume"
+                        and mounts[0].get("Name") == workspace.volume_name
+                        and mounts[0].get("RW") is True)
+    checks["tmpfs"] = not host.get("Tmpfs")
     failures = [name for name, valid in checks.items() if not valid]
     if failures:
         raise SecurityVerificationError("Workspace helper configuration verification failed.",
@@ -184,16 +157,15 @@ def prepare_workspace(client, workspace: VolumeWorkspace, language, code: str, s
         container = client.containers.create(
             image=image_id if image_id is not None else settings.cpp_image,
             command=[WORKSPACE_PREPARE_PATH], entrypoint=[],
-            mounts=[docker.types.Mount(f"/workspace/{purpose}", name, type="volume", read_only=False, no_copy=True)
-                    for purpose, name in (("app", workspace.app_volume), ("input", workspace.input_volume),
-                                          ("work", workspace.work_volume))],
+            mounts=[docker.types.Mount("/workspace", workspace.volume_name, type="volume",
+                                      read_only=False, no_copy=True)],
             detach=True, read_only=True, network_mode="none", user="0:0",
             cap_drop=["ALL"], cap_add=list(PREPARE_CAPABILITIES), security_opt=[SECURITY_OPT],
             labels={"codeguard.managed": "true", "codeguard.job_id": str(workspace.job_id),
                     "codeguard.stage": "workspace-prepare"},
         )
         _verify_prepare_config(container, workspace, image_id)
-        for path, data in (("/workspace/app", source_archive), ("/workspace/input", input_archive)):
+        for path, data in (("/workspace", source_archive), ("/workspace", input_archive)):
             if not container.put_archive(path=path, data=data):
                 raise WorkspaceError("Workspace input upload failed.", details={"path": path})
         container.start()
@@ -215,15 +187,12 @@ def prepare_workspace(client, workspace: VolumeWorkspace, language, code: str, s
 
 
 def remove_workspace(client, workspace: VolumeWorkspace) -> None:
-    failures = []
-    for name in (workspace.app_volume, workspace.input_volume, workspace.work_volume):
-        try:
-            client.volumes.get(name).remove(force=True)
-        except docker.errors.NotFound:
-            pass
-        except docker.errors.DockerException as exc:
-            failures.append({"volume_name": name, "reason": str(exc)})
-    if failures:
+    try:
+        client.volumes.get(workspace.volume_name).remove(force=True)
+    except docker.errors.NotFound:
+        pass
+    except docker.errors.DockerException as exc:
         raise CleanupError("Job volume cleanup failed.", details={
-            "job_id": str(workspace.job_id), "failures": failures,
-        })
+            "job_id": str(workspace.job_id), "volume_name": workspace.volume_name,
+            "reason": str(exc),
+        }) from exc

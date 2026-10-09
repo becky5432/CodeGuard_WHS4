@@ -2,6 +2,8 @@
 #include "landlock_policy.h"
 #include <assert.h>
 #include <fcntl.h>
+#include <linux/capability.h>
+#include <sys/syscall.h>
 #include <stdlib.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
@@ -23,8 +25,31 @@ static void add_rule(int rules, const char *path, uint64_t access)
     assert(cg_fs_sys_add(rules, LANDLOCK_RULE_PATH_BENEATH, &a, 0) == 0);
     assert(close(a.parent_fd) == 0);
 }
-int main(void)
+static void drop_mknod_capability(void)
 {
+    struct __user_cap_header_struct header = {.version = _LINUX_CAPABILITY_VERSION_3};
+    struct __user_cap_data_struct data[2] = {{0}};
+    uint32_t bit = UINT32_C(1) << (CAP_MKNOD % 32);
+    assert(syscall(SYS_capget, &header, data) == 0);
+    data[CAP_MKNOD / 32].effective &= ~bit;
+    data[CAP_MKNOD / 32].permitted &= ~bit;
+    data[CAP_MKNOD / 32].inheritable &= ~bit;
+    assert(syscall(SYS_capset, &header, data) == 0);
+}
+static void copy_self(const char *path)
+{
+    char data[4096];
+    ssize_t count;
+    int src = open("/proc/self/exe", O_RDONLY), dst = open(path, O_WRONLY | O_CREAT | O_EXCL, 0700);
+    assert(src >= 0 && dst >= 0);
+    while ((count = read(src, data, sizeof(data))) > 0)
+        assert(write(dst, data, count) == count);
+    assert(count == 0 && close(src) == 0 && close(dst) == 0);
+}
+int main(int argc, char **argv)
+
+{
+    if (argc > 1 && !strcmp(argv[1], "child")) return 42;
     int abi = cg_fs_sys_create(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION);
     char root[] = "/tmp/cg-landlock-XXXXXX", work[4096], first[4096], second[4096];
     char allowed[4096], denied[4096], file[4096], renamed[4096], linked[4096];
@@ -50,11 +75,14 @@ int main(void)
     snprintf(allowed, sizeof(allowed), "%s/allowed", root);
     snprintf(denied, sizeof(denied), "%s/denied", root);
     assert(mkdir(work, 0700) == 0 && mkdir(first, 0700) == 0 && mkdir(second, 0700) == 0);
-    makefile(allowed); makefile(denied); makefile(executable);
+    makefile(allowed); makefile(denied); copy_self(executable);
     rules = cg_fs_sys_create(&attr, sizeof(attr), 0);
     assert(rules >= 0);
     add_rule(rules, work, CG_FS_WORK_ACCESS);
     add_rule(rules, allowed, LANDLOCK_ACCESS_FS_READ_FILE);
+    add_rule(rules, "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+             LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_EXECUTE);
+    add_rule(rules, "/usr/lib/x86_64-linux-gnu/libc.so.6", LANDLOCK_ACCESS_FS_READ_FILE);
     child = fork();
     assert(child >= 0);
     if (!child) {
@@ -74,18 +102,25 @@ int main(void)
         assert(fd >= 0 && write(fd, "abc", 3) == 3 && ftruncate(fd, 1) == 0 && close(fd) == 0);
         assert(rename(file, renamed) == 0 && link(renamed, linked) == 0);
         assert(rename(renamed, denied) == -1 && link(allowed, file) == -1);
-        assert(symlink(allowed, file) == -1 && mkfifo(fifo, 0600) == -1);
-        assert(mknod(charpath, S_IFCHR | 0600, 0) == -1);
+        assert(symlink(allowed, file) == 0 && mkfifo(fifo, 0600) == 0);
+        fd = open(file, O_RDONLY); assert(fd >= 0 && close(fd) == 0);
+        drop_mknod_capability();
+        errno = 0;
+        assert(mknod(charpath, S_IFCHR | 0600, 0) == -1 && errno == EPERM);
         sock = socket(AF_UNIX, SOCK_STREAM, 0);
         assert(sock >= 0 && strlen(sockpath) < sizeof(address.sun_path));
         strcpy(address.sun_path, sockpath);
-        assert(bind(sock, (struct sockaddr *)&address, sizeof(address)) == -1);
+        assert(bind(sock, (struct sockaddr *)&address, sizeof(address)) == 0);
         assert(close(sock) == 0);
-        {
-            char *args[] = {executable, NULL};
+        nested = fork();
+        assert(nested >= 0);
+        if (!nested) {
+            char *args[] = {executable, "child", NULL};
             execv(executable, args);
-            assert(errno == EACCES);
+            _exit(1);
         }
+        assert(waitpid(nested, &nested_status, 0) == nested);
+        assert(WIFEXITED(nested_status) && WEXITSTATUS(nested_status) == 42);
         nested = fork();
         assert(nested >= 0);
         if (!nested) _exit(open(denied, O_RDONLY) == -1 && errno == EACCES ? 0 : 1);

@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -71,24 +72,25 @@ static int runtime_library(const char *path)
 }
 static int loader(const char *path)
 {
-    return !strcmp(path, "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2") ||
-        !strcmp(path, "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2") ||
-        !strcmp(path, "/lib64/ld-linux-x86-64.so.2");
+    return !strcmp(path, "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2");
+}
+static int device_minor(const char *path)
+{
+    if (!strcmp(path, "/dev/null")) return 3;
+    if (!strcmp(path, "/dev/zero")) return 5;
+    if (!strcmp(path, "/dev/random")) return 8;
+    if (!strcmp(path, "/dev/urandom")) return 9;
+    return -1;
 }
 static int trusted(const struct cg_fs_rule *rule, const char *path)
 {
     switch (rule->profile) {
-    case CG_WORK: return !strcmp(path, "/workspace/work");
-    case CG_DIR_LIST:
-        return !strcmp(path, "/workspace/app") || !strcmp(path, "/workspace/input");
-    case CG_FILE_EXEC:
-        return !strcmp(path, "/workspace/app/main") || loader(path);
+    case CG_WORK: return !strcmp(path, "/workspace");
+    case CG_DEVICE_RW: return !strcmp(path, "/dev/null");
+    case CG_DEVICE_READ: return device_minor(path) > 3;
+    case CG_FILE_EXEC: return loader(path);
     case CG_FILE_READ:
-        return !strcmp(path, "/workspace/app/main") || loader(path) ||
-            !strcmp(path, "/workspace/app/main.c") ||
-            !strcmp(path, "/workspace/app/main.cpp") ||
-            !strcmp(path, "/workspace/input/stdin") ||
-            !strcmp(path, "/etc/ld.so.cache") || runtime_library(path);
+        return loader(path) || !strcmp(path, "/etc/ld.so.cache") || runtime_library(path);
     }
     return 0;
 }
@@ -124,8 +126,8 @@ int cg_fs_prepare_ruleset(const struct cg_fs_policy *policy, int *rulesetfd,
     size_t i;
     if (rulesetfd) *rulesetfd = -1;
     if (abi) *abi = 0;
-    if (!policy || !rulesetfd || !abi || policy->version != 1 ||
-        policy->count > CG_FS_MAX_RULES || !cg_fs_valid_id(policy->policy_id))
+    if (!policy || !rulesetfd || !abi || policy->version != 2 ||
+        !policy->count || policy->count > CG_FS_MAX_RULES || !cg_fs_valid_id(policy->policy_id))
         return cg_fs_fail(error, EINVAL, "policy_validate", NULL);
     version = cg_fs_sys_create(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION);
     if (version < 0) return cg_fs_fail(error, errno, "abi", NULL);
@@ -144,14 +146,18 @@ int cg_fs_prepare_ruleset(const struct cg_fs_policy *policy, int *rulesetfd,
         ssize_t length;
         if (strnlen(rule->path, sizeof(rule->path)) == sizeof(rule->path) ||
             !trusted(rule, rule->path)) goto rule_failed;
-        pathfd = under(rule->path, "/workspace") ? open_workspace(rule->path) :
-            open(rule->path, O_PATH | O_CLOEXEC);
+        pathfd = (!strcmp(rule->path, "/workspace") || under(rule->path, "/workspace")) ?
+            open_workspace(rule->path) : open(rule->path, O_PATH | O_CLOEXEC |
+                ((rule->profile == CG_DEVICE_READ || rule->profile == CG_DEVICE_RW) ? O_NOFOLLOW : 0));
         step = "rule_open";
         if (pathfd < 0) { code = errno; goto rule_failed; }
         step = "rule_type";
         if (fstat(pathfd, &st) < 0) { code = errno; goto rule_failed; }
-        if ((rule->profile == CG_WORK || rule->profile == CG_DIR_LIST) ?
-            !S_ISDIR(st.st_mode) : !S_ISREG(st.st_mode)) goto rule_failed;
+        if (rule->profile == CG_DEVICE_READ || rule->profile == CG_DEVICE_RW) {
+            if (!S_ISCHR(st.st_mode) || major(st.st_rdev) != 1 ||
+                minor(st.st_rdev) != (unsigned int)device_minor(rule->path)) goto rule_failed;
+        } else if (rule->profile == CG_WORK ? !S_ISDIR(st.st_mode) : !S_ISREG(st.st_mode))
+            goto rule_failed;
         /* Resolve THIS descriptor after opening; realpath-before-open races. */
         snprintf(procpath, sizeof(procpath), "/proc/self/fd/%d", pathfd);
         length = readlink(procpath, canonical, sizeof(canonical) - 1);
@@ -159,13 +165,18 @@ int cg_fs_prepare_ruleset(const struct cg_fs_policy *policy, int *rulesetfd,
         if (length < 0) { code = errno; goto rule_failed; }
         if ((size_t)length >= sizeof(canonical) - 1) goto rule_failed;
         canonical[length] = 0;
-        if (!trusted(rule, canonical)) goto rule_failed;
+        if (!trusted(rule, canonical) ||
+            ((rule->profile == CG_DEVICE_READ || rule->profile == CG_DEVICE_RW) &&
+             strcmp(rule->path, canonical))) goto rule_failed;
         switch (rule->profile) {
         case CG_FILE_READ: beneath.allowed_access = LANDLOCK_ACCESS_FS_READ_FILE; break;
         case CG_FILE_EXEC:
             beneath.allowed_access = LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_EXECUTE;
             break;
-        case CG_DIR_LIST: beneath.allowed_access = LANDLOCK_ACCESS_FS_READ_DIR; break;
+        case CG_DEVICE_READ: beneath.allowed_access = LANDLOCK_ACCESS_FS_READ_FILE; break;
+        case CG_DEVICE_RW:
+            beneath.allowed_access = LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_WRITE_FILE;
+            break;
         case CG_WORK: beneath.allowed_access = CG_FS_WORK_ACCESS; break;
         }
         beneath.parent_fd = pathfd;

@@ -66,7 +66,7 @@ def container_for(data, **metadata):
 
 def test_policy_archive_is_single_exact_root_private_readonly_file(startup):
     fs = importlib.import_module("runner.policies.filesystem")
-    policy = fs.build_filesystem_policy(IMAGE, "C", True,
+    policy = fs.build_filesystem_policy(IMAGE, "C",
         runtime_profile=fs.parse_runtime_manifest(manifest(), IMAGE))
     assert startup.POLICY_PATH == "/run/codeguard-trace/filesystem.policy"
     assert startup.STATUS_PATH == "/run/codeguard-trace/filesystem.status"

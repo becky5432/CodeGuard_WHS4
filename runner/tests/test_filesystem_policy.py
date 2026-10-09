@@ -40,7 +40,7 @@ def fs():
 
 
 def build(fs, **changes):
-    options = dict(image_id=IMAGE, language="CPP", include_source=True,
+    options = dict(image_id=IMAGE, language="CPP",
                    runtime_profile=fs.parse_runtime_manifest(manifest(), IMAGE))
     options.update(changes)
     return fs.build_filesystem_policy(**options)
@@ -48,14 +48,14 @@ def build(fs, **changes):
 
 def test_models_and_wire_policy_are_immutable_deterministic(fs):
     policy = build(fs)
-    assert policy.version == 1 and policy.image_id == IMAGE
+    assert policy.version == 2 and policy.image_id == IMAGE
     assert isinstance(policy.rules, tuple)
     assert len(policy.policy_id) == 64
     assert policy.rules == tuple(sorted(policy.rules, key=lambda r: (r.profile.value, r.path)))
     assert policy == build(fs)
     wire = policy.to_bytes()
-    assert wire.startswith(f"CGFS\t1\t{policy.policy_id}\n".encode())
-    assert wire == (f"CGFS\t1\t{policy.policy_id}\n" + "".join(
+    assert wire.startswith(f"CGFS\t2\t{policy.policy_id}\n".encode())
+    assert wire == (f"CGFS\t2\t{policy.policy_id}\n" + "".join(
         f"{r.profile.value}\t{r.path}\n" for r in policy.rules)).encode()
     for obj, field, value in [(policy, "version", 2), (policy.rules[0], "path", "/"),
                               (fs.parse_runtime_manifest(manifest(), IMAGE), "image_id", "bad")]:
@@ -69,39 +69,54 @@ def test_models_and_wire_policy_are_immutable_deterministic(fs):
 def test_policy_is_exact_file_allowlist_without_ambient_access(fs):
     rules = {(r.profile.value, r.path) for r in build(fs).rules}
     assert rules == {
-        ("FILE_EXEC", "/workspace/app/main"), ("FILE_EXEC", LOADER),
-        ("FILE_READ", "/workspace/app/main.cpp"), ("FILE_READ", "/workspace/input/stdin"),
-        ("FILE_READ", "/etc/ld.so.cache"), ("DIR_LIST", "/workspace/app"),
-        ("DIR_LIST", "/workspace/input"), ("WORK", "/workspace/work"),
+        ("FILE_EXEC", LOADER), ("FILE_READ", "/etc/ld.so.cache"), ("WORK", "/workspace"),
         *(("FILE_READ", path) for path in LIBRARIES.values()),
     }
     assert not any(path.startswith(("/dev", "/proc")) for _, path in rules)
 
 
-def test_source_stdin_and_optional_cache_are_granted_only_when_provided(fs):
+def test_optional_cache_and_devices_are_explicit(fs):
     profile = fs.parse_runtime_manifest(manifest(cache=None), IMAGE)
-    policy = build(fs, language="C", include_source=False, include_stdin=False,
-                   runtime_profile=profile)
-    assert not any(r.path in {"/etc/ld.so.cache", "/workspace/app/main.c",
-                             "/workspace/app/main.cpp", "/workspace/input/stdin"}
-                   for r in policy.rules)
-    assert build(fs, language="C").policy_id != build(fs).policy_id
-    assert build(fs, include_source=False).policy_id != build(fs).policy_id
+    policy = build(fs, language="C", runtime_profile=profile)
+    assert not any(r.path == "/etc/ld.so.cache" for r in policy.rules)
+    assert build(fs, language="C") == build(fs)
+    selected = build(fs, device_paths=("/dev/null", "/dev/urandom", "/dev/zero", "/dev/random"))
+    assert {(r.profile.value, r.path) for r in selected.rules if r.path.startswith("/dev/")} == {
+        ("DEVICE_RW", "/dev/null"), ("DEVICE_READ", "/dev/urandom"),
+        ("DEVICE_READ", "/dev/zero"), ("DEVICE_READ", "/dev/random")}
+    assert selected.policy_id != build(fs).policy_id
     other = "sha256:" + "b" * 64
     assert build(fs, image_id=other, runtime_profile=fs.parse_runtime_manifest(manifest(), other)).policy_id != build(fs).policy_id
+
+
+@pytest.mark.parametrize("devices", [("/dev/null", "/dev/null"), ("/dev",), ("/dev/tty",), ("/dev/../null",), " /dev/null", None])
+def test_invalid_devices_fail_closed(fs, devices):
+    with pytest.raises(ValueError):
+        build(fs, device_paths=devices)
+
+
+def test_device_settings_are_immutable_validated_and_environment_selected(monkeypatch):
+    from runner.config import Settings
+    monkeypatch.delenv("FILESYSTEM_DEVICE_PATHS", raising=False)
+    assert Settings().filesystem_device_paths == ()
+    monkeypatch.setenv("FILESYSTEM_DEVICE_PATHS", '["/dev/null", "/dev/random"]')
+    assert Settings().filesystem_device_paths == ("/dev/null", "/dev/random")
+    for devices in [("/dev/tty",), ("/dev/null", "/dev/null")]:
+        with pytest.raises(ValueError):
+            Settings(filesystem_device_paths=devices)
 
 
 @pytest.mark.parametrize("path", ["", "relative", "/workspace/app/../main", "/x/..",
     "/workspace/app/main\x00", "/workspace/app/main\t", "/workspace/app/main\n",
     "/workspace/app/main\r", "//workspace/app/main", "/workspace//app/main",
-    "/workspace/./app/main", "/workspace/app/main/", "/" + "é" * 2048])
+    "/workspace/./app/main", "/workspace/app/main/", "/" + "챕" * 2048])
 def test_invalid_paths_are_rejected_without_normalizing_traversal(fs, path):
     with pytest.raises(ValueError):
         fs.FsRule(fs.FsProfile.FILE_READ, path)
 
 
 @pytest.mark.parametrize("profile,path", [
-    ("UNKNOWN", "/workspace/work"), ("WORK", "/tmp"), ("DIR_LIST", "/usr/lib"),
+    ("UNKNOWN", "/workspace/work"), ("WORK", "/workspace/work"), ("FILE_EXEC", "/workspace/main"), ("DIR_LIST", "/workspace"), ("DEVICE_RW", "/dev/random"), ("DEVICE_READ", "/dev/null"), ("WORK", "/tmp"), ("DIR_LIST", "/usr/lib"),
     ("FILE_EXEC", "/bin/sh"), ("FILE_READ", "/usr/lib/x86_64-linux-gnu"),
     ("FILE_READ", "/dev/null"), ("FILE_READ", "/proc/self/maps"),
     ("FILE_READ", "/etc/hosts"), ("FILE_READ", "/etc/resolv.conf"),
@@ -114,9 +129,9 @@ def test_unknown_profiles_and_ambient_authority_are_rejected(fs, profile, path):
 
 def test_policy_rejects_wrong_versions_duplicate_conflicting_and_too_many_rules(fs):
     policy = build(fs)
-    for changes in [dict(version=2), dict(version=True), dict(rules=policy.rules + policy.rules[:1]),
+    for changes in [dict(version=1), dict(version=True), dict(rules=policy.rules + policy.rules[:1]),
                     dict(rules=policy.rules * 20),
-                    dict(rules=policy.rules + (fs.FsRule("FILE_READ", "/workspace/app/main"),))]:
+                    dict(rules=policy.rules + (fs.FsRule("FILE_READ", LOADER),))]:
         with pytest.raises(ValueError):
             replace(policy, **changes)
 
@@ -142,7 +157,7 @@ def test_runtime_image_id_must_be_exact_verified_digest(fs, image):
 def test_builder_requires_manifest_verified_for_exact_server_image(fs):
     profile = fs.parse_runtime_manifest(manifest(), IMAGE)
     with pytest.raises(ValueError):
-        fs.build_filesystem_policy(IMAGE, "C", False)
+        fs.build_filesystem_policy(IMAGE, "C", runtime_profile=None)
     for bad in [None, {}, replace(profile), profile.__class__(
         image_id=IMAGE, version=1, profile="cpp-amd64-v1", architecture="amd64",
         loader=LOADER, libraries=tuple(sorted(LIBRARIES.values())), cache=None)]:
@@ -150,7 +165,7 @@ def test_builder_requires_manifest_verified_for_exact_server_image(fs):
             build(fs, runtime_profile=bad)
     with pytest.raises(ValueError):
         build(fs, image_id="sha256:" + "c" * 64)
-    for changes in [dict(language="PYTHON"), dict(include_source="true"), dict(include_stdin=1)]:
+    for changes in [dict(language="PYTHON")]:
         with pytest.raises(ValueError):
             build(fs, **changes)
 

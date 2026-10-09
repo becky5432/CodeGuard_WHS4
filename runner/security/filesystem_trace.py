@@ -208,7 +208,7 @@ def collect_filesystem_trace(container, *, interrupted: bool = False) -> Filesys
     calls = list(_calls(trace))
     executed = any(
         syscall == "execve" and args
-        and args[0] in {'"/workspace/main"', '"/workspace/app/main"'} and result == 0
+        and args[0] == '"/workspace/main"' and result == 0
         for _, syscall, args, result, _ in calls
     )
     if not executed:

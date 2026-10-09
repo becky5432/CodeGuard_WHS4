@@ -10,11 +10,12 @@ PID 판정 테스트는 Docker 호스트의 /proc 및 cgroup v2 접근이 필요
 import os
 import unittest
 from uuid import uuid4
+from unittest.mock import patch
 
 from runner.config import settings
 from runner.metrics.cgroup_scope import ExecutionCgroupScope, validate_docker_cgroup_driver
 from runner.models.result import RunnerReasonCode, RunnerStatus
-from runner.pipeline.classifier import classify_execution
+from runner.pipeline.classifier import classify_execution, classify_policy_violations
 from runner.pipeline.compiler import get_docker_client
 from runner.pipeline.execution import (
     ExecutionResult,
@@ -38,6 +39,9 @@ class FilesystemIntegrationTests(unittest.TestCase):
         cls.image_id = pin_execution_image(cls.client)
 
     def setUp(self) -> None:
+        device_settings = patch.object(settings, "filesystem_device_paths", ())
+        device_settings.start()
+        self.addCleanup(device_settings.stop)
         self.workspace = create_workspace(self.client, uuid4())
         self.addCleanup(remove_workspace, self.client, self.workspace)
 
@@ -57,7 +61,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
             if mount["Destination"] == "/workspace"
         )
         self.assertTrue(compile_mount["RW"])
-        self.assertEqual(compile_mount["Name"], self.workspace.app_volume)
+        self.assertEqual(compile_mount["Name"], self.workspace.volume_name)
 
         run_id = uuid4()
         cgroup_scope = ExecutionCgroupScope.create(
@@ -87,14 +91,9 @@ class FilesystemIntegrationTests(unittest.TestCase):
         self.assertFalse(host_config.get("Tmpfs"))
         self.assertTrue(any(m["Destination"] == "/run/codeguard-trace" and m["RW"] for m in container.attrs["Mounts"]))
         mounts = {mount["Destination"]: mount for mount in container.attrs["Mounts"]}
-        self.assertNotIn("/workspace", mounts)
-        for target, name, writable in (
-            ("/workspace/app", self.workspace.app_volume, False),
-            ("/workspace/input", self.workspace.input_volume, False),
-            ("/workspace/work", self.workspace.work_volume, True),
-        ):
-            self.assertEqual(mounts[target]["Name"], name)
-            self.assertEqual(mounts[target]["RW"], writable)
+        self.assertEqual(mounts["/workspace"]["Name"], self.workspace.volume_name)
+        self.assertTrue(mounts["/workspace"]["RW"])
+        self.assertFalse(any(path.startswith("/workspace/") for path in mounts))
         self.assertEqual(container.attrs["Image"], self.image_id)
         self.assertEqual(host_config["NetworkMode"], settings.execution_network)
         self.assertEqual(container.attrs["Config"]["User"], "0:0")
@@ -169,9 +168,9 @@ class FilesystemIntegrationTests(unittest.TestCase):
         result = self._compile_and_execute(r'''
             #include <stdio.h>
             int main(void) {
-                FILE *app = fopen("/workspace/app/main", "rb");
-                FILE *source = fopen("/workspace/app/main.c", "r");
-                FILE *input = fopen("/workspace/input/stdin", "r");
+                FILE *app = fopen("/workspace/main", "rb");
+                FILE *source = fopen("/workspace/main.c", "r");
+                FILE *input = fopen("/workspace/stdin", "r");
                 if (!app || !source || !input) return 1;
                 int value = 0;
                 if (fgetc(app) != 0x7f || fgetc(source) == EOF ||
@@ -194,7 +193,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
             #include <unistd.h>
             int main(void) {
                 char cwd[128], data[32] = {0};
-                if (!getcwd(cwd, sizeof(cwd)) || strcmp(cwd, "/workspace/work")) return 1;
+                if (!getcwd(cwd, sizeof(cwd)) || strcmp(cwd, "/workspace")) return 1;
                 struct stat st;
                 if (stat(".", &st)) { perror("stat work"); return 10; }
                 if (getuid() != 10001 || getgid() != 10001 ||
@@ -230,10 +229,17 @@ class FilesystemIntegrationTests(unittest.TestCase):
         self.assertFalse(result.filesystem_limit_exceeded)
         self.assertEqual(classify_execution(result).status, RunnerStatus.SUCCESS)
 
-    def test_app_and_input_mutations_are_denied(self) -> None:
-        for path in ('/workspace/app/main', '/workspace/app/main.c', '/workspace/input/stdin'):
+    def test_source_and_stdin_mutations_succeed(self) -> None:
+        for path in ('/workspace/main.c', '/workspace/stdin'):
             with self.subTest(path=path):
-                self._assert_write_is_read_only(path)
+                result = self._compile_and_execute(r'''#include <stdio.h>
+                    int main(void) {
+                        FILE *f = fopen("TEST_PATH", "w");
+                        if (!f || fputs("modified", f) == EOF || fclose(f)) return 1;
+                        return 0;
+                    }'''.replace('TEST_PATH', path))
+                self.assertEqual(result.exit_code, 0, result.stderr)
+                self.assertEqual(classify_execution(result).status, RunnerStatus.SUCCESS)
 
     def test_proc_sys_and_dev_file_reads_are_denied(self) -> None:
         for path in ('/proc/self/status', '/proc/sys/kernel/hostname',
@@ -251,6 +257,29 @@ class FilesystemIntegrationTests(unittest.TestCase):
                     }
                 '''.replace('TEST_PATH', path))
                 self._assert_denied_result(result)
+
+    def test_selected_devices_have_only_read_or_read_write_access(self) -> None:
+        with patch.object(settings, "filesystem_device_paths", ("/dev/null", "/dev/zero", "/dev/random", "/dev/urandom")):
+            result = self._compile_and_execute(r'''
+                #include <fcntl.h>
+                #include <unistd.h>
+                int main(void) {
+                    const char *paths[] = {"/dev/zero", "/dev/random", "/dev/urandom"};
+                    char data[8];
+                    int fd = open("/dev/null", O_RDWR);
+                    if (fd < 0 || write(fd, "ok", 2) != 2 || close(fd)) return 1;
+                    for (unsigned i = 0; i < 3; i++) {
+                        fd = open(paths[i], O_RDONLY | O_NONBLOCK);
+                        if (fd < 0) return 2;
+                        if (read(fd, data, sizeof(data)) < 0 || close(fd)) return 3;
+                        fd = open(paths[i], O_WRONLY);
+                        if (fd >= 0) { close(fd); return 4; }
+                    }
+                    return 0;
+                }
+            ''')
+        self.assertEqual(result.exit_code, 0, result.stderr)
+        self.assertEqual(classify_execution(result).status, RunnerStatus.SUCCESS)
 
     def test_dev_null_write_is_denied(self) -> None:
         self._assert_write_is_read_only('/dev/null')
@@ -291,27 +320,27 @@ class FilesystemIntegrationTests(unittest.TestCase):
 
     def test_cross_boundary_rename_and_hardlink_are_denied(self) -> None:
         for operation in (
-            'rename("/workspace/app/main", "/workspace/work/moved")',
-            'link("/workspace/app/main", "/workspace/work/linked")',
-            'rename("/workspace/input/stdin", "/workspace/work/moved")',
-            'link("/workspace/input/stdin", "/workspace/work/linked")',
-            '({ FILE *f = fopen("/workspace/work/local", "w"); '
+            'rename("/workspace/main", "/etc/moved")',
+            'link("/workspace/main", "/etc/linked")',
+            'rename("/workspace/stdin", "/tmp/moved")',
+            'link("/workspace/stdin", "/tmp/linked")',
+            '({ FILE *f = fopen("/workspace/local", "w"); '
             'if (!f || fclose(f)) return 2; '
-            'rename("/workspace/work/local", "/workspace/input/moved"); })',
-            '({ FILE *f = fopen("/workspace/work/local", "w"); '
+            'rename("/workspace/local", "/etc/moved"); })',
+            '({ FILE *f = fopen("/workspace/local", "w"); '
             'if (!f || fclose(f)) return 2; '
-            'link("/workspace/work/local", "/workspace/app/linked"); })',
+            'link("/workspace/local", "/etc/linked"); })',
         ):
             with self.subTest(operation=operation):
                 self._assert_mutation_detected(operation)
 
-    def test_work_symlink_fifo_and_socket_creation_are_denied(self) -> None:
+    def test_work_symlink_fifo_and_socket_creation_succeed(self) -> None:
         for operation in (
-            'symlink("/workspace/app/main", "/workspace/work/link")',
-            'mkfifo("/workspace/work/fifo", 0600)',
+            'symlink("/workspace/main", "/workspace/link")',
+            'mkfifo("/workspace/fifo", 0600)',
             '({ int fd = socket(AF_UNIX, SOCK_STREAM, 0); if (fd < 0) return 2; '
             'struct sockaddr_un address = {.sun_family = AF_UNIX}; '
-            'strcpy(address.sun_path, "/workspace/work/socket"); '
+            'strcpy(address.sun_path, "/workspace/socket"); '
             'int rc = bind(fd, (struct sockaddr *)&address, sizeof(address)); '
             'close(fd); rc; })',
         ):
@@ -326,11 +355,13 @@ class FilesystemIntegrationTests(unittest.TestCase):
                     #include <unistd.h>
                     int main(void) {
                         int rc = OPERATION;
-                        printf("denied=%d\n", rc == -1);
-                        return rc == -1 ? 0 : 1;
+                        printf("created=%d\n", rc == 0);
+                        return rc == 0 ? 0 : 1;
                     }
                 '''.replace('OPERATION', operation))
-                self._assert_denied_result(result)
+                self.assertEqual(result.exit_code, 0, result.stderr)
+                self.assertIn("created=1", result.stdout)
+                self.assertEqual(classify_execution(result).status, RunnerStatus.SUCCESS)
 
     def test_shell_execution_is_denied(self) -> None:
         result = self._compile_and_execute(r'''
@@ -352,7 +383,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
         ''')
         self._assert_denied_result(result, 'shell_denied=1')
 
-    def test_direct_work_binary_execution_is_denied(self) -> None:
+    def test_direct_work_binary_execution_succeeds(self) -> None:
         result = self._compile_and_execute(r'''
             #define _POSIX_C_SOURCE 200809L
             #include <fcntl.h>
@@ -361,9 +392,9 @@ class FilesystemIntegrationTests(unittest.TestCase):
             #include <unistd.h>
             int main(int argc, char **argv) {
                 (void)argv;
-                if (argc > 1) return 42;
-                int src = open("/workspace/app/main", O_RDONLY);
-                int dst = open("/workspace/work/copy", O_WRONLY|O_CREAT|O_EXCL, 0700);
+                if (argc > 1) { puts("work_exec_succeeded=1"); return 0; }
+                int src = open("/workspace/main", O_RDONLY);
+                int dst = open("/workspace/copy", O_WRONLY|O_CREAT|O_EXCL, 0700);
                 if (src < 0 || dst < 0) return 1;
                 char buffer[4096]; ssize_t count;
                 while ((count = read(src, buffer, sizeof(buffer))) > 0)
@@ -372,15 +403,17 @@ class FilesystemIntegrationTests(unittest.TestCase):
                 pid_t child = fork();
                 if (child < 0) return 4;
                 if (child == 0) {
-                    execl("/workspace/work/copy", "copy", "child", (char *)0);
-                    dprintf(1, "work_exec_denied=1\n"); _exit(0);
+                    execl("/workspace/copy", "copy", "child", (char *)0);
+                    _exit(42);
                 }
                 int status;
                 if (waitpid(child, &status, 0) < 0) return 5;
                 return WIFEXITED(status) ? WEXITSTATUS(status) : 6;
             }
         ''')
-        self._assert_denied_result(result, 'work_exec_denied=1')
+        self.assertEqual(result.exit_code, 0, result.stderr)
+        self.assertIn('work_exec_succeeded=1', result.stdout)
+        self.assertEqual(classify_execution(result).status, RunnerStatus.SUCCESS)
 
     def test_fork_and_thread_inherit_filesystem_restrictions(self) -> None:
         result = self._compile_and_execute(r'''
@@ -394,7 +427,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
             static int probe(void) {
                 int fd = open("/etc/hosts", O_RDONLY);
                 if (fd >= 0) { close(fd); return 1; }
-                fd = open("/workspace/input/stdin", O_RDONLY);
+                fd = open("/workspace/stdin", O_RDONLY);
                 if (fd < 0) return 2;
                 close(fd); return 0;
             }
@@ -442,11 +475,10 @@ class FilesystemIntegrationTests(unittest.TestCase):
         # Keep the existing EROFS detector contract without inventing an
         # EACCES -> FILESYSTEM_LIMIT classifier or requiring a particular errno.
         classified = classify_execution(result)
-        if result.filesystem_limit_exceeded:
-            self.assertEqual(classified.status, RunnerStatus.BLOCKED)
-            self.assertEqual(classified.reason_code, RunnerReasonCode.FILESYSTEM_LIMIT)
-        else:
-            self.assertEqual(classified.status, RunnerStatus.SUCCESS)
+        self.assertEqual(classified.status, RunnerStatus.SUCCESS)
+        self.assertIsNone(classified.reason_code)
+        self.assertEqual(classify_policy_violations(result),
+                         [RunnerReasonCode.FILESYSTEM_LIMIT] if result.filesystem_limit_exceeded else [])
 
     def _assert_write_is_read_only(self, path: str) -> None:
         result = self._compile_and_execute(r'''
@@ -463,8 +495,10 @@ class FilesystemIntegrationTests(unittest.TestCase):
     def test_rootfs_write_is_denied(self) -> None:
         self._assert_write_is_read_only("/etc/codeguard_test")
 
-    def test_workspace_write_is_denied(self) -> None:
-        self._assert_write_is_read_only("/workspace/codeguard_test")
+    def test_workspace_root_write_succeeds(self) -> None:
+        result = self._compile_and_execute('#include <stdio.h>\nint main(void) { FILE *f = fopen("/workspace/new", "w"); return !f || fclose(f); }')
+        self.assertEqual(result.exit_code, 0, result.stderr)
+        self.assertEqual(classify_execution(result).status, RunnerStatus.SUCCESS)
 
     def test_tmp_write_is_denied(self) -> None:
         self._assert_write_is_read_only("/tmp/codeguard_test")
@@ -482,8 +516,8 @@ class FilesystemIntegrationTests(unittest.TestCase):
         ''')
         self._assert_denied_result(result)
 
-    def _assert_mutation_detected(self, operation: str) -> None:
-        result = self._compile_and_execute(r'''
+    def _assert_mutation_detected(self, operation: str, allowed=False) -> None:
+        code = r'''
             #include <stdio.h>
             #include <unistd.h>
             #include <sys/stat.h>
@@ -493,24 +527,31 @@ class FilesystemIntegrationTests(unittest.TestCase):
                 printf("denied=%d\n", rc == -1);
                 return rc == -1 ? 0 : 1;
             }
-        '''.replace("OPERATION", operation))
-        self._assert_denied_result(result)
+        '''.replace("OPERATION", operation)
+        if allowed:
+            code = code.replace("rc == -1", "rc == 0")
+        result = self._compile_and_execute(code)
+        if allowed:
+            self.assertEqual(result.exit_code, 0, result.stderr)
+            self.assertEqual(classify_execution(result).status, RunnerStatus.SUCCESS)
+        else:
+            self._assert_denied_result(result)
 
-    def test_unlink_is_detected_even_when_exit_zero(self) -> None:
-        self._assert_mutation_detected('unlink("/workspace/app/main")')
+    def test_workspace_main_unlink_succeeds(self) -> None:
+        self._assert_mutation_detected('unlink("/workspace/main")', allowed=True)
 
-    def test_rename_is_detected(self) -> None:
-        self._assert_mutation_detected('rename("/workspace/app/main", "/workspace/app/renamed")')
+    def test_workspace_main_rename_succeeds(self) -> None:
+        self._assert_mutation_detected('rename("/workspace/main", "/workspace/renamed")', allowed=True)
 
-    def test_mkdir_is_detected(self) -> None:
-        self._assert_mutation_detected('mkdir("/workspace/test", 0700)')
+    def test_workspace_mkdir_succeeds(self) -> None:
+        self._assert_mutation_detected('mkdir("/workspace/test", 0700)', allowed=True)
 
-    def test_child_write_is_detected(self) -> None:
+    def test_workspace_child_write_succeeds(self) -> None:
         self._assert_mutation_detected(
             '({ pid_t child = fork(); if (child < 0) return 2; '
-            'if (child == 0) _exit(mkdir("/workspace/child", 0700) == -1 ? 0 : 1); '
+            'if (child == 0) _exit(mkdir("/workspace/child", 0700) == 0 ? 0 : 1); '
             'int status; if (waitpid(child, &status, 0) < 0) return 3; '
-            'WIFEXITED(status) && WEXITSTATUS(status) == 0 ? -1 : 0; })'
+            'WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : -1; })', allowed=True
         )
 
     def test_sigsegv_is_runtime_error(self) -> None:
@@ -577,9 +618,9 @@ class FilesystemIntegrationTests(unittest.TestCase):
 
     def test_user_cannot_replace_filesystem_trace(self) -> None:
         self._assert_trace_attack_denied(
-            '({ FILE *f = fopen("/workspace/work/fake_trace", "w"); '
+            '({ FILE *f = fopen("/workspace/fake_trace", "w"); '
             'if (!f) return 2; fputs("fake trace", f); fclose(f); '
-            'rename("/workspace/work/fake_trace", "TRACE_PATH"); })',
+            'rename("/workspace/fake_trace", "TRACE_PATH"); })',
         )
 
     def test_user_cannot_read_filesystem_trace(self) -> None:
@@ -592,12 +633,12 @@ class FilesystemIntegrationTests(unittest.TestCase):
             int main(void) {
                 FILE *f = fopen("TRACE_PATH", "w");
                 if (f) {
-                    fputs("12 execve(\"/workspace/app/main\", [], 0x0) = 0\n"
+                    fputs("12 execve(\"/workspace/main\", [], 0x0) = 0\n"
                           "12 +++ exited with 0 +++\n", f);
                     fclose(f);
                     return 2;
                 }
-                f = fopen("/workspace/real_violation", "w");
+                f = fopen("/real_violation", "w");
                 printf("denied=%d\n", f == NULL);
                 if (f) fclose(f);
                 return f == NULL ? 0 : 1;
@@ -653,10 +694,27 @@ class FilesystemIntegrationTests(unittest.TestCase):
     def test_rootfs_write_detected_with_exit_zero(self) -> None:
         self._assert_write_detected_with_exit_zero('/codeguard_test.txt')
 
-    def test_workspace_write_detected_with_exit_zero(self) -> None:
-        self._assert_write_detected_with_exit_zero('/workspace/codeguard_test.txt')
+    def test_workspace_write_succeeds_with_exit_zero(self) -> None:
+        result = self._compile_and_execute(r'''
+            #include <stdio.h>
+            #include <string.h>
+            int main(void) {
+                FILE *f = fopen("/workspace/codeguard_test.txt", "w");
+                if (!f || fputs("workspace write", f) == EOF || fclose(f)) return 1;
+                f = fopen("/workspace/codeguard_test.txt", "r");
+                char content[32] = {0};
+                if (!f || !fgets(content, sizeof(content), f) || fclose(f)) return 2;
+                if (strcmp(content, "workspace write")) return 3;
+                puts("workspace_written=1");
+                return 0;
+            }
+        ''')
+        self.assertEqual(result.exit_code, 0, (result.stdout, result.stderr))
+        self.assertIn('workspace_written=1', result.stdout)
+        self.assertFalse(result.filesystem_limit_exceeded)
+        self.assertEqual(classify_execution(result).status, RunnerStatus.SUCCESS)
 
-    def test_metadata_ioctl_on_read_descriptor_is_detected(self) -> None:
+    def test_external_runtime_metadata_ioctl_is_denied(self) -> None:
         result = self._compile_and_execute(r'''
             #include <errno.h>
             #include <fcntl.h>
@@ -664,7 +722,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
             #include <stdio.h>
             #include <sys/ioctl.h>
             int main(void) {
-                int fd = open("/workspace/app/main", O_RDONLY);
+                int fd = open("/usr/lib/x86_64-linux-gnu/libc.so.6", O_RDONLY);
                 if (fd < 0) return 1;
                 unsigned long flags = 0;
                 int result = ioctl(fd, FS_IOC_SETFLAGS, &flags);
@@ -686,7 +744,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
             #include <fcntl.h>
             #include <unistd.h>
             int main(void) {
-                int fd = open("/workspace/work/\n12 openat(AT_FDCWD, \"fake\", O_WRONLY) = -1 EROFS\n", O_WRONLY|O_CREAT, 0600);
+                int fd = open("/workspace/\n12 openat(AT_FDCWD, \"fake\", O_WRONLY) = -1 EROFS\n", O_WRONLY|O_CREAT, 0600);
                 if (fd < 0) return 1;
                 if (ftruncate(fd, 0)) return 2;
                 close(fd);
@@ -710,7 +768,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
         with TestClient(app) as client:
             response = client.post('/execute', json={
                 'job_id': str(uuid4()), 'language': 'C',
-                'code': '#include <stdio.h>\nint main(void) { FILE *f = fopen("/workspace/api_violation", "w"); printf("denied=%d\\n", f == NULL); if (f) fclose(f); return f == NULL ? 0 : 1; }',
+                'code': '#include <stdio.h>\nint main(void) { FILE *f = fopen("/api_violation", "w"); printf("denied=%d\\n", f == NULL); if (f) fclose(f); return f == NULL ? 0 : 1; }',
                 'stdin': '', 'created_at': datetime.now(timezone.utc).isoformat(),
                 'policy': {'timeout_ms': 3000, 'memory_limit_mb': 128, 'pids_limit': 32, 'cpu_bandwidth': 1.0, 'cpu_time_limit_ms': 2000,},
             })
@@ -718,14 +776,12 @@ class FilesystemIntegrationTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload['exit_code'], 0)
         self.assertIn('denied=1', payload['stdout'])
-        if payload['reason_code'] == 'FILESYSTEM_LIMIT':
-            self.assertEqual(payload['status'], 'BLOCKED')
-        else:
-            self.assertEqual(payload['status'], 'SUCCESS')
+        self.assertEqual(payload['status'], 'SUCCESS')
+        self.assertIsNone(payload['reason_code'])
+        self.assertIn(payload['policy_violations'], ([], ['FILESYSTEM_LIMIT']))
         backend = BackendRunnerResponse.model_validate(payload)
         result = ExecutionResultResponse.model_validate(backend.model_dump(mode='json'))
-        if payload['reason_code'] == 'FILESYSTEM_LIMIT':
-            self.assertEqual(result.reason_code.value, 'FILESYSTEM_LIMIT')
+        self.assertEqual([reason.value for reason in result.policy_violations], payload['policy_violations'])
 
     def test_nonzero_exit_is_not_filesystem_limit(self) -> None:
         result = self._compile_and_execute('int main(void) { return 30; }')
@@ -754,7 +810,7 @@ class FilesystemIntegrationTests(unittest.TestCase):
                 };
                 struct sock_fprog program = {.len = 4, .filter = filter};
                 if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &program)) return 1;
-                int fd = open("/workspace/work/allowed", O_WRONLY|O_CREAT, 0600);
+                int fd = open("/workspace/allowed", O_WRONLY|O_CREAT, 0600);
                 printf("fd=%d errno=%d\n", fd, errno);
                 return 0;
             }

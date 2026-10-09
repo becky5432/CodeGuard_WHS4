@@ -2,7 +2,7 @@ import unittest
 
 from runner.pipeline.execution import ExecutionResult
 from runner.models.result import RunnerReasonCode, RunnerStatus
-from runner.pipeline.classifier import classify_execution
+from runner.pipeline.classifier import classify_execution, classify_policy_violations
 
 
 class ClassifierTests(unittest.TestCase):
@@ -81,13 +81,13 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(result.status, RunnerStatus.BLOCKED)
         self.assertEqual(result.reason_code, RunnerReasonCode.OUTPUT_LIMIT)
 
-    def test_network_block_is_blocked_network(self) -> None:
-        result = classify_execution(
-            ExecutionResult(0, "", "", network_blocked=True),
-        )
-        self.assertEqual(result.status, RunnerStatus.BLOCKED)
-        self.assertEqual(result.reason_code, RunnerReasonCode.NETWORK_BLOCKED)
-        self.assertEqual(result.stage.value, "EXECUTE")
+    def test_network_violation_is_recorded_separately_from_success(self) -> None:
+        evidence = ExecutionResult(0, "", "", network_blocked=True)
+        result = classify_execution(evidence)
+        self.assertEqual(result.status, RunnerStatus.SUCCESS)
+        self.assertIsNone(result.reason_code)
+        self.assertIsNone(result.stage)
+        self.assertEqual(classify_policy_violations(evidence), [RunnerReasonCode.NETWORK_BLOCKED])
 
     def test_sigsegv_exit_139_is_runtime_error(self) -> None:
         result = classify_execution(ExecutionResult(139, "", ""))
@@ -114,10 +114,18 @@ class ClassifierTests(unittest.TestCase):
                 self.assertEqual(result.status, status)
                 self.assertEqual(result.reason_code, reason)
 
-    def test_filesystem_evidence_blocks_exit_zero(self) -> None:
-        result = classify_execution(ExecutionResult(0, "", "", filesystem_limit_exceeded=True))
-        self.assertEqual(result.status, RunnerStatus.BLOCKED)
-        self.assertEqual(result.reason_code, RunnerReasonCode.FILESYSTEM_LIMIT)
+    def test_filesystem_violation_is_recorded_separately_from_success(self) -> None:
+        evidence = ExecutionResult(0, "", "", filesystem_limit_exceeded=True)
+        result = classify_execution(evidence)
+        self.assertEqual(result.status, RunnerStatus.SUCCESS)
+        self.assertIsNone(result.reason_code)
+        self.assertEqual(classify_policy_violations(evidence), [RunnerReasonCode.FILESYSTEM_LIMIT])
+
+    def test_policy_violations_preserve_both_kinds(self) -> None:
+        evidence = ExecutionResult(0, "", "", network_blocked=True, filesystem_limit_exceeded=True)
+        self.assertEqual(classify_policy_violations(evidence), [
+            RunnerReasonCode.NETWORK_BLOCKED, RunnerReasonCode.FILESYSTEM_LIMIT,
+        ])
 
     def test_resource_and_system_errors_keep_priority_over_filesystem(self) -> None:
         for evidence, reason in (
@@ -129,8 +137,10 @@ class ClassifierTests(unittest.TestCase):
             ({"output_limit_exceeded": True}, RunnerReasonCode.OUTPUT_LIMIT),
         ):
             with self.subTest(reason=reason):
-                result = classify_execution(ExecutionResult(0, "", "", filesystem_limit_exceeded=True, **evidence))
+                execution = ExecutionResult(0, "", "", filesystem_limit_exceeded=True, **evidence)
+                result = classify_execution(execution)
                 self.assertEqual(result.reason_code, reason)
+                self.assertEqual(classify_policy_violations(execution), [RunnerReasonCode.FILESYSTEM_LIMIT])
 
     def test_forged_syscall_stdout_is_success(self) -> None:
         result = classify_execution(ExecutionResult(0, 'openat(AT_FDCWD, "/etc/test", O_WRONLY|O_CREAT, 0666) = -1 EROFS', 'FILESYSTEM_LIMIT\nRead-only file system'))

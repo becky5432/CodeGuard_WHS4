@@ -75,31 +75,34 @@ static void test_parser(void)
     char text[70000];
     const char *bad[] = {
         "FILE_READ\trelative\n", "FILE_READ\t\n", "FILE_READ\t/a/../b\n",
-        "FILE_READ\t/a\tb\n", "UNKNOWN\t/a\n", "FILE_READ\t/a",
+        "FILE_READ\t/a\tb\n", "UNKNOWN\t/a\n", "DIR_LIST\t/workspace\n", "FILE_READ\t/a",
         "FILE_READ\t/a\nFILE_READ\t/a\n", "FILE_READ\t/a\nFILE_EXEC\t/a\n",
         "FILE_READ\t/a//b\n", "FILE_READ\t/a/./b\n", "FILE_READ\t/a/\n",
         "FILE_READ\t/a\r\n", "\n"
     };
     size_t i;
-    snprintf(text, sizeof(text), "CGFS\t1\t%s\nFILE_READ\t/etc/ld.so.cache\n", id);
+    snprintf(text, sizeof(text), "CGFS\t2\t%s\nFILE_READ\t/etc/ld.so.cache\n", id);
     assert(parse(text, strlen(text), &p, &e) == 0);
-    assert(p.version == 1 && p.count == 1 && strcmp(p.policy_id, id) == 0);
+    assert(p.version == 2 && p.count == 1 && strcmp(p.policy_id, id) == 0);
     assert(p.rules[0].profile == CG_FILE_READ);
+    snprintf(text, sizeof(text), "CGFS\t2\t%s\nDEVICE_RW\t/dev/null\nDEVICE_READ\t/dev/random\nWORK\t/workspace\n", id);
+    assert(parse(text, strlen(text), &p, &e) == 0 && p.count == 3);
+    assert(p.rules[0].profile == CG_DEVICE_RW && p.rules[1].profile == CG_DEVICE_READ);
     for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
-        snprintf(text, sizeof(text), "CGFS\t1\t%s\n%s", id, bad[i]);
+        snprintf(text, sizeof(text), "CGFS\t2\t%s\n%s", id, bad[i]);
         assert(parse(text, strlen(text), &p, &e) == -1 && e.saved_errno != 0);
     }
+    snprintf(text, sizeof(text), "CGFS\t1\t%s\nWORK\t/workspace\n", id);
+    assert(parse(text, strlen(text), &p, &e) == -1);
     snprintf(text, sizeof(text), "CGFS\t2\t%s\n", id);
     assert(parse(text, strlen(text), &p, &e) == -1);
-    snprintf(text, sizeof(text), "CGFS\t1\t%s\n", id);
-    assert(parse(text, strlen(text), &p, &e) == -1);
-    snprintf(text, sizeof(text), "CGFS\t1\t%s\n", id);
+    snprintf(text, sizeof(text), "CGFS\t2\t%s\n", id);
     text[8] = 'z';
     assert(parse(text, strlen(text), &p, &e) == -1);
-    snprintf(text, sizeof(text), "CGFS\t1\t%s\nFILE_READ\t/a\n", id);
+    snprintf(text, sizeof(text), "CGFS\t2\t%s\nFILE_READ\t/a\n", id);
     text[80] = 0;
     assert(parse(text, 84, &p, &e) == -1);
-    snprintf(text, sizeof(text), "CGFS\t1\t%s\n", id);
+    snprintf(text, sizeof(text), "CGFS\t2\t%s\n", id);
     for (i = 0; i < 129; i++) {
         size_t len = strlen(text);
         snprintf(text + len, sizeof(text) - len, "FILE_READ\t/a%zu\n", i);
@@ -111,7 +114,7 @@ static void test_parser(void)
 }
 static void test_syscalls(void)
 {
-    struct cg_fs_policy p = {.version = 1, .count = 1};
+    struct cg_fs_policy p = {.version = 2, .count = 1};
     struct cg_fs_error e;
     int fd = -1, abi = 0, before;
     strcpy(p.policy_id, id);
@@ -148,7 +151,7 @@ static void test_syscalls(void)
     assert(cg_fs_prepare_ruleset(&p, &fd, &abi, &e) == 0);
     close(fd);
     p.rules[0].profile = CG_FILE_EXEC;
-    strcpy(p.rules[0].path, "/lib64/ld-linux-x86-64.so.2");
+    strcpy(p.rules[0].path, "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2");
     assert(cg_fs_prepare_ruleset(&p, &fd, &abi, &e) == 0);
     assert(allowed == (LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_READ_FILE));
     close(fd);
@@ -162,10 +165,9 @@ static void test_syscalls(void)
     p.rules[0].profile = CG_FILE_EXEC;
     strcpy(p.rules[0].path, "/etc/ld.so.cache");
     assert(cg_fs_prepare_ruleset(&p, &fd, &abi, &e) == -1 && adds == before);
-    assert((CG_FS_WORK_ACCESS & (LANDLOCK_ACCESS_FS_EXECUTE |
-        LANDLOCK_ACCESS_FS_MAKE_SYM | LANDLOCK_ACCESS_FS_MAKE_FIFO |
-        LANDLOCK_ACCESS_FS_MAKE_SOCK | LANDLOCK_ACCESS_FS_MAKE_CHAR |
-        LANDLOCK_ACCESS_FS_MAKE_BLOCK | CG_FS_IOCTL_DEV)) == 0);
+    assert((CG_FS_WORK_ACCESS & CG_FS_IOCTL_DEV) == 0);
+    assert((CG_FS_WORK_ACCESS | CG_FS_IOCTL_DEV) == CG_FS_HANDLED);
+
 }
 static void test_status(void)
 {

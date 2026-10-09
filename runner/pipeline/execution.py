@@ -247,8 +247,8 @@ def create_execution_container(
         f"-o {TRACE_PATH} -e trace={TRACE_SYSCALLS} "
         f"-e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init "
         f"--security-fd 3 --filesystem-policy-fd 4 --filesystem-status-fd 5 "
-        f"--stdin /workspace/input/stdin --workdir /workspace/work "
-        f"-- /workspace/app/main"
+        f"--stdin /workspace/stdin --workdir /workspace "
+        f"-- /workspace/main"
     )
     command = ["sh", "-c", trace_command]
 
@@ -262,6 +262,7 @@ def create_execution_container(
         "mounts": execution_mounts(workspace),
         "detach": True,
         "read_only": True,
+        "environment": {"TMPDIR": "/workspace", "TMP": "/workspace", "TEMP": "/workspace"},
         
         "network_mode": network_mode or settings.execution_network,
         "user": "0:0",
@@ -295,7 +296,7 @@ def create_execution_container(
             verify_container_security_config(
                 container,
                 stage="execute",
-                workspace_mode="ro",
+                workspace_mode="rw",
                 expected_user="0:0",
                 required_cap_add=TRACER_CAP_ADD,
                 expected_workspace=workspace,

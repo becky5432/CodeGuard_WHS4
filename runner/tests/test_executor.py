@@ -40,7 +40,7 @@ class ExecutorTests(unittest.TestCase):
         execution_container = MagicMock()
         task_tracker = MagicMock()
         cgroup_scope = MagicMock()
-        workspace = VolumeWorkspace(job_id, "codeguard-job-test-app", "codeguard-job-test-input", "codeguard-job-test-work")
+        workspace = VolumeWorkspace(job_id, "codeguard-job-test-app")
         delegated_root = Path("/sys/fs/cgroup/codeguard")
         job = RunnerRequest(
             job_id=job_id,
@@ -57,6 +57,7 @@ class ExecutorTests(unittest.TestCase):
         )
 
         with (
+            patch.object(settings, "filesystem_device_paths", ("/dev/null", "/dev/urandom")),
             patch.object(settings, "execution_cgroup_enabled", True),
             patch.object(settings, "task_tracker_enabled", True),
             patch.object(settings, "execution_cgroup_root", delegated_root),
@@ -111,6 +112,9 @@ class ExecutorTests(unittest.TestCase):
         ):
             response = execute_job(job)
 
+        policy = create_execution.call_args.kwargs["filesystem_policy"]
+        self.assertEqual({(r.profile.value, r.path) for r in policy.rules if r.path.startswith("/dev/")},
+                         {("DEVICE_RW", "/dev/null"), ("DEVICE_READ", "/dev/urandom")})
         create_scope.assert_called_once_with(
             root=delegated_root,
             run_id=response.run_id,
@@ -167,7 +171,7 @@ class ExecutorTests(unittest.TestCase):
         job_id = uuid4()
         client = MagicMock()
         compile_container = MagicMock()
-        workspace = VolumeWorkspace(job_id, "codeguard-job-test-app", "codeguard-job-test-input", "codeguard-job-test-work")
+        workspace = VolumeWorkspace(job_id, "codeguard-job-test-app")
         get_client.return_value = client
         create_workspace.return_value = workspace
         create_compile_container.return_value = compile_container

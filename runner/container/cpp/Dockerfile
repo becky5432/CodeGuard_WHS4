@@ -22,9 +22,9 @@ RUN apt-get update \
     && mkdir -p /run/codeguard-trace \
     && chown 0:0 /run/codeguard-trace \
     && chmod 711 /run/codeguard-trace \
-    && mkdir -p /workspace/app /workspace/input /workspace/work \
-    && chown 0:0 /workspace /workspace/app /workspace/input /workspace/work \
-    && chmod 0755 /workspace /workspace/app /workspace/input /workspace/work \
+    && mkdir -p /workspace \
+    && chown 0:0 /workspace \
+    && chmod 0755 /workspace \
     && chmod 0555 /usr/local/bin/codeguard-init /usr/local/bin/codeguard-workspace-prepare
 
 WORKDIR /workspace

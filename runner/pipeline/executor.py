@@ -137,7 +137,8 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
         )
         runtime_profile = parse_runtime_manifest(manifest, image_id)
         filesystem_policy = build_filesystem_policy(
-            image_id, job.language, True, runtime_profile=runtime_profile,
+            image_id, job.language, runtime_profile=runtime_profile,
+            device_paths=settings.filesystem_device_paths,
         )
         _mark_succeeded(stage_summary, RunnerStage.WORKSPACE)
 

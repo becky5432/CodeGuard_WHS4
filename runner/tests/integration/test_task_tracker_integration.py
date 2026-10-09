@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
     if (pid < 0)
         return 1;
     if (pid == 0) {
-        execl("/workspace/app/main", argv[0], "child", (char *)0);
+        execl("/workspace/main", argv[0], "child", (char *)0);
         _exit(127);
     }
     return 0;

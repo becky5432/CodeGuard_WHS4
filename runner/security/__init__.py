@@ -135,9 +135,7 @@ def _verify_execution_mounts(stage: str, attrs: dict, workspace) -> None:
     if attrs.get("HostConfig", {}).get("Tmpfs"):
         _security_error(stage, "unexpected_tmpfs", attrs["HostConfig"]["Tmpfs"])
     expected = {
-        "/workspace/app": (workspace.app_volume, False),
-        "/workspace/input": (workspace.input_volume, False),
-        "/workspace/work": (workspace.work_volume, True),
+        "/workspace": (workspace.volume_name, True),
         "/run/codeguard-trace": (None, True),
     }
     found = {}
@@ -156,7 +154,7 @@ def _verify_execution_mounts(stage: str, attrs: dict, workspace) -> None:
         if name is not None and actual_name != name:
             _security_error(stage, "mount_source", mount)
         found[destination] = actual_name
-    if set(found) != set(expected) or len(set(found.values())) != 4:
+    if set(found) != set(expected) or len(set(found.values())) != 2:
         _security_error(stage, "mount_set", found)
 
 

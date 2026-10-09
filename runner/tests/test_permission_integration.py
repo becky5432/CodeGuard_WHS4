@@ -82,7 +82,7 @@ class PermissionVerificationIntegrationTests(unittest.TestCase):
                 printf("evidence_rename=%s\n", rename("/run/codeguard-trace/security.status", "/run/codeguard-trace/security.bak") == -1 ? "denied" : "allowed");
                 printf("parent_write=%s\n", access("/run/codeguard-trace", W_OK) == -1 ? "denied" : "allowed");
                 printf("parent_create=%s\n", open("/run/codeguard-trace/user-created", O_WRONLY|O_CREAT, 0600) == -1 ? "denied" : "allowed");
-                printf("parent_symlink=%s\n", symlink("/workspace/app/main", "/run/codeguard-trace/user-link") == -1 ? "denied" : "allowed");
+                printf("parent_symlink=%s\n", symlink("/workspace/main", "/run/codeguard-trace/user-link") == -1 ? "denied" : "allowed");
                 fputs("stderr-functional\n", stderr);
                 puts("user-ran"); return 0;
             }
@@ -190,8 +190,8 @@ class PermissionVerificationIntegrationTests(unittest.TestCase):
             f"exec 4<{POLICY_PATH}; exec 5>{STATUS_PATH}; "
             "exec /usr/local/bin/codeguard-init --security-fd 3 "
             "--filesystem-policy-fd 4 --filesystem-status-fd 5 "
-            "--stdin /workspace/input/stdin --workdir /workspace/work "
-            "-- /workspace/app/main"
+            "--stdin /workspace/stdin --workdir /workspace "
+            "-- /workspace/main"
         )
         container = self.client.containers.create(
             image=self.image_id,

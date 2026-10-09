@@ -1,5 +1,14 @@
 # CodeGuard_WHS4
 
+## 파일 경로 접근 제어
+
+준비·컴파일·실행은 실행별 단일 RW `/workspace` 볼륨을 공유한다. 실행 시
+Landlock 정책 v2가 workspace 내부의 읽기·변경·파일 실행을 허용하고,
+외부는 검증된 런타임 파일과 서버가 선택한 개별 장치만 허용한다.
+Landlock ABI7 이상이 필요하며, 새 정책을 사용할 때 실행 이미지도 다시 빌드한다.
+장치 선택 설정·허용 권한·검증 명령은
+[`runner/security/FILESYSTEM_POLICY.md`](runner/security/FILESYSTEM_POLICY.md)를 참고한다.
+
 ## eBPF 프로세스·스레드 측정기 설치
 
 이 기능은 Linux cgroup v2와 BTF를 사용한다. Runner의 기존

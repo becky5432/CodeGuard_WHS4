@@ -49,11 +49,11 @@ int cg_fs_read_policy(int fd, struct cg_fs_policy *out, struct cg_fs_error *erro
     if (!used || data[used - 1] != '\n' || memchr(data, 0, used)) goto invalid;
     data[used] = 0;
     end = strchr(data, '\n');
-    if (!end || end - data != 71 || memcmp(data, "CGFS\t1\t", 7)) goto invalid;
+    if (!end || end - data != 71 || memcmp(data, "CGFS\t2\t", 7)) goto invalid;
     *end = 0;
     if (!cg_fs_valid_id(data + 7)) goto invalid;
     memcpy(out->policy_id, data + 7, 65);
-    out->version = 1;
+    out->version = 2;
     line = end + 1;
     while (*line) {
         char *tab;
@@ -71,7 +71,8 @@ int cg_fs_read_policy(int fd, struct cg_fs_policy *out, struct cg_fs_error *erro
         rule = &out->rules[out->count];
         if (!strcmp(line, "FILE_READ")) rule->profile = CG_FILE_READ;
         else if (!strcmp(line, "FILE_EXEC")) rule->profile = CG_FILE_EXEC;
-        else if (!strcmp(line, "DIR_LIST")) rule->profile = CG_DIR_LIST;
+        else if (!strcmp(line, "DEVICE_READ")) rule->profile = CG_DEVICE_READ;
+        else if (!strcmp(line, "DEVICE_RW")) rule->profile = CG_DEVICE_RW;
         else if (!strcmp(line, "WORK")) rule->profile = CG_WORK;
         else goto invalid;
         strcpy(rule->path, tab);

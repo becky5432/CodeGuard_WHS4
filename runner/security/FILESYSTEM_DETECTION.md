@@ -1,8 +1,11 @@
 # Filesystem detection trust boundary
 
-Execute keeps the root filesystem and `/workspace` read-only. Compile mounts
-`/workspace` read-write. `/tmp` remains read-only; Docker's existing `/dev/shm`
-mount is writable. Detection does not change these policies.
+Execute keeps the root filesystem read-only and mounts one Job volume at
+`/workspace` read-write. Compile uses the same Job volume read-write. Landlock
+policy v2 permits reading, changing and executing files throughout workspace.
+`/tmp`, `/var/tmp` and `/dev/shm` have no Landlock allow rules, even where Docker
+provides a writable mount. Selected individual devices follow the server policy.
+See [filesystem policy](FILESYSTEM_POLICY.md). Detection does not grant access.
 
 The trusted tracer runs as UID/GID 0, with only SYS_PTRACE, SETUID and SETGID
 added after dropping ALL capabilities. `strace -u codeguard` runs user code as
@@ -10,9 +13,11 @@ UID/GID 10001, without effective/permitted/ambient capabilities. Both processes
 inherit no-new-privileges. The API's `security_context` describes the user
 program, not the trusted tracer. No unconfined seccomp setting is used.
 
-`/run/codeguard-trace` is root-owned, mode 700, on a fresh anonymous volume.
+`/run/codeguard-trace` is root-owned, mode 711 in the image, on a fresh anonymous volume.
 The root tracer creates `trace.log` with mode 600. The user can see the path
-name but cannot traverse the directory, read/write the file, or replace it.
+name but cannot list the directory or read/write/replace its protected files.
+The directory's traversal bit does not grant file-content access, and the user
+Landlock allowlist contains no trace-volume rule.
 User code also cannot signal/ptrace the root tracer or access its `/proc` fds.
 Runner reads the stopped container's evidence through Docker `get_archive`,
 checks file ownership/permissions, and removes the volume with the container.
@@ -31,7 +36,10 @@ oversized, incorrectly protected or incomplete traces. Benign prctl operations,
 seccomp queries, and denied setup calls remain supported. Even a program with
 no mutations must have a successful main exec and a termination record.
 Policy termination may leave an incomplete tail; startup evidence is still
-required. Existing classifier precedence is unchanged.
+required. Execution status follows the current develop classifier: filesystem
+and network policy evidence is returned separately in `policy_violations`.
+A program that handles a denied request and exits zero can return SUCCESS
+with FILESYSTEM_LIMIT in that list when the EROFS evidence was detected.
 
 The trace is bounded to less than 1 MiB for collection. Trace-heavy workloads
 may return INTERNAL_ERROR instead of an application result. Tracing adds a PID,
@@ -47,7 +55,7 @@ filesystem audit facility.
 Build an isolated image and enable the opt-in tests:
 
 ```sh
-docker build -t codeguard-cpp:fs-detection-audit runner/container/cpp
+docker build -f runner/container/cpp/Dockerfile -t codeguard-cpp:fs-detection-audit .
 CPP_IMAGE=codeguard-cpp:fs-detection-audit RUNNER_DOCKER_TESTS=1 \
   python -m pytest -q runner/tests/test_filesystem_integration.py
 python -m pytest -q
