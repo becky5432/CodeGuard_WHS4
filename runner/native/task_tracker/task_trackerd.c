@@ -32,8 +32,11 @@ static void handle_signal(int signal_number)
 
     (void)signal_number;
     stop_requested = 1;
-    if (signal_pipe_fds[1] >= 0)
-        (void)write(signal_pipe_fds[1], &notification, sizeof(notification));
+    if (signal_pipe_fds[1] >= 0) {
+        ssize_t written = write(signal_pipe_fds[1], &notification, sizeof(notification));
+        /* Nonblocking best effort: a full pipe already wakes the poll loop. */
+        (void)written;
+    }
     errno = saved_errno;
 }
 
