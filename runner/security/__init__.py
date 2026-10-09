@@ -58,6 +58,8 @@ def verify_container_security_config(
     workspace_mode: str,
     expected_user: str | None = None,
     required_cap_add: tuple[str, ...] = (),
+    expected_workspace=None,
+    expected_image_id: str | None = None,
 ) -> None:
     """Validate Docker inspect configuration before container startup."""
 
@@ -83,12 +85,23 @@ def verify_container_security_config(
         _security_error(stage, "cap_drop", actual_cap_drop)
 
     actual_cap_add = {str(value).upper() for value in host_config.get("CapAdd") or []}
-    if not {value.upper() for value in required_cap_add}.issubset(actual_cap_add):
+    if {value.upper() for value in required_cap_add} != actual_cap_add:
         _security_error(stage, "cap_add", sorted(actual_cap_add))
 
     actual_security_opt = host_config.get("SecurityOpt") or []
     if SECURITY_OPT not in actual_security_opt:
         _security_error(stage, "no_new_privileges", actual_security_opt)
+
+    if host_config.get("Privileged", False):
+        _security_error(stage, "privileged", True)
+    if any("unconfined" in str(option) for option in actual_security_opt):
+        _security_error(stage, "unconfined", actual_security_opt)
+    if expected_image_id is not None and attrs.get("Image") != expected_image_id:
+        _security_error(stage, "image", attrs.get("Image"))
+
+    if expected_workspace is not None:
+        _verify_execution_mounts(stage, attrs, expected_workspace)
+        return
 
     workspace_mount = next(
         (
@@ -111,6 +124,38 @@ def verify_container_security_config(
         actual_security_opt,
         workspace_mode,
     )
+
+
+def _verify_execution_mounts(stage: str, attrs: dict, workspace) -> None:
+    """Check each Job volume identity, not just a destination's RW flag."""
+    if attrs.get("HostConfig", {}).get("ReadonlyRootfs") is not True:
+        _security_error(stage, "rootfs_readonly", attrs.get("HostConfig"))
+    # inspect Mounts is not sufficient for tmpfs configured in HostConfig.
+    # Runtime-owned proc/sys/dev mounts are separate from this explicit option.
+    if attrs.get("HostConfig", {}).get("Tmpfs"):
+        _security_error(stage, "unexpected_tmpfs", attrs["HostConfig"]["Tmpfs"])
+    expected = {
+        "/workspace": (workspace.volume_name, True),
+        "/run/codeguard-trace": (None, True),
+    }
+    found = {}
+    # Docker's runtime proc/sys/dev mounts do not appear in inspect Mounts.
+    # Any extra explicit mount can expose another namespace and is rejected.
+    for mount in attrs.get("Mounts", []):
+        destination = mount.get("Destination")
+        if destination not in expected or destination in found:
+            _security_error(stage, "unexpected_mount", mount)
+        name, rw = expected[destination]
+        if mount.get("Type") != "volume" or mount.get("RW") is not rw:
+            _security_error(stage, "mount_mode", mount)
+        actual_name = mount.get("Name")
+        if not isinstance(actual_name, str) or not actual_name:
+            _security_error(stage, "mount_name", mount)
+        if name is not None and actual_name != name:
+            _security_error(stage, "mount_source", mount)
+        found[destination] = actual_name
+    if set(found) != set(expected) or len(set(found.values())) != 2:
+        _security_error(stage, "mount_set", found)
 
 
 def parse_security_preflight(stderr: str, *, stage: str) -> str:

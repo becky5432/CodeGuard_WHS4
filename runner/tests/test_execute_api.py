@@ -12,6 +12,7 @@ from runner.exceptions import (
     RunnerError,
     TaskTrackingError,
     SecurityVerificationError,
+    WorkspaceError,
 )
 from runner.main import app
 from runner.models.job import PolicyLimits, RunnerLanguage, RunnerRequest
@@ -25,6 +26,7 @@ from runner.models.result import (
 from runner.pipeline.compiler import CompileResult
 from runner.pipeline.execution import ExecutionResult
 from runner.pipeline.workspace import VolumeWorkspace
+from runner.tests.test_filesystem_execution_setup import policy_fixture, runtime_manifest_fixture
 from runner.policies import EXECUTION_OUTPUT_LIMIT_BYTES
 
 
@@ -42,10 +44,15 @@ class ExecuteApiTests(unittest.TestCase):
         "resource_usage",
         "finished_at",
         "stage_summary",
+        "policy_violations",
     }
 
     def setUp(self) -> None:
         self.client = TestClient(app)
+        patch("runner.pipeline.executor._resolve_execution_image", return_value=policy_fixture().image_id).start()
+        self.prepare_workspace_mock = patch(
+            "runner.pipeline.executor.prepare_workspace", return_value=runtime_manifest_fixture(),
+        ).start()
 
         self.docker_client = MagicMock()
         self.compile_container = MagicMock()
@@ -53,7 +60,7 @@ class ExecuteApiTests(unittest.TestCase):
 
         self.workspace = VolumeWorkspace(
             job_id=uuid4(),
-            volume_name="codeguard-job-test",
+            volume_name="codeguard-job-test-app",
         )
 
         self.get_client_patcher = patch(
@@ -145,6 +152,7 @@ class ExecuteApiTests(unittest.TestCase):
                 "cpu_bandwidth",
                 "output_limit_bytes",
                 "cpu_time_limit_ms",
+                "network_preset",
             },
         )
 
@@ -281,6 +289,7 @@ class ExecuteApiTests(unittest.TestCase):
             client=self.docker_client,
             workspace=self.workspace,
             language=RunnerLanguage.CPP,
+            image_id=policy_fixture().image_id,
         )
 
         self.create_execution_container_mock.assert_called_once_with(
@@ -292,6 +301,9 @@ class ExecuteApiTests(unittest.TestCase):
             memory_limit_mb=body["policy"]["memory_limit_mb"],
             cpu_bandwidth=body["policy"]["cpu_bandwidth"],
             pids_limit=body["policy"]["pids_limit"],
+            filesystem_policy=policy_fixture("CPP"),
+            network_mode=Settings().execution_network,
+            dns=None,
         )
 
         self.remove_workspace_mock.assert_called_once_with(
@@ -306,6 +318,7 @@ class ExecuteApiTests(unittest.TestCase):
             timeout_ms=body["policy"]["timeout_ms"],
             output_limit_bytes=EXECUTION_OUTPUT_LIMIT_BYTES,
             cpu_time_limit_ms=body["policy"]["cpu_time_limit_ms"],
+            filesystem_policy_id=policy_fixture("CPP").policy_id,
         )
 
         self.execution_container.remove.assert_called_once_with(
@@ -351,17 +364,63 @@ class ExecuteApiTests(unittest.TestCase):
         )
 
     def test_execute_returns_filesystem_limit_and_backend_accepts_response(self) -> None:
+        import sys
+        from pathlib import Path
+        self.enterContext(patch.object(sys, "path", [str(Path(__file__).resolve().parents[2] / "backend"), *sys.path]))
         from app.schemas.runner_schema import RunnerResponse as BackendRunnerResponse
         self.compile_source_mock.return_value = CompileResult(success=True, stdout="", stderr="", exit_code=0, artifact_ready=True)
         self.execute_program_mock.return_value = ExecutionResult(0, "user output", "", filesystem_limit_exceeded=True)
         response = self.client.post("/execute", json=self.make_request_body())
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["status"], "BLOCKED")
-        self.assertEqual(payload["reason_code"], "FILESYSTEM_LIMIT")
+        self.assertEqual(payload["status"], "SUCCESS")
+        self.assertIsNone(payload["reason_code"])
+        self.assertEqual(payload["policy_violations"], ["FILESYSTEM_LIMIT"])
         self.assertEqual(payload["stdout"], "user output")
-        self.assertEqual(payload["stage_summary"]["failed"], ["EXECUTE"])
-        BackendRunnerResponse.model_validate(payload)
+        self.assertEqual(payload["stage_summary"]["failed"], [])
+        backend = BackendRunnerResponse.model_validate(payload)
+        self.assertEqual([reason.value for reason in backend.policy_violations], ["FILESYSTEM_LIMIT"])
+
+    def test_network_presets_keep_filesystem_policy_in_execution_options(self) -> None:
+        self.compile_source_mock.return_value = CompileResult(
+            success=True, stdout="", stderr="", exit_code=0, artifact_ready=True,
+        )
+        self.execute_program_mock.return_value = ExecutionResult(0, "", "")
+        with patch("runner.pipeline.executor.settings.execution_network_none", "test-none"), \
+             patch("runner.pipeline.executor.settings.execution_network_web", "test-web"), \
+             patch("runner.pipeline.executor.settings.execution_dns_none", ["127.0.0.1"]):
+            for preset, network, dns in (("none", "test-none", ["127.0.0.1"]), ("web", "test-web", None)):
+                with self.subTest(preset=preset):
+                    body = self.make_request_body()
+                    body["policy"]["network_preset"] = preset
+                    response = self.client.post("/execute", json=body)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response.json()["status"], "SUCCESS")
+                    options = self.create_execution_container_mock.call_args.kwargs
+                    self.assertEqual(options["network_mode"], network)
+                    self.assertEqual(options["dns"], dns)
+                    self.assertEqual(options["filesystem_policy"], policy_fixture("CPP"))
+
+    def test_workspace_preparation_failure_never_compiles_and_cleans_job(self) -> None:
+        self.prepare_workspace_mock.side_effect = WorkspaceError("prepare failed")
+        response = self.client.post("/execute", json=self.make_request_body())
+        payload = response.json()
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
+        self.assertEqual(payload["stage_summary"]["failed"], ["WORKSPACE"])
+        self.create_compile_container_mock.assert_not_called()
+        self.create_execution_container_mock.assert_not_called()
+        self.remove_workspace_mock.assert_called_once_with(self.docker_client, self.workspace)
+
+    def test_invalid_runtime_manifest_never_compiles(self) -> None:
+        self.prepare_workspace_mock.return_value = b'{"profile":"allow-everything"}'
+        response = self.client.post("/execute", json=self.make_request_body())
+        payload = response.json()
+        self.assertEqual(payload["status"], "ERROR")
+        self.assertEqual(payload["reason_code"], "INTERNAL_ERROR")
+        self.create_compile_container_mock.assert_not_called()
+        self.create_execution_container_mock.assert_not_called()
+        self.remove_workspace_mock.assert_called_once_with(self.docker_client, self.workspace)
 
     def test_execute_returns_compile_error(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
@@ -824,7 +883,7 @@ class ExecuteApiTests(unittest.TestCase):
             "CPU_TIME_LIMIT",
         )
     
-    def test_execute_returns_network_blocked(self) -> None:
+    def test_execute_returns_network_violation_separately(self) -> None:
         self.compile_source_mock.return_value = CompileResult(
             success=True,
             stdout="",
@@ -847,17 +906,15 @@ class ExecuteApiTests(unittest.TestCase):
 
         self.assertEqual(
             payload["status"],
-            "BLOCKED",
+            "SUCCESS",
         )
 
-        self.assertEqual(
-            payload["reason_code"],
-            "NETWORK_BLOCKED",
-        )
+        self.assertIsNone(payload["reason_code"])
+        self.assertEqual(payload["policy_violations"], ["NETWORK_BLOCKED"])
 
         self.assertEqual(
             payload["stage_summary"]["failed"],
-            ["EXECUTE"],
+            [],
         )
 
 

@@ -30,10 +30,27 @@ from runner.pipeline.compiler import (
     get_docker_client,
 )
 from runner.pipeline.execution import create_execution_container, execute_program
-from runner.pipeline.workspace import create_workspace, remove_workspace
+from runner.pipeline.workspace import create_workspace, prepare_workspace, remove_workspace
+from runner.policies.filesystem import build_filesystem_policy, parse_runtime_manifest
 
 
 logger = logging.getLogger("runner")
+
+
+def _resolve_execution_image(client) -> str:
+    """Pin a trusted configured image once; never resolve a tag per stage."""
+    image = client.images.get(settings.cpp_image)
+    attrs = image.attrs
+    if attrs.get("Os") != "linux" or attrs.get("Architecture") != "amd64":
+        raise WorkspaceError("파일시스템 정책은 검증된 Linux amd64 이미지만 지원합니다.")
+    image_id = image.id
+    if (
+        not isinstance(image_id, str) or len(image_id) != 71
+        or not image_id.startswith("sha256:")
+        or any(c not in "0123456789abcdef" for c in image_id[7:])
+    ):
+        raise WorkspaceError("실행 이미지 식별값을 확인하지 못했습니다.")
+    return image_id
 
 
 def _append_stage(stages: list[RunnerStage], stage: RunnerStage) -> None:
@@ -112,7 +129,17 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
 
     try:
         client = get_docker_client()
+        image_id = _resolve_execution_image(client)
         workspace = create_workspace(client, job.job_id)
+        manifest = prepare_workspace(
+            client, workspace, job.language, job.code, job.stdin,
+            image_id=image_id,
+        )
+        runtime_profile = parse_runtime_manifest(manifest, image_id)
+        filesystem_policy = build_filesystem_policy(
+            image_id, job.language, runtime_profile=runtime_profile,
+            device_paths=settings.filesystem_device_paths,
+        )
         _mark_succeeded(stage_summary, RunnerStage.WORKSPACE)
 
         # -------------------------
@@ -124,6 +151,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
             client=client,
             workspace=workspace,
             language=job.language,
+            image_id=image_id,
         )
 
         compile_result = compile_source(
@@ -222,6 +250,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 "memory_limit_mb": job.policy.memory_limit_mb,
                 "cpu_bandwidth": job.policy.cpu_bandwidth,
                 "pids_limit": job.policy.pids_limit,
+                "filesystem_policy": filesystem_policy,
                 "network_mode": settings.network_for_preset(
                     job.policy.network_preset
                 ),
@@ -245,6 +274,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 "timeout_ms": job.policy.timeout_ms,
                 "output_limit_bytes": job.policy.output_limit_bytes,
                 "cpu_time_limit_ms": job.policy.cpu_time_limit_ms,
+                "filesystem_policy_id": filesystem_policy.policy_id,
             }
             if execution_cgroup_scope is not None:
                 execute_options["cgroup_scope"] = execution_cgroup_scope

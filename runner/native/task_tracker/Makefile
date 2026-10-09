@@ -9,7 +9,7 @@ LIBBPF_FLAGS := $(shell pkg-config --cflags --libs libbpf)
 
 .PHONY: all clean
 
-all: task_tracker.skel.h codeguard-task-tracker codeguard-init
+all: task_tracker.skel.h codeguard-task-tracker codeguard-init codeguard-workspace-prepare
 
 vmlinux.h:
 	$(BPFTOOL) btf dump file /sys/kernel/btf/vmlinux format c > $@
@@ -23,9 +23,15 @@ task_tracker.skel.h: task_tracker.bpf.o
 codeguard-task-tracker: task_trackerd.c task_tracker_shared.h task_tracker.skel.h
 	$(CC) $(CFLAGS) -I. task_trackerd.c -o $@ $(LIBBPF_FLAGS)
 
-codeguard-init: codeguard_init.c
-	$(CC) $(CFLAGS) codeguard_init.c -o $@
+FILESYSTEM_SOURCES := ../filesystem/landlock_policy.c \
+	../filesystem/policy_reader.c ../filesystem/startup_status.c
+
+codeguard-init: codeguard_init.c $(FILESYSTEM_SOURCES) ../filesystem/landlock_policy.h
+	$(CC) $(CFLAGS) codeguard_init.c $(FILESYSTEM_SOURCES) -o $@
+
+codeguard-workspace-prepare: ../filesystem/workspace_prepare.c
+	$(CC) $(CFLAGS) $< -o $@
 
 clean:
 	rm -f vmlinux.h task_tracker.bpf.o task_tracker.skel.h \
-		codeguard-task-tracker codeguard-init
+		codeguard-task-tracker codeguard-init codeguard-workspace-prepare

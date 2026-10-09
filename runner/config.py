@@ -3,8 +3,10 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from runner.policies.filesystem import validate_device_paths
 
 
 class Settings(BaseSettings):
@@ -21,6 +23,15 @@ class Settings(BaseSettings):
 
     volume_name_prefix: str = "codeguard-job-"
     cpp_image: str = "codeguard-cpp:dev"
+    filesystem_device_paths: tuple[str, ...] = ()
+
+    @field_validator("filesystem_device_paths", mode="before")
+    @classmethod
+    def validate_filesystem_devices(cls, value):
+        return validate_device_paths(value)
+
+    filesystem_policy_profile: Literal["cpp-amd64-v1"] = "cpp-amd64-v1"
+    filesystem_startup_timeout_seconds: float = Field(default=5.0, gt=0, lt=15)
     execution_network: str = "bridge"  # 프리셋 미지정 시 fallback (기존 동작)
     # 프리셋 -> Docker 네트워크 (net-setup.sh 가 만든 이름). 환경변수로 override 가능.
     # 프리셋은 2단계: none=완전 차단(P0), web=확장 허용(P1, 공인 80/443/53).

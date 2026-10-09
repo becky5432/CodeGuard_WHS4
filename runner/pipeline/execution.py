@@ -26,7 +26,12 @@ from runner.metrics.task_tracker import (
 from runner.metrics.cpu_usage_sampler import CpuUsageSampler
 from runner.metrics.memory_usage_sampler import MemoryUsageSampler
 from runner.models.result import CpuUsageSample, MemoryUsageSample
-from runner.pipeline.workspace import VolumeWorkspace
+from runner.pipeline.workspace import VolumeWorkspace, execution_mounts
+from runner.policies.filesystem import FilesystemPolicy, validate_filesystem_policy
+from runner.security.filesystem_startup import (
+    POLICY_PATH, STATUS_PATH, build_policy_archive,
+    wait_for_filesystem_prepared, verify_filesystem_applied,
+)
 from runner.pipeline.start_gate import (
     find_codeguard_init_tid,
     release_start_gate,
@@ -221,25 +226,30 @@ def create_execution_container(
     cpu_bandwidth: float,
     pids_limit: int,
     cgroup_scope: ExecutionCgroupScope | None = None,
+    filesystem_policy: FilesystemPolicy | None = None,
     network_mode: str | None = None,
     dns: list[str] | None = None,
 ):
     """Job Volume을 연결한 실행 컨테이너를 생성하고 반환한다."""
 
+    if filesystem_policy is None:
+        raise ContainerExecutionError("파일시스템 정책 없이 사용자 코드를 실행할 수 없습니다.")
+    validate_filesystem_policy(filesystem_policy)
+
     # A persistent anonymous evidence volume survives container exit, unlike tmpfs.
     # Keep strace as container PID 1 so Docker wait observes the tracer only after
     # it has followed codeguard-init/user exit and completed the trace footer.
     trace_command = (
-        f"umask 077; set -C; exec 3>{SECURITY_STATUS_PATH}; ulimit -f 2048; "
+        f"umask 077; set -Ce; exec 3>{SECURITY_STATUS_PATH}; "
+        f"exec 4<{POLICY_PATH}; exec 5>{STATUS_PATH}; ulimit -f 2048; "
         f"exec strace -f -q -yy -s 4096 "
         f"-u codeguard "
         f"-o {TRACE_PATH} -e trace={TRACE_SYSCALLS} "
         f"-e raw={RAW_WRITE_SYSCALLS} /usr/local/bin/codeguard-init "
-        f"--security-fd 3"
+        f"--security-fd 3 --filesystem-policy-fd 4 --filesystem-status-fd 5 "
+        f"--stdin /workspace/stdin --workdir /workspace "
+        f"-- /workspace/main"
     )
-    if stdin:
-        trace_command += " --stdin /workspace/stdin"
-    trace_command += " -- /workspace/main"
     command = ["sh", "-c", trace_command]
 
     memory_limit_bytes = memory_limit_mb * 1024 * 1024
@@ -247,17 +257,12 @@ def create_execution_container(
     cpuset_cpus = _resolve_cpuset()
 
     container_options = {
-        "image": settings.cpp_image,
+        "image": filesystem_policy.image_id,
         "command": command,
-        "mounts": [docker.types.Mount(target=TRACE_DIRECTORY, source="", type="volume")],
-        "volumes": {
-            workspace.volume_name: {
-                "bind": "/workspace",
-                "mode": "ro",
-            }
-        },
+        "mounts": execution_mounts(workspace),
         "detach": True,
         "read_only": True,
+        "environment": {"TMPDIR": "/workspace", "TMP": "/workspace", "TEMP": "/workspace"},
         
         "network_mode": network_mode or settings.execution_network,
         "user": "0:0",
@@ -291,15 +296,28 @@ def create_execution_container(
             verify_container_security_config(
                 container,
                 stage="execute",
-                workspace_mode="ro",
+                workspace_mode="rw",
                 expected_user="0:0",
                 required_cap_add=TRACER_CAP_ADD,
+                expected_workspace=workspace,
+                expected_image_id=filesystem_policy.image_id,
             )
+            uploaded = container.put_archive(
+                TRACE_DIRECTORY, build_policy_archive(filesystem_policy),
+            )
+            if uploaded is not True:
+                raise ContainerExecutionError("파일시스템 정책 전달에 실패했습니다.")
         except RunnerError:
             try:
                 container.remove(force=True, v=True)
             except docker.errors.DockerException:
                 pass
+            raise
+        except Exception:
+            try:
+                container.remove(force=True, v=True)
+            except docker.errors.DockerException:
+                logger.exception("event=filesystem_setup_cleanup_error")
             raise
         return container
     except docker.errors.DockerException as exc:
@@ -332,8 +350,15 @@ def execute_program(
     cgroup_scope: ExecutionCgroupScope | None = None,
     task_tracker: TaskTrackerClient | None = None,
     cpu_time_limit_ms: int | None = None,
+    filesystem_policy_id: str | None = None,
 ) -> ExecutionResult:
     """제한을 감시하며 실행 컨테이너의 종료 정보와 출력을 수집한다."""
+
+    if (
+        not isinstance(filesystem_policy_id, str) or len(filesystem_policy_id) != 64
+        or any(c not in "0123456789abcdef" for c in filesystem_policy_id)
+    ):
+        raise ContainerExecutionError("파일시스템 정책 식별값을 확인하지 못했습니다.")
 
     operation_start_ns = _monotonic_ns()
     gate_start_ns: int | None = None
@@ -456,6 +481,10 @@ def execute_program(
             # codeguard-init has written trusted evidence and is still waiting
             # for start.ready; neither user code nor its first fork can run yet.
             wait_for_security_evidence(container)
+            wait_for_filesystem_prepared(
+                container, filesystem_policy_id,
+                timeout_seconds=settings.filesystem_startup_timeout_seconds,
+            )
 
             if task_tracker is not None:
                 try:
@@ -1003,6 +1032,12 @@ def execute_program(
             )
 
         filesystem_violation = FilesystemViolation()
+        if system_error is None:
+            try:
+                verify_filesystem_applied(container, filesystem_policy_id)
+            except RunnerError as exc:
+                system_error = exc.message
+                logger.error("event=filesystem_startup_invalid error=%s", exc)
         if system_error is None:
             try:
                 filesystem_violation = collect_filesystem_trace(
