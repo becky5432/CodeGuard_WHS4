@@ -110,7 +110,7 @@ function ResourceUsagePanel({ executionResult, policy }) {
                 {timeoutMs ? (
                   <>
                     {" / "}
-                    {(timeoutMs / 1000).toFixed(0)}
+                    {(timeoutMs / 1000).toFixed(3)}
                   </>
                 ) : null}
                 <small> sec</small>
@@ -280,7 +280,7 @@ function ResourceUsagePanel({ executionResult, policy }) {
                 {cpuTimeLimitMs ? (
                   <>
                     {" / "}
-                    {(cpuTimeLimitMs / 1000).toFixed(0)}
+                    {(cpuTimeLimitMs / 1000).toFixed(3)}
                   </>
                 ) : null}
                 <small> sec</small>

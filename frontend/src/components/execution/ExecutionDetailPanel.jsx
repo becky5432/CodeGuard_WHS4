@@ -120,7 +120,14 @@ function ExecutionDetailPanel({ execution, onClose }) {
                     <span>{field.label}</span>
 
                     <strong>
-                      {execution.policy?.[field.key] ?? "-"}
+                      {execution.policy?.[field.key] == null
+                        ? "-"
+                        : field.key === "timeout_ms" ||
+                            field.key === "cpu_time_limit_ms"
+                          ? Number(
+                              (execution.policy[field.key] / 1000).toFixed(3),
+                            )
+                          : execution.policy[field.key]}
                       {execution.policy?.[field.key] != null && (
                         <span className="history-detail-policy-unit">
                           {field.unit}
@@ -133,7 +140,7 @@ function ExecutionDetailPanel({ execution, onClose }) {
             </div>
 
             <div className="fixed-control-section">
-              <h3>고정 통제</h3>
+              <h3>접근 통제</h3>
 
               <div className="environment-limit-grid-bottom history-detail-fixed-grid">
                 <article className="planned-feature-item">
