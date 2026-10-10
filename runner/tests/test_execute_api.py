@@ -319,6 +319,7 @@ class ExecuteApiTests(unittest.TestCase):
             output_limit_bytes=EXECUTION_OUTPUT_LIMIT_BYTES,
             cpu_time_limit_ms=body["policy"]["cpu_time_limit_ms"],
             filesystem_policy_id=policy_fixture("CPP").policy_id,
+            filesystem_policy=policy_fixture("CPP"),
         )
 
         self.execution_container.remove.assert_called_once_with(

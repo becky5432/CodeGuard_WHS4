@@ -6,6 +6,8 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fastapi import FastAPI
@@ -15,6 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api.executions import router
+from app.clients.runner_client import HttpRunnerClient
 from app.db import repository
 from app.db.models import Execution
 from app.db.database import Base, get_db
@@ -22,11 +25,15 @@ from app.schemas.execution_schema import ExecutionCreateRequest, ExecutionReason
 from app.schemas.runner_schema import RunnerResponse as BackendRunnerResponse
 from app.services.execution_service import ExecutionService
 from runner.models.result import (
-    RunnerReasonCode, RunnerResponse, RunnerStage, RunnerStatus, StageError, StageSummary,
+    RunnerReasonCode, RunnerResponse, RunnerStage, RunnerStatus, StageSummary,
 )
 
 
-def test_filesystem_limit_runner_to_db_to_lookup_api():
+@pytest.mark.parametrize('violation_names', [
+    [], ['FILESYSTEM_LIMIT'], ['NETWORK_BLOCKED'],
+    ['FILESYSTEM_LIMIT', 'NETWORK_BLOCKED'],
+])
+def test_policy_violations_runner_to_db_to_lookup_api(violation_names):
     engine = create_engine(
         'sqlite://', connect_args={'check_same_thread': False}, poolclass=StaticPool,
     )
@@ -41,14 +48,10 @@ def test_filesystem_limit_runner_to_db_to_lookup_api():
                 db,
             )
         response = RunnerResponse(
-            job_id=created.job_id, run_id=uuid4(), status=RunnerStatus.BLOCKED,
-            reason_code=RunnerReasonCode.FILESYSTEM_LIMIT, exit_code=0,
-            stage_summary=StageSummary(
-                failed=[RunnerStage.EXECUTE],
-                errors={RunnerStage.EXECUTE: [StageError(
-                    reason_code=RunnerReasonCode.FILESYSTEM_LIMIT, message='RO write detected',
-                )]},
-            ),
+            job_id=created.job_id, run_id=uuid4(), status=RunnerStatus.SUCCESS,
+            reason_code=None, exit_code=0,
+            policy_violations=[RunnerReasonCode(name) for name in violation_names],
+            stage_summary=StageSummary(succeeded=[RunnerStage.EXECUTE]),
             finished_at=datetime.now(timezone.utc),
         )
         runner_client.execute.return_value = BackendRunnerResponse.model_validate(
@@ -58,7 +61,9 @@ def test_filesystem_limit_runner_to_db_to_lookup_api():
             service.process_execution(request)
         with sessions() as db:
             saved = repository.get_execution(db, str(created.job_id))
-            assert saved.reason_code == ExecutionReasonCode.FILESYSTEM_LIMIT.value
+            assert saved.status == 'SUCCESS'
+            assert saved.reason_code is None
+            assert saved.policy_violations == violation_names
             assert saved.exit_code == 0
 
         def test_db():
@@ -72,12 +77,30 @@ def test_filesystem_limit_runner_to_db_to_lookup_api():
             result = client.get(f'/executions/{created.job_id}')
         assert result.status_code == 200
         payload = result.json()
-        assert payload['status'] == 'BLOCKED'
-        assert payload['reason_code'] == 'FILESYSTEM_LIMIT'
+        assert payload['status'] == 'SUCCESS'
+        assert payload['reason_code'] is None
+        assert payload['policy_violations'] == violation_names
         assert payload['exit_code'] == 0
-        assert payload['stage_summary']['errors']['EXECUTE'][0]['reason_code'] == 'FILESYSTEM_LIMIT'
+        assert payload['stage_summary']['succeeded'] == ['EXECUTE']
     finally:
         engine.dispose()
+
+
+def test_http_runner_client_preserves_policy_violations():
+    response = RunnerResponse(
+        job_id=uuid4(), run_id=uuid4(), status=RunnerStatus.SUCCESS,
+        policy_violations=[RunnerReasonCode.NETWORK_BLOCKED, RunnerReasonCode.FILESYSTEM_LIMIT],
+        exit_code=0, stage_summary=StageSummary(), finished_at=datetime.now(timezone.utc),
+    )
+    http_response = Mock()
+    http_response.json.return_value = response.model_dump(mode='json')
+    with patch('app.clients.runner_client.httpx.post', return_value=http_response):
+        result = HttpRunnerClient('http://runner').execute(Mock(
+            model_dump=Mock(return_value={}),
+        ))
+    assert [value.value for value in result.policy_violations] == [
+        'NETWORK_BLOCKED', 'FILESYSTEM_LIMIT',
+    ]
 
 
 def test_security_verification_reason_round_trips_string_column():

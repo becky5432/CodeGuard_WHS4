@@ -275,6 +275,7 @@ def execute_job(job: RunnerRequest) -> RunnerResponse:
                 "output_limit_bytes": job.policy.output_limit_bytes,
                 "cpu_time_limit_ms": job.policy.cpu_time_limit_ms,
                 "filesystem_policy_id": filesystem_policy.policy_id,
+                "filesystem_policy": filesystem_policy,
             }
             if execution_cgroup_scope is not None:
                 execute_options["cgroup_scope"] = execution_cgroup_scope

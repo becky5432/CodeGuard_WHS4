@@ -83,3 +83,48 @@ ABI7 이상 Linux 호스트에서 새 이미지와 [정책 문서의 통합 테�
 - 수정 전 동일한 5개 필드 누락 오류를 로컬에서 재현했다. 수정 후 실제 Pydantic 모델과 해당 테스트 메서드의 스키마 부분은 빈 위반 목록 및 FILESYSTEM_LIMIT 목록 모두 통과했다. 이 확인에는 제공된 HTTP 응답을 사용했으며 Docker 실행을 포함하지 않는다. 관련 API·응답 계약 단위 테스트는 **26 passed**, 기존 경고4개였다.
 
 수정된 API 테스트의 VMware 재실행은 아직 남아 있다. TASK_TRACKER_ENABLED=false로 실행한 통합 결과이므로 eBPF task tracker를 활성화한 전체 측정 경로의 검증으로 확대하지 않는다. 로그의 resource_monitor_close_error 경고는 이번 스키마 실패의 원인이 아니며, 이 테스트 수정에서 해당 자원 모니터 코드를 변경하지 않았다.
+
+## develop 기준 감지 통합 재검증 (2026-10-10)
+
+이 절은 위의 과거 검증 결과와 별개로 `9cda4f2656c785ae13b0dc70561157b980f10cea`에서 수행한 작업이다. WSL2 커널 `6.18.33.2-microsoft-standard-WSL2`의 Landlock ABI는 7이었다. 네이티브 규칙을 실제 적용하고 strace 6.19로 측정했을 때, 허용 작업 디렉터리의 파일 생성·쓰기·truncate·unlink는 성공했다. 외부 경로 `/etc`, `/usr`, `/bin`, `/root`, `/tmp`, `/var/tmp`, `/dev/shm`의 `open(O_CREAT)` 및 `mkdir`는 `EACCES`였다. 외부 테스트 파일의 `open(O_WRONLY/O_RDWR)`, `creat`, `truncate`, `unlink`, `unlinkat`, `rename`도 `EACCES`였다. 반면 외부 사용자 소유 파일의 `chmod`·`setxattr`는 성공해 Landlock의 메타데이터 변경 제한 범위 밖임을 확인했다. 외부 파일을 root 소유로 바꾸려는 `chown`은 일반 권한 검사로 `EPERM`이었고, 허용 디렉터리 안의 mode000 파일 쓰기 open은 일반 Unix `EACCES`였다.
+
+| 네이티브 시험 경로 | syscall | 결과 | errno | 감지 판정 |
+| --- | --- | --- | --- | --- |
+| 허용 디렉터리 (`/workspace` 대응) | `openat(O_CREAT)`, `creat`, `openat(O_WRONLY/O_RDWR)`, `truncate`, `unlink` | 성공 | — | 아니오 |
+| `/etc`, `/usr`, `/bin`, `/root`, `/tmp`, `/var/tmp`, `/dev/shm` | `openat(O_CREAT)`, `mkdir` | 실패 | `EACCES` | 예 (실제 strace 행을 파서에 입력) |
+| 외부 시험 디렉터리의 기존 파일 | `creat`, `openat(O_WRONLY/O_RDWR)`, `truncate`, `unlink`, `unlinkat`, `rename` | 실패 | `EACCES` | 예 (경로 변경 syscall만) |
+| 외부 사용자 소유 시험 파일 | `chmod`, `setxattr`, `utimensat` | 성공 | — | 아니오 |
+| 외부 사용자 소유 시험 파일 | `chown(root)` | 실패 | `EPERM` | 아니오 |
+| 허용 디렉터리의 mode000 파일 | `openat(O_WRONLY)` | 실패 | `EACCES` | 아니오 (`/workspace` 경로의 파서 회귀 테스트) |
+| 허용 디렉터리 symlink → 외부 디렉터리 | `openat(O_CREAT)` | 실패 | `EACCES` | 예 (관찰된 symlink를 따라 파서 판정) |
+| 외부 pathname Unix socket | `bind(AF_UNIX)` | 실패 | `EACCES` | 예 (새 추적 대상) |
+
+감지는 경로가 확인된 Landlock 중재 syscall의 외부 `EACCES`만 추가로 분류한다. `/workspace`의 일반 Unix `EACCES`, `EPERM`, `ENOENT`, `EINVAL`, `EBADF`는 이 규칙으로 분류하지 않는다. 위 네이티브 측정은 아래의 Docker 측정과 별개다.
+
+## Docker Desktop ABI 7 실제 실행 (2026-10-10)
+
+Docker Desktop 4.67.0 / Engine 29.3.1 / 커널 `6.18.33.2-microsoft-standard-WSL2`에서 별도 태그 `codeguard-cpp:filesystem-landlock-detection-test`를 빌드했다. WSL 배포판과 Docker 데몬의 cgroup 계층이 다르므로, 테스트 프로세스만 데몬의 cgroup namespace와 Docker socket을 볼 수 있는 임시 컨테이너에서 실행했다. 사용자 실행 컨테이너의 RootFS RO, 단일 Job RW volume, capability 및 Landlock 정책은 그대로였다. 컨테이너 안의 네이티브 smoke는 **Landlock ABI 7 PASS**였다.
+
+| 실제 컨테이너 동작 | 결과 | errno | Runner 판정 |
+| --- | --- | --- | --- |
+| `/workspace` 생성·쓰기·append·읽기·truncate·rename·unlink·디렉터리·symlink | 성공 | — | `SUCCESS`, 위반 없음 |
+| `/etc`, `/usr`, `/bin`, `/tmp`, `/var/tmp` 새 파일 및 디렉터리 | 실패 | `EROFS` (30) | `FILESYSTEM_LIMIT` |
+| `/root`, `/dev/shm` 새 파일 및 디렉터리 | 실패 | `EACCES` (13) | `FILESYSTEM_LIMIT` (실행별 최초 위반만 반환) |
+| `/etc/passwd` 쓰기 open·truncate | 실패 | `EACCES` (13) | `FILESYSTEM_LIMIT` |
+| `/etc/passwd` unlink | 실패 | `EROFS` (30) | `FILESYSTEM_LIMIT` |
+| `/workspace` → `/etc` rename | 실패 | `EXDEV` (18) | 그 호출 자체는 감지 대상 아님 |
+| pathname `AF_UNIX` bind `/tmp` | 실패 | `EROFS` (30) | `FILESYSTEM_LIMIT` |
+| abstract `AF_UNIX` / `AF_INET` bind | 성공 | — | 위반 없음 |
+| `/etc/passwd` chmod·setxattr·utimensat·chown | 실패 | `EROFS` (30) | RootFS RO에 의한 실패를 감지; Landlock의 metadata 중재 근거는 아님 |
+
+일곱 외부 생성 경로는 각각 독립된 Runner API 요청으로 재확인해 모두 `FILESYSTEM_LIMIT`을 반환했다. API는 한 실행에서 위반별 객체를 모두 반환하지 않고 위반 종류를 목록으로 반환한다. `/workspace` 내부 mode000 파일의 일반 Unix `EACCES`와 사용자 stdout의 `EROFS/EACCES/EPERM/FILESYSTEM_LIMIT` 문자열은 오판하지 않았다. fork 자식·pthread에서의 외부 변경도 차단·감지했다.
+
+Runtime에서 만든 `/workspace` → `/etc` symlink 쓰기는 실패하고 감지됐다. 반면 실행 전에 Job volume에 심어 둔 `/workspace` → `/dev/shm` symlink를 통한 생성은 `EACCES`로 차단됐지만, strace에 symlink 생성 행이 없어 파서가 최종 경로를 알지 못했고 `filesystem_limit_exceeded=False`였다. **Enforcement와 Detection 사이의 미해결 차이**다.
+
+공개 Runner `/execute` 입력만 사용한 후속 검증에서 동일 `job_id`의 두 요청도 서로 다른 nonce volume을 사용했다. 읽기 전용 관찰 컨테이너로 확인한 새 volume은 비어 있었고, prepare 직후에는 일반 파일 `main.c`와 `stdin`만, compile 직후와 사용자 실행 직전에는 여기에 일반 ELF `main`만 있었다. 소스의 경로 문자열 및 stdin의 tar 유사 문자열은 이 구조를 바꾸지 못했다. 사용자 프로그램이 symlink를 생성한 요청에서는 실행 직전까지 symlink가 없었고 종료 후에만 `/workspace/link → /dev/shm`이 보였다. 이때 외부 쓰기는 `EACCES`로 차단되고 `FILESYSTEM_LIMIT`으로 감지됐다. 따라서 직접 volume에 symlink를 심은 앞선 시험은 일반 API 사용자 재현이 아닌 defense-in-depth 검증이다. 컴파일러·준비 helper·Docker 접근 권한의 침해는 이 API 입력 경계 밖이다.
+
+`/workspace` volume 파일을 `/etc`로 단독 rename한 경우에는 다른 마운트 사이 이동이 먼저 `EXDEV` (18)로 거부됐고 Runner 응답은 `SUCCESS`, `policy_violations=[]`였다. 파일은 이동되지 않았지만 이 errno는 Landlock 거부의 고유 증거가 아니므로 detector가 FILESYSTEM_LIMIT으로 단정하지 않는다.
+
+실제 Runner `/execute`는 파일 차단 후 exit0에 `SUCCESS`/null/`["FILESYSTEM_LIMIT"]`, exit1에 `ERROR`/`RUNTIME_ERROR`/`["FILESYSTEM_LIMIT"]`, 파일 차단 후 시간 초과에 `BLOCKED`/`TIME_LIMIT`/`["FILESYSTEM_LIMIT"]`를 반환했다. Backend HTTP POST → Runner HTTP → SQLite 저장 → GET 조회에서도 exit0·exit1의 위반, exit code, 자원 사용량이 보존됐다. eBPF task tracker 서비스 소켓이 없어 eBPF 활성 경로는 검증하지 못했다.
+
+Docker opt-in 파일시스템 통합은 최초 50 passed/3 failed였고, 세 실패는 이번에 추가한 테스트 코드가 Docker의 `EROFS` 대신 `EACCES`만 가정한 두 경우와 C symlink 선언용 feature macro 누락 한 경우였다. 차단과 판정 기대값을 유지하면서 두 errno를 실제 출력·검사하고 macro를 보완했다. 재실행한 세 테스트는 3 passed였다. eBPF 전용 통합 파일을 제외한 전체 Runner Docker opt-in 최종 실행은 **565 passed, 12 skipped, 103 subtests passed**였다. 전체 파일시스템 통합 테스트도 이 실행에 포함됐다. 12개 skip은 임시 Python 테스트 컨테이너에 gcc가 없어 실행되지 않은 네이티브 테스트이며, 별도로 gcc가 있는 실제 C/C++ 이미지에서 ABI 7 smoke를 실행해 통과했다. 관련 설정·권한·네이티브 회귀는 173 passed/10 skipped, Backend 전체는 7 passed였다. `RUNNER_DOCKER_TESTS=1`로 eBPF 전용 파일까지 포함한 시도는 task-tracker 소켓 부재로 16 setup errors였고, 테스트 컨테이너에 명시한 `TASK_TRACKER_ENABLED=false`와 기본값 true를 비교하는 설정 테스트 1개도 실패했다. 기본 설정으로 재실행한 위 최종 결과에서는 설정 테스트가 통과했다. eBPF 검증 PASS로 기록하지 않는다.

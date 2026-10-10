@@ -23,8 +23,32 @@ Runner reads the stopped container's evidence through Docker `get_archive`,
 checks file ownership/permissions, and removes the volume with the container.
 Use the rebuilt C/C++ image; older images do not satisfy this boundary.
 
-Only a tracked mutation/write open returning `-1 EROFS` is a filesystem
-violation. ENOENT, EACCES, EPERM, EINVAL and EBADF are not filesystem evidence.
+Tracked mutations and write opens returning `-1 EROFS` remain filesystem
+evidence. A `-1 EACCES` is evidence only for a Landlock-mediated path mutation
+or write open whose normalized target is outside the policy's writable paths
+(`/workspace` and an optionally selected `/dev/null`). The parser
+handles absolute paths, `AT_FDCWD` relative paths, traced directory FDs,
+both endpoints of rename/link and symlinks created in the trace. Pathname
+`AF_UNIX` bind failures are included; network and abstract-socket binds are
+not filesystem evidence. An EACCES inside an allowed write path is treated as an
+ordinary Unix permission failure. `EPERM`, `ENOENT`, `EINVAL` and `EBADF` are
+not filesystem evidence. EACCES from chmod/chown, fd writes and other calls
+that Landlock does not mediate is not classified. A denied mutation of an
+external path is a policy-forbidden request; errno alone does not prove which
+Linux check returned it. Unresolved paths are not promoted to violations.
+An external target reached through a pre-existing symlink under `/workspace`
+can remain undetected because the trace does not reveal that symlink's target.
+This is a defense-in-depth limit for the current public API: each execution
+creates a nonce-isolated volume, preparation uploads only fixed regular source
+and stdin files, and compilation runs gcc/g++ before the user binary can run.
+An API-only test found no symlink before user execution; a symlink created by
+the user binary at runtime was blocked and detected. The pre-existing case
+was reproduced by directly seeding the Docker volume, outside the API input
+boundary.
+In the Docker volume layout, a cross-mount rename from `/workspace` to `/etc`
+failed with `EXDEV`. It was blocked, but `EXDEV` alone is not reliable
+Landlock evidence and this detector did not report FILESYSTEM_LIMIT for that
+standalone operation.
 stdout, stderr and exit codes never supply filesystem evidence. Write buffers
 are printed as raw pointers, preventing user output from filling the trace.
 
@@ -39,7 +63,25 @@ Policy termination may leave an incomplete tail; startup evidence is still
 required. Execution status follows the current develop classifier: filesystem
 and network policy evidence is returned separately in `policy_violations`.
 A program that handles a denied request and exits zero can return SUCCESS
-with FILESYSTEM_LIMIT in that list when the EROFS evidence was detected.
+with FILESYSTEM_LIMIT in that list when trusted syscall evidence was detected.
+
+On a WSL2 kernel reporting Landlock ABI 7, a native ruleset test measured
+`EACCES` for external `open(O_CREAT)`, `open(O_WRONLY/O_RDWR)`, `mkdir`,
+`truncate`, `unlink`, `unlinkat` and `rename`; workspace equivalents succeeded.
+This was a native test, not a Docker execution. Landlock allowed `chmod`,
+`setxattr` and `utimensat` on a user-owned file outside the allow rule; `chown` to root failed
+with ordinary `EPERM`. A mode-000 file inside the allowed directory produced
+ordinary `EACCES`. Docker rootfs read-only protection and normal ownership
+rules remain relevant for metadata operations.
+An additional ABI 7 native probe denied `/workspace`-equivalent symlink
+escapes and external pathname `AF_UNIX` binds with `EACCES`; its strace rows
+were used to verify the parser. In the Docker Desktop ABI 7 image, a runtime
+created `/workspace` symlink to `/etc` was blocked and detected. A pathname
+`AF_UNIX` bind under `/tmp` failed with `EROFS` and was detected; abstract
+`AF_UNIX` and `AF_INET` binds produced no filesystem violation. A symlink
+seeded in `/workspace` before user execution to `/dev/shm` exposed the stated
+limit: its write was blocked with `EACCES`, but the detector could not resolve
+the pre-existing target and returned no FILESYSTEM_LIMIT.
 
 The trace is bounded to less than 1 MiB for collection. Trace-heavy workloads
 may return INTERNAL_ERROR instead of an application result. Tracing adds a PID,

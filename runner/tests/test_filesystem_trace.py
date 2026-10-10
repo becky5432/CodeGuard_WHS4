@@ -5,14 +5,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from runner.security.filesystem_trace import (
-    TRACE_LIMIT_BYTES, analyze_filesystem_trace, collect_filesystem_trace,
+    TRACE_LIMIT_BYTES, TRACE_SYSCALLS, analyze_filesystem_trace, collect_filesystem_trace,
 )
 
 
 @pytest.mark.parametrize('trace', [
     'openat(AT_FDCWD, "/etc/hosts", O_RDONLY) = 3',
     'openat(AT_FDCWD, "/etc/hosts", O_RDONLY) = -1 EROFS (Read-only file system)',
-    'openat(AT_FDCWD, "/etc/test", O_WRONLY) = -1 EACCES (Permission denied)',
     'openat(AT_FDCWD, "/etc/test", O_WRONLY) = -1 EPERM (Operation not permitted)',
     'openat(AT_FDCWD, "/etc/O_WRONLY", O_RDONLY) = -1 EROFS (Read-only file system)',
     'write(1, "EROFS", 5) = 5',
@@ -21,6 +20,66 @@ from runner.security.filesystem_trace import (
 ])
 def test_no_violation(trace):
     assert not analyze_filesystem_trace(trace).detected
+
+
+@pytest.mark.parametrize('trace,expected', [
+    ('openat(AT_FDCWD, "/etc/test", O_WRONLY|O_CREAT, 0600) = -1 EACCES', '/etc/test'),
+    ('chdir("/workspace") = 0\nopenat(AT_FDCWD, "../etc/test", O_WRONLY) = -1 EACCES', '/etc/test'),
+    ('openat(AT_FDCWD</workspace>, "../etc/test", O_WRONLY) = -1 EACCES', '/etc/test'),
+    ('openat(3</etc>, "test", O_RDWR) = -1 EACCES', '/etc/test'),
+    ('rename("/workspace/a", "/etc/test") = -1 EACCES', '/etc/test'),
+    ('symlink("/etc", "/workspace/link") = 0\n'
+     'openat(AT_FDCWD, "/workspace/link/test", O_WRONLY|O_CREAT, 0600) = -1 EACCES', '/etc/test'),
+    ('bind(3<UNIX-STREAM:[1]>, {sa_family=AF_UNIX, sun_path="/tmp/socket"}, 110) '
+     '= -1 EACCES', '/tmp/socket'),
+    ('clone(child_stack=NULL, flags=SIGCHLD) = 42\n'
+     '42 mkdir("../etc/test", 0700) = -1 EACCES', '/etc/test'),
+])
+def test_landlock_denied_path_mutation(trace, expected):
+    violation = analyze_filesystem_trace(trace)
+    assert violation.detected
+    assert violation.errno == 'EACCES'
+    assert violation.path == expected
+
+
+@pytest.mark.parametrize('call', [
+    'openat(AT_FDCWD, "/workspace/no_permission", O_WRONLY)',
+    'openat(AT_FDCWD, "/workspace/../workspace/no_permission", O_RDWR)',
+    'chmod("/etc/no_permission", 0600)',
+    'chown("/etc/no_permission", 1, 1)',
+    'setxattr("/etc/no_permission", "user.test", "x", 1, 0)',
+    'utimensat(AT_FDCWD, "/etc/no_permission", NULL, 0)',
+    'write(3</etc/no_permission>, 0x1234, 1)',
+    'openat(AT_FDCWD, "unknown", O_WRONLY)',
+])
+def test_unix_eacces_or_ambiguous_path_is_not_landlock_evidence(call):
+    assert not analyze_filesystem_trace(f'{call} = -1 EACCES').detected
+
+
+def test_selected_write_device_eacces_is_not_policy_evidence():
+    trace = 'openat(AT_FDCWD, "/dev/null", O_WRONLY) = -1 EACCES'
+    assert not analyze_filesystem_trace(
+        trace, allowed_write_paths=frozenset({'/workspace', '/dev/null'}),
+    ).detected
+
+
+def test_removed_symlink_does_not_turn_unix_eacces_into_policy_evidence():
+    trace = ('symlink("/etc", "/workspace/link") = 0\n'
+             'unlink("/workspace/link") = 0\n'
+             'openat(AT_FDCWD, "/workspace/link/test", O_WRONLY) = -1 EACCES')
+    assert not analyze_filesystem_trace(trace).detected
+
+
+@pytest.mark.parametrize('trace', [
+    'bind(3, {sa_family=AF_INET, sin_port=htons(80)}, 16) = -1 EACCES',
+    'bind(3, {sa_family=AF_UNIX, sun_path=@"abstract"}, 110) = -1 EACCES',
+])
+def test_non_pathname_bind_is_not_filesystem_evidence(trace):
+    assert not analyze_filesystem_trace(trace).detected
+
+
+def test_pathname_socket_bind_is_traced():
+    assert 'bind' in TRACE_SYSCALLS.split(',')
 
 
 @pytest.mark.parametrize('flag', ['O_WRONLY', 'O_RDWR', 'O_CREAT', 'O_TRUNC', 'O_APPEND', 'O_TMPFILE'])
