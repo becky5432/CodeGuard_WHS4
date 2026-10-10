@@ -17,22 +17,22 @@ int main() {
 }`;
 
 const DEFAULT_POLICY = {
-  timeout_ms: 2000,
+  timeout_ms: 2,
   memory_limit_mb: 128,
   pids_limit: 32,
   cpu_bandwidth: 1.0,
   output_limit_bytes: 1048576,
-  cpu_time_limit_ms: 1000,
+  cpu_time_limit_ms: 1,
 };
 
 const POLICY_FIELDS = [
   {
     key: "timeout_ms",
     label: "실행 시간",
-    unit: "ms",
+    unit: "sec",
     type: "time",
-    step: 1,
-    min: 1,
+    step: 0.001,
+    min: 0.001,
     reasonCode: "TIME_LIMIT",
   },
   {
@@ -154,7 +154,6 @@ function MainPage() {
     "코드를 실행하면 이곳에서 결과를 확인할 수 있습니다.",
   );
   const [policyInputMessage, setPolicyInputMessage] = useState(null);
-  const [networkPreset, setNetworkPreset] = useState("none");
 
   const showPolicyInputMessage = (key) => {
     setPolicyInputMessage(key);
@@ -258,20 +257,23 @@ function MainPage() {
     }
 
     const integerPolicyKeys = [
-      "timeout_ms",
       "memory_limit_mb",
       "pids_limit",
-      "cpu_time_limit_ms",
       "output_limit_bytes",
     ];
     const hasInvalidPolicy = POLICY_FIELDS.some(({ key }) => {
       const value = Number(selectedPolicy[key]);
 
+      const isTimeField = key === "timeout_ms" || key === "cpu_time_limit_ms";
+
       return (
         selectedPolicy[key] === "" ||
         !Number.isFinite(value) ||
         value <= 0 ||
-        (integerPolicyKeys.includes(key) && !Number.isInteger(value))
+        (integerPolicyKeys.includes(key) && !Number.isInteger(value)) ||
+        (isTimeField &&
+          (!Number.isInteger(Number((value * 1000).toFixed(6))) ||
+            value < 0.001))
       );
     });
 
@@ -279,7 +281,7 @@ function MainPage() {
       setExecutionState("error");
       setExecutionStatusText("입력 오류");
       setRequestErrorCode("INVALID_POLICY");
-      setMessage("정책 값은 0보다 큰 정수로 입력해주세요. (CPU 처리량 제외)");
+      setMessage("정책 값은 0보다 큰 숫자로 입력해주세요.");
       return;
     }
 
@@ -296,13 +298,15 @@ function MainPage() {
       code,
       stdin: standardInput,
       policy: {
-        timeout_ms: Number(selectedPolicy.timeout_ms),
+        timeout_ms: Math.round(Number(selectedPolicy.timeout_ms) * 1000),
         memory_limit_mb: Number(selectedPolicy.memory_limit_mb),
         pids_limit: Number(selectedPolicy.pids_limit),
         cpu_bandwidth: Number(selectedPolicy.cpu_bandwidth),
-        cpu_time_limit_ms: Number(selectedPolicy.cpu_time_limit_ms),
+        cpu_time_limit_ms: Math.round(
+          Number(selectedPolicy.cpu_time_limit_ms) * 1000,
+        ),
         output_limit_bytes: Number(selectedPolicy.output_limit_bytes),
-        network_preset: networkPreset,
+        network_preset: "none",
       },
     };
 
@@ -517,7 +521,9 @@ function MainPage() {
                             }
 
                             if (
-                              field.key === "cpu_bandwidth" &&
+                              (field.key === "cpu_bandwidth" ||
+                                field.key === "timeout_ms" ||
+                                field.key === "cpu_time_limit_ms") &&
                               event.key === "."
                             ) {
                               return;
@@ -544,7 +550,7 @@ function MainPage() {
               </div>
 
               <div className="fixed-control-section">
-                <h3>고정 통제</h3>
+                <h3>접근 통제</h3>
 
                 <div className="environment-limit-grid-bottom">
                   <article
@@ -574,29 +580,10 @@ function MainPage() {
                     <span className="environment-limit-icon planned-network-icon">
                       <MetricIcon type="network" />
                     </span>
-
                     <div className="fixed-control-info">
                       <strong>네트워크 차단</strong>
-                      <small className="limit-status-badge">
-                        {networkPreset === "none"
-                          ? "외부 연결 차단"
-                          : "외부 연결 허용"}
-                      </small>
+                      <small className="limit-status-badge">차단 중</small>
                     </div>
-
-                    <label className="network-toggle" title="외부 인터넷 연결">
-                      <input
-                        type="checkbox"
-                        checked={networkPreset === "none"}
-                        onChange={(event) =>
-                          setNetworkPreset(
-                            event.target.checked ? "none" : "web",
-                          )
-                        }
-                      />
-
-                      <span className="network-toggle-slider" />
-                    </label>
                   </article>
 
                   <article
@@ -632,7 +619,14 @@ function MainPage() {
           {/* 자원 사용량 요약 영역 */}
           <ResourceUsagePanel
             executionResult={executionResult}
-            policy={executionResult?.policy ?? selectedPolicy}
+            policy={
+              executionResult?.policy ?? {
+                ...selectedPolicy,
+                timeout_ms: Number(selectedPolicy.timeout_ms) * 1000,
+                cpu_time_limit_ms:
+                  Number(selectedPolicy.cpu_time_limit_ms) * 1000,
+              }
+            }
           />
         </div>
       </div>

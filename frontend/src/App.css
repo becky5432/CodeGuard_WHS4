@@ -1404,7 +1404,6 @@ body,
   line-height: 18px;
 }
 
-/* 아래쪽 고정 제한도 확대 시 넘치지 않도록 */
 .planned-feature-item strong,
 .planned-feature-item .limit-status-badge {
   max-width: 100%;
@@ -1418,7 +1417,6 @@ body,
   color: var(--gray-500);
   font-size: 13px;
 }
-/* 고정 통제 항목 색상 - 자원 제한과 구분 */
 .planned-file-icon {
   color: #0891b2;
   background: #ecfeff;
@@ -1660,7 +1658,7 @@ body,
   background: var(--blue-100);
 }
 
-/* 고정 통제 */
+/* 접근 제한 */
 .fixed-control-section {
   margin-top: 10px;
   padding-top: 10px;
@@ -2496,53 +2494,6 @@ body,
 .network-control-item .fixed-control-info {
   flex: 1;
   min-width: 0;
-}
-
-.network-toggle {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  cursor: pointer;
-  position: relative;
-  top: 12px;
-
-  transform: translateX(-20px) scale(0.8);
-  transform-origin: center;
-}
-
-.network-toggle input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.network-toggle-slider {
-  position: relative;
-  width: 36px;
-  height: 20px;
-  border-radius: 999px;
-  background-color: var(--gray-300);
-  transition: background-color 0.2s ease;
-}
-
-.network-toggle-slider::after {
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background-color: var(--white);
-  content: "";
-  transition: transform 0.2s ease;
-}
-
-.network-toggle input:checked + .network-toggle-slider {
-  background-color: #86d89b;
-}
-
-.network-toggle input:checked + .network-toggle-slider::after {
-  transform: translateX(16px);
 }
 
 .network-control-row {

@@ -68,7 +68,7 @@ function MemoryUsageChart({ samples }) {
                 textAnchor="end"
                 className="cpu-chart-label"
               >
-                {Math.round(value)} MiB
+                {Math.round(value)} MB
               </text>
             </g>
           );
@@ -103,7 +103,7 @@ function MemoryUsageChart({ samples }) {
             className="cpu-chart-point memory-chart-point"
           >
             <title>
-              {`${(point.time / 1000).toFixed(3)}초: ${point.usage.toFixed(2)} MiB`}
+              {`${(point.time / 1000).toFixed(3)}초: ${point.usage.toFixed(2)} MB`}
             </title>
           </circle>
         ))}
