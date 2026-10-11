@@ -37,7 +37,7 @@ const POLICY_FIELDS = [
   {
     key: "output_limit_bytes",
     label: "출력 제한",
-    unit: "bytes",
+    unit: "KB",
     type: "output",
   },
 ];
@@ -127,7 +127,11 @@ function ExecutionDetailPanel({ execution, onClose }) {
                           ? Number(
                               (execution.policy[field.key] / 1000).toFixed(3),
                             )
-                          : execution.policy[field.key]}
+                          : field.key === "output_limit_bytes"
+                            ? Number(
+                                (execution.policy[field.key] / 1024).toFixed(2),
+                              )
+                            : execution.policy[field.key]}
                       {execution.policy?.[field.key] != null && (
                         <span className="history-detail-policy-unit">
                           {field.unit}
