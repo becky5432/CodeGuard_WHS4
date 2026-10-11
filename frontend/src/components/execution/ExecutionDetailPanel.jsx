@@ -7,7 +7,7 @@ const POLICY_FIELDS = [
   {
     key: "timeout_ms",
     label: "실행 시간",
-    unit: "ms",
+    unit: "sec",
     type: "time",
   },
   {
@@ -31,7 +31,7 @@ const POLICY_FIELDS = [
   {
     key: "cpu_time_limit_ms",
     label: "CPU 시간",
-    unit: "ms",
+    unit: "sec",
     type: "cputime",
   },
   {
