@@ -21,7 +21,7 @@ const DEFAULT_POLICY = {
   memory_limit_mb: 128,
   pids_limit: 32,
   cpu_bandwidth: 1.0,
-  output_limit_bytes: 1048576,
+  output_limit_bytes: 1024,
   cpu_time_limit_ms: 1,
 };
 
@@ -74,7 +74,7 @@ const POLICY_FIELDS = [
   {
     key: "output_limit_bytes",
     label: "출력 제한",
-    unit: "bytes",
+    unit: "KB",
     type: "output",
     step: 1,
     min: 1,
@@ -305,7 +305,7 @@ function MainPage() {
         cpu_time_limit_ms: Math.round(
           Number(selectedPolicy.cpu_time_limit_ms) * 1000,
         ),
-        output_limit_bytes: Number(selectedPolicy.output_limit_bytes),
+        output_limit_bytes: Number(selectedPolicy.output_limit_bytes) * 1024,
         network_preset: "none",
       },
     };
@@ -625,6 +625,8 @@ function MainPage() {
                 timeout_ms: Number(selectedPolicy.timeout_ms) * 1000,
                 cpu_time_limit_ms:
                   Number(selectedPolicy.cpu_time_limit_ms) * 1000,
+                output_limit_bytes:
+                  Number(selectedPolicy.output_limit_bytes) * 1024,
               }
             }
           />
