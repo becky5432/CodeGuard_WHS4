@@ -65,7 +65,7 @@ const POLICY_FIELDS = [
   {
     key: "cpu_time_limit_ms",
     label: "CPU 시간",
-    unit: "ms",
+    unit: "sec",
     type: "cputime",
     step: 1,
     min: 1,
@@ -582,7 +582,7 @@ function MainPage() {
                     </span>
                     <div className="fixed-control-info">
                       <strong>네트워크 차단</strong>
-                      <small className="limit-status-badge">차단 중</small>
+                      <small className="limit-status-badge">제한 중</small>
                     </div>
                   </article>
 
