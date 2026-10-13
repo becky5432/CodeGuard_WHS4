@@ -20,6 +20,7 @@ CG_OP_REGISTER_CGROUP = 2
 CG_OP_REGISTER_ROOT = 3
 CG_OP_SNAPSHOT = 4
 CG_OP_REMOVE = 5
+CG_OP_FILESYSTEM = 6
 
 CG_ERR_NONE = 0
 CG_ERR_TASK_MAP = 1 << 0
@@ -29,6 +30,9 @@ CG_ERR_CAPACITY = 1 << 3
 
 REQUEST_STRUCT = struct.Struct("<IHH16sQII")
 RESPONSE_STRUCT = struct.Struct("<IHHiIIIIIQQ")
+
+FILESYSTEM_RESPONSE_STRUCT = struct.Struct("<IHHiI16sQQQIIII")
+assert FILESYSTEM_RESPONSE_STRUCT.size == 72
 
 assert REQUEST_STRUCT.size == 40
 assert RESPONSE_STRUCT.size == 48
@@ -71,6 +75,24 @@ class PidsPeakSnapshot:
     root_tid: int = 0
     exec_start_ns: int = 0
     exec_end_ns: int = 0
+
+
+@dataclass(frozen=True)
+class FilesystemViolationEvent:
+    run_id: UUID
+    cgroup_id: int
+    timestamp_ns: int
+    domain_id: int
+    pid: int
+    tid: int
+    blockers: int
+    source: str = "LANDLOCK_EBPF"
+
+
+@dataclass(frozen=True)
+class FilesystemSnapshot:
+    active: bool = False
+    violations: tuple[FilesystemViolationEvent, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -232,6 +254,34 @@ class TaskTrackerClient:
             exec_start_ns=response.exec_start_ns,
             exec_end_ns=response.exec_end_ns,
         )
+
+    def filesystem_snapshot(self, run_id: UUID) -> FilesystemSnapshot:
+        payload = REQUEST_STRUCT.pack(
+            CG_TRACKER_MAGIC, CG_TRACKER_VERSION, CG_OP_FILESYSTEM,
+            run_id.bytes, 0, 0, 0,
+        )
+        raw = self._transport.request(payload, FILESYSTEM_RESPONSE_STRUCT.size)
+        if len(raw) != FILESYSTEM_RESPONSE_STRUCT.size:
+            raise TaskTrackingError("Invalid filesystem tracker response length.")
+        (magic, version, flags, status, reserved, response_run,
+         cgroup_id, timestamp_ns, domain_id, pid, tid, blockers,
+         event_reserved) = FILESYSTEM_RESPONSE_STRUCT.unpack(raw)
+        if (magic != CG_TRACKER_MAGIC or version != CG_TRACKER_VERSION
+                or status or reserved or event_reserved or flags & ~3
+                or response_run != run_id.bytes):
+            raise TaskTrackingError("Invalid filesystem tracker response.")
+        active, has_event = bool(flags & 1), bool(flags & 2)
+        if has_event:
+            if not active or not all((cgroup_id, timestamp_ns, pid, tid, blockers)):
+                raise TaskTrackingError("Invalid Landlock violation event.")
+            event = FilesystemViolationEvent(
+                run_id=run_id, cgroup_id=cgroup_id, timestamp_ns=timestamp_ns,
+                domain_id=domain_id, pid=pid, tid=tid, blockers=blockers,
+            )
+            return FilesystemSnapshot(active=True, violations=(event,))
+        if any((cgroup_id, timestamp_ns, domain_id, pid, tid, blockers)):
+            raise TaskTrackingError("Unexpected filesystem event data.")
+        return FilesystemSnapshot(active=active)
 
     def remove(self, run_id: UUID) -> None:
         self._request(CG_OP_REMOVE, run_id)

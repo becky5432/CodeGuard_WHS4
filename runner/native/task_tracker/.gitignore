@@ -3,3 +3,6 @@ task_tracker.bpf.o
 task_tracker.skel.h
 codeguard-task-tracker
 codeguard-init
+landlock_detector.bpf.o
+landlock_detector.skel.h
+codeguard-workspace-prepare
