@@ -221,6 +221,7 @@ def _absolute_path(
 
 def analyze_filesystem_trace(
     trace: str, *, allowed_write_paths: frozenset[str] = frozenset({"/workspace"}),
+    landlock_fallback: bool = True,
 ) -> FilesystemViolation:
     calls = list(_calls(trace))
     for _, syscall, args, result, _ in calls:
@@ -296,6 +297,8 @@ def analyze_filesystem_trace(
         if syscall == "bind" and path is None:
             continue
         if errno == "EACCES":
+            if not landlock_fallback:
+                continue
             if syscall not in LANDLOCK_PATH_MUTATIONS and syscall not in OPEN_FLAG_ARGUMENT:
                 continue
             # The verified v2 policy gives write access to /workspace and may
@@ -316,6 +319,7 @@ def analyze_filesystem_trace(
 def collect_filesystem_trace(
     container, *, interrupted: bool = False,
     allowed_write_paths: frozenset[str] = frozenset({"/workspace"}),
+    landlock_fallback: bool = True,
 ) -> FilesystemViolation:
     """Read a stopped container's dedicated volume with a bounded archive size.
 
@@ -359,4 +363,6 @@ def collect_filesystem_trace(
                 terminated.add(prefix[1] or prefix[2] or "main")
         if not {pid for pid, *_ in calls}.issubset(terminated):
             raise ValueError("filesystem trace is incomplete")
-    return analyze_filesystem_trace(trace, allowed_write_paths=allowed_write_paths)
+    return analyze_filesystem_trace(
+        trace, allowed_write_paths=allowed_write_paths, landlock_fallback=landlock_fallback,
+    )

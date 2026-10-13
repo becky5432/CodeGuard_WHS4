@@ -13,6 +13,8 @@ from runner.pipeline.classifier import classify_execution
 from runner.metrics.cgroup_scope import CgroupMetrics
 from runner.metrics.task_tracker import (
     ExecutionCgroupIdentity,
+    FilesystemSnapshot,
+    FilesystemViolationEvent,
     PidsPeakSnapshot,
 )
 from runner.pipeline.execution import (
@@ -93,6 +95,53 @@ class ExecutionTests(unittest.TestCase):
         self.addCleanup(self.affinity_patcher.stop)
 
         
+
+    def test_landlock_primary_fallback_and_query_lifetime(self) -> None:
+        self.container.attrs["State"]["Pid"] = 321
+        from runner.pipeline.classifier import classify_policy_violations
+        from runner.security.filesystem_trace import analyze_filesystem_trace
+        event = FilesystemViolationEvent(self.run_id, 999, 100, 42, 456, 456, 4)
+        denied_write = 'openat(AT_FDCWD, "/dev/shm/x", O_CREAT|O_WRONLY, 0600) = -1 EACCES (Permission denied)'
+        denied_read = 'openat(AT_FDCWD, "/etc/hosts", O_RDONLY) = -1 EACCES (Permission denied)'
+        erofs = 'openat(AT_FDCWD, "/tmp/x", O_CREAT|O_WRONLY, 0600) = -1 EROFS (Read-only file system)'
+        cases = (
+            ("read", FilesystemSnapshot(True, (event,)), denied_read, True, "LANDLOCK_EBPF"),
+            ("duplicate", FilesystemSnapshot(True, (event,)), denied_write, True, "LANDLOCK_EBPF"),
+            ("erofs", FilesystemSnapshot(True), erofs, True, "STRACE"),
+            ("workspace", FilesystemSnapshot(True), '', False, None),
+            ("ordinary_eacces", FilesystemSnapshot(True), denied_write, False, None),
+            ("unavailable", FilesystemSnapshot(), denied_write, True, "STRACE"),
+            ("legacy_daemon", TaskTrackingError("old daemon"), denied_write, True, "STRACE"),
+        )
+        for name, snapshot, trace, detected, source in cases:
+            with self.subTest(name=name):
+                order = []
+                tracker = MagicMock()
+                tracker.snapshot.return_value = PidsPeakSnapshot(1, 1, 0, root_tid=456)
+                def query(run_id):
+                    self.assertEqual(run_id, self.run_id)
+                    order.append("query")
+                    if isinstance(snapshot, Exception):
+                        raise snapshot
+                    return snapshot
+                tracker.filesystem_snapshot.side_effect = query
+                tracker.remove.side_effect = lambda run_id: order.append("remove")
+                def collect(container, **kwargs):
+                    order.append("strace")
+                    return analyze_filesystem_trace(trace, landlock_fallback=kwargs["landlock_fallback"])
+                with (patch("runner.pipeline.execution.resolve_execution_cgroup",
+                            return_value=ExecutionCgroupIdentity(999, 1)),
+                      patch("runner.pipeline.execution.collect_filesystem_trace", side_effect=collect)):
+                    result = execute_program(
+                        self.container, self.workspace.job_id, self.run_id,
+                        timeout_ms=2000, task_tracker=tracker, filesystem_policy_id="a" * 64,
+                    )
+                self.assertIsNone(result.system_error)
+                self.assertEqual(order, ["query", "strace", "remove"])
+                self.assertEqual(result.filesystem_violation_source, source)
+                self.assertEqual(result.filesystem_limit_exceeded, detected)
+                self.assertEqual(classify_policy_violations(result),
+                                 [RunnerReasonCode.FILESYSTEM_LIMIT] if detected else [])
 
     def test_filesystem_prepared_failure_never_releases_gate(self) -> None:
         with (
@@ -286,6 +335,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_execution_opens_start_file_after_security_and_tracker_registration(self) -> None:
         tracker = MagicMock()
+        tracker.filesystem_snapshot.return_value = FilesystemSnapshot()
         tracker.snapshot.return_value = PidsPeakSnapshot(
             1, 1, 0, root_tid=456
         )
@@ -314,6 +364,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_ebpf_exec_boundaries_are_authoritative_for_wall_time(self) -> None:
         tracker = MagicMock()
+        tracker.filesystem_snapshot.return_value = FilesystemSnapshot()
         tracker.snapshot.return_value = PidsPeakSnapshot(
             1,
             1,
@@ -491,6 +542,7 @@ class ExecutionTests(unittest.TestCase):
             pids_current=1,
         )
         tracker = MagicMock()
+        tracker.filesystem_snapshot.return_value = FilesystemSnapshot()
         tracker.snapshot.return_value = PidsPeakSnapshot(
             user_task_peak=15,
             process_at_user_task_peak=3,
@@ -537,6 +589,7 @@ class ExecutionTests(unittest.TestCase):
         }
         resolve_cgroup.return_value = ExecutionCgroupIdentity(999, 1)
         tracker = MagicMock()
+        tracker.filesystem_snapshot.return_value = FilesystemSnapshot()
         tracker.snapshot.return_value = PidsPeakSnapshot(
             user_task_peak=1,
             process_at_user_task_peak=1,
@@ -573,6 +626,7 @@ class ExecutionTests(unittest.TestCase):
         }
         resolve_cgroup.return_value = ExecutionCgroupIdentity(999, 1)
         tracker = MagicMock()
+        tracker.filesystem_snapshot.return_value = FilesystemSnapshot()
         tracker.register_cgroup.side_effect = TaskTrackingError("offline")
 
         result = execute_program(
@@ -607,6 +661,7 @@ class ExecutionTests(unittest.TestCase):
             "HostConfig": {},
         }
         tracker = MagicMock()
+        tracker.filesystem_snapshot.return_value = FilesystemSnapshot()
 
         result = execute_program(
             container=self.container,
@@ -1243,6 +1298,7 @@ class ExecutionTimeoutRaceTests(unittest.TestCase):
         tracker = None
         if tracker_enabled:
             tracker = MagicMock()
+            tracker.filesystem_snapshot.return_value = FilesystemSnapshot()
             snapshot_calls = 0
 
             def snapshot(_run_id):

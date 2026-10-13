@@ -23,6 +23,23 @@ Runner reads the stopped container's evidence through Docker `get_archive`,
 checks file ownership/permissions, and removes the volume with the container.
 Use the rebuilt C/C++ image; older images do not satisfy this boundary.
 
+The primary Landlock detector attaches the existing Task Tracker to
+`landlock_deny_access_fs`. At tracker startup it validates the running tracepoint
+format and the matching BTF scalar fields before attaching. For a tracked cgroup,
+it stores the first denial's cgroup ID, PID, TID, timestamp, Landlock domain ID,
+and blocker mask in a bounded per-cgroup mailbox. The Runner queries this record
+by run ID before it unregisters the run. The kernel event has no requested-access
+field; the blocker mask supplies the denied Landlock access. Path strings are not
+read from the tracepoint.
+
+When this detector is active, a Landlock event is authoritative evidence,
+including denied reads such as `/etc/hosts`; the public `policy_violations`
+contract still records `FILESYSTEM_LIMIT` once. On kernels without the tracepoint,
+or when format validation, load, attach, or event query fails, existing strace
+`EACCES` inference remains enabled. This compatibility path keeps its previous
+write/mutation scope. `EROFS` evidence remains enabled in both modes for Docker
+Read-only RootFS failures.
+
 Tracked mutations and write opens returning `-1 EROFS` remain filesystem
 evidence. A `-1 EACCES` is evidence only for a Landlock-mediated path mutation
 or write open whose normalized target is outside the policy's writable paths

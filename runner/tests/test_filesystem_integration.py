@@ -538,6 +538,8 @@ class FilesystemIntegrationTests(unittest.TestCase):
     def test_workspace_root_write_succeeds(self) -> None:
         result = self._compile_and_execute('#include <stdio.h>\nint main(void) { FILE *f = fopen("/workspace/new", "w"); return !f || fclose(f); }')
         self.assertEqual(result.exit_code, 0, result.stderr)
+        self.assertFalse(result.filesystem_limit_exceeded)
+        self.assertEqual(result.filesystem_violations, ())
         self.assertEqual(classify_execution(result).status, RunnerStatus.SUCCESS)
 
     def test_tmp_write_is_denied(self) -> None:

@@ -15,6 +15,7 @@ enum cg_tracker_op {
     CG_OP_REGISTER_ROOT = 3,
     CG_OP_SNAPSHOT = 4,
     CG_OP_REMOVE = 5,
+    CG_OP_FILESYSTEM = 6,
 };
 
 enum cg_measurement_error {
@@ -78,6 +79,49 @@ struct cg_peak_snapshot {
     __u64 exec_start_ns;
     __u64 exec_end_ns;
 };
+
+/* A bounded first-denial mailbox. State publication is atomic; the event
+ * becomes immutable once READY. No async consumer can race run removal. */
+enum cg_fs_state_status {
+    CG_FS_EMPTY = 0,
+    CG_FS_WRITING = 1,
+    CG_FS_READY = 2,
+    CG_FS_READ_ERROR = 3,
+};
+
+struct cg_fs_event {
+    __u64 cgroup_id;
+    __u64 timestamp_ns;
+    __u64 domain_id;
+    __u32 pid;
+    __u32 tid;
+    __u32 blockers;
+    __u32 reserved;
+};
+
+struct cg_fs_state {
+    __u32 state;
+    __u32 reserved;
+    struct cg_fs_event first;
+};
+
+#define CG_FS_ACTIVE 1
+#define CG_FS_HAS_EVENT 2
+
+/* Ops 1-5 retain their V3 response layout. Only op6 uses this response. */
+struct cg_fs_response {
+    __u32 magic;
+    __u16 version;
+    __u16 flags;
+    __s32 status;
+    __u32 reserved;
+    struct cg_run_id run_id;
+    struct cg_fs_event first;
+};
+
+_Static_assert(sizeof(struct cg_fs_event) == 40, "cg_fs_event size mismatch");
+_Static_assert(sizeof(struct cg_fs_state) == 48, "cg_fs_state size mismatch");
+_Static_assert(sizeof(struct cg_fs_response) == 72, "cg_fs_response size mismatch");
 
 struct cg_request {
     __u32 magic;

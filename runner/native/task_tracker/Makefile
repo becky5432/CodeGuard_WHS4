@@ -20,8 +20,14 @@ task_tracker.bpf.o: task_tracker.bpf.c task_tracker_shared.h vmlinux.h
 task_tracker.skel.h: task_tracker.bpf.o
 	$(BPFTOOL) gen skeleton $< > $@
 
-codeguard-task-tracker: task_trackerd.c task_tracker_shared.h task_tracker.skel.h
-	$(CC) $(CFLAGS) -I. task_trackerd.c -o $@ $(LIBBPF_FLAGS)
+landlock_detector.bpf.o: landlock_detector.bpf.c task_tracker_shared.h vmlinux.h
+	$(CLANG) $(BPF_CFLAGS) -mcpu=v3 -c $< -o $@
+
+landlock_detector.skel.h: landlock_detector.bpf.o
+	$(BPFTOOL) gen skeleton $< > $@
+
+codeguard-task-tracker: task_trackerd.c landlock_detector.c landlock_detector.h task_tracker_shared.h task_tracker.skel.h landlock_detector.skel.h
+	$(CC) $(CFLAGS) -I. task_trackerd.c landlock_detector.c -o $@ $(LIBBPF_FLAGS)
 
 FILESYSTEM_SOURCES := ../filesystem/landlock_policy.c \
 	../filesystem/policy_reader.c ../filesystem/startup_status.c
@@ -34,4 +40,5 @@ codeguard-workspace-prepare: ../filesystem/workspace_prepare.c
 
 clean:
 	rm -f vmlinux.h task_tracker.bpf.o task_tracker.skel.h \
+		landlock_detector.bpf.o landlock_detector.skel.h \
 		codeguard-task-tracker codeguard-init codeguard-workspace-prepare
