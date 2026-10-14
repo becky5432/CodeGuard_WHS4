@@ -199,7 +199,7 @@ function ResourceUsagePanel({ executionResult, policy }) {
           </div>
 
           <div className="resource-pids-detail">
-            <span>Process</span>
+            <span>User Process</span>
 
             <div className="resource-progress resource-process-detail">
               <span
@@ -213,7 +213,7 @@ function ResourceUsagePanel({ executionResult, policy }) {
           </div>
 
           <div className="resource-pids-detail">
-            <span>Thread</span>
+            <span>User Thread</span>
 
             <div className="resource-progress resource-thread-detail">
               <span

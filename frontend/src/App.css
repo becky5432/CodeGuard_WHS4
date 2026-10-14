@@ -414,21 +414,6 @@ button {
   background-color: #e04435;
 }
 
-.resource-pids-detail + .resource-pids-detail {
-  margin-top: -6px;
-}
-
-.resource-pids-detail small,
-.resource-pids-detail em {
-  margin: 0;
-  font-size: 10px;
-  line-height: 1;
-}
-
-.resource-pids-detail em {
-  text-align: right;
-}
-
 /* 코드 편집기 전체 화면 */
 
 .editor-section-fullscreen {
@@ -1260,7 +1245,7 @@ body,
 
 .resource-card-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1.7fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr 1.4fr 1fr 1fr;
   gap: 10px;
   margin-top: 10px;
   align-items: stretch;
@@ -1358,10 +1343,11 @@ body,
   margin: 0;
 }
 .resource-process {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
   grid-template-rows: 45px 7px 17px 8px;
   align-content: start;
   gap: 3px;
-  display: grid;
 }
 
 .resource-pids-heading {
@@ -1394,14 +1380,16 @@ body,
   width: 100%;
 }
 
-.resource-pids-detail > span,
-.resource-pids-detail > em {
-  display: block;
-  margin: 0;
-  color: var(--gray-500);
-  font-size: 11px;
-  font-style: normal;
-  line-height: 18px;
+.resource-pids-heading {
+  grid-column: 1 / -1;
+}
+
+.resource-pids-progress-row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: inherit;
 }
 
 .planned-feature-item strong,
@@ -1468,15 +1456,25 @@ body,
   text-align: right;
   white-space: nowrap;
 }
-.resource-pids-detail {
-  display: flex;
-  grid-template-columns: 64px minmax(0, 1fr) 40px;
-  align-items: center;
-  gap: 8px;
-  height: 18px;
+
+.resource-pids-detail > span,
+.resource-pids-detail > em {
+  display: block;
   margin: 0;
+  color: var(--gray-500);
+  font-size: 11px;
+  font-style: normal;
+  line-height: 18px;
+}
+
+.resource-pids-detail {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: center;
+  height: 18px;
+  margin: 0px;
   line-height: 1;
-  transform: none;
 }
 
 .resource-pids-detail > span {
@@ -1488,16 +1486,46 @@ body,
   margin: 0;
   flex: 1;
   min-width: 0;
+  transform: translateY(2px);
+}
+.resource-pids-progress-row > .resource-progress {
+  grid-column: 1 / 3;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+.resource-pids-progress-row > em {
+  grid-column: 3;
+  min-width: 0;
+  margin: 0;
+  text-align: right;
+  white-space: nowrap;
+}
+.resource-pids-detail > em {
+  width: 32px;
+  min-width: 30px;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .resource-pids-detail > em {
-  text-align: right;
-  flex: 0 0 auto;
-  min-width: 40px;
+  text-align: left;
+  min-width: 0px;
   margin: 0;
 }
+.resource-pids-detail + .resource-pids-detail {
+  margin-top: -6px;
+}
 
-/* CPU 사용률 추이 그래프 */
+.resource-pids-detail small,
+.resource-pids-detail em {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1;
+}
+.resource-pids-detail em {
+  text-align: right;
+}
 
 /* CPU 및 메모리 사용량 그래프 배치 */
 .resource-charts {
@@ -2501,4 +2529,30 @@ body,
   align-items: center;
   gap: 8px;
   margin-top: 3px;
+}
+/* PID 막대 3개의 오른쪽 끝 정렬 */
+.resource-process .resource-pids-progress-row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  gap: inherit;
+}
+
+.resource-pids-progress-row > .resource-progress {
+  grid-column: 1 / 3;
+  width: 100%;
+}
+
+.resource-process .resource-pids-progress-row > em {
+  grid-column: 3;
+  min-width: 0;
+  width: auto;
+  text-align: right;
+}
+
+/* Process / Thread 수치의 고정 너비 해제 */
+.resource-process .resource-pids-detail > em {
+  width: auto;
+  min-width: 0;
+  justify-self: end;
 }
