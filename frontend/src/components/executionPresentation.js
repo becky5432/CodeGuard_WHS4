@@ -1,3 +1,8 @@
+export const POLICY_VIOLATION_MESSAGES = {
+  FILESYSTEM_LIMIT: "파일 접근이 차단되었습니다.",
+  NETWORK_BLOCKED: "네트워크 접근이 차단되었습니다.",
+};
+
 const EXECUTION_RESULT_PRESENTATION = {
   COMPILE_ERROR: {
     state: "error",
@@ -70,6 +75,28 @@ export function getExecutionResultPresentation(result) {
       message: "",
     };
   }
+
+  // Concrete failure reasons (limits, compile/security/internal errors) keep
+  // their priority. A denial notice does not explain or rewrite the exit code.
+  const canPrioritizePolicy =
+    result.status === "SUCCESS" ||
+    (result.status === "ERROR" && result.reason_code === "RUNTIME_ERROR");
+
+  if (canPrioritizePolicy && Array.isArray(result.policy_violations)) {
+    // Stable display order when both access policies were violated.
+    const primaryPolicyViolation = Object.keys(POLICY_VIOLATION_MESSAGES).find(
+      (violation) => result.policy_violations.includes(violation),
+    );
+
+    if (primaryPolicyViolation) {
+      return {
+        ...EXECUTION_RESULT_PRESENTATION[primaryPolicyViolation],
+        message: POLICY_VIOLATION_MESSAGES[primaryPolicyViolation],
+        primaryPolicyViolation,
+      };
+    }
+  }
+
   if (result.status === "SUCCESS") {
     return {
       state: "success",

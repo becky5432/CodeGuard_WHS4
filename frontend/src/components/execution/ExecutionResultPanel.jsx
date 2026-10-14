@@ -1,5 +1,8 @@
 import { ResultMessageIcon, StatusGlyph } from "../Icons";
-import { getExecutionResultPresentation } from "../executionPresentation";
+import {
+  getExecutionResultPresentation,
+  POLICY_VIOLATION_MESSAGES,
+} from "../executionPresentation";
 const DISPLAYED_EXECUTION_STAGES = [
   {
     key: "COMPILE",
@@ -42,11 +45,6 @@ function getExecutionStageLabel(status) {
   return labels[status];
 }
 
-const POLICY_VIOLATION_MESSAGES = {
-  FILESYSTEM_LIMIT: "파일 접근이 차단되었습니다.",
-  NETWORK_BLOCKED: "네트워크 접근이 차단되었습니다.",
-};
-
 function ExecutionResultPanel({
   executionResult,
   executionState,
@@ -60,7 +58,14 @@ function ExecutionResultPanel({
   const displayStatusText = executionStatusText ?? derivedPresentation.label;
   const displayMessage = message ?? derivedPresentation.message;
 
-  const policyViolations = executionResult?.policy_violations ?? [];
+  const displayedPrimaryViolation =
+    displayState === derivedPresentation.state &&
+    displayMessage === derivedPresentation.message
+      ? derivedPresentation.primaryPolicyViolation
+      : null;
+  const policyViolations = (executionResult?.policy_violations ?? []).filter(
+    (violation) => violation !== displayedPrimaryViolation,
+  );
 
   const executionReasonCode =
     executionResult?.reason_code ?? requestErrorCode ?? "-";
@@ -133,7 +138,7 @@ function ExecutionResultPanel({
           </div>
 
           <div className="execution-summary-item">
-            <span>종료 사유</span>
+            <span>프로그램 종료 사유</span>
             <strong>{executionReasonCode}</strong>
           </div>
 
