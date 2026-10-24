@@ -1067,7 +1067,10 @@ def execute_program(
                     container,
                     interrupted=final_policy_kill or oom_killed or pids_limit_exceeded,
                     allowed_write_paths=allowed_write_paths,
-                    landlock_fallback=not filesystem_snapshot.active,
+                    # A denial may happen before Landlock (e.g. ordinary DAC).
+                    # Keep protected-path mutation evidence in both modes;
+                    # STRACE evidence does not claim a Landlock denial event.
+                    landlock_fallback=True,
                 )
             except Exception as exc:
                 system_error = "파일시스템 추적 증거 수집 또는 분석에 실패했습니다."

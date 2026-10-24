@@ -109,7 +109,11 @@ class ExecutionTests(unittest.TestCase):
             ("duplicate", FilesystemSnapshot(True, (event,)), denied_write, True, "LANDLOCK_EBPF"),
             ("erofs", FilesystemSnapshot(True), erofs, True, "STRACE"),
             ("workspace", FilesystemSnapshot(True), '', False, None),
-            ("ordinary_eacces", FilesystemSnapshot(True), denied_write, False, None),
+            ("external_write_eacces", FilesystemSnapshot(True), denied_write, True, "STRACE"),
+            ("workspace_eacces", FilesystemSnapshot(True),
+             'openat(AT_FDCWD, "/workspace/no_permission", O_WRONLY) = -1 EACCES', False, None),
+            ("external_read_without_event", FilesystemSnapshot(True), denied_read, False, None),
+            ("stderr_only", FilesystemSnapshot(True), 'write(2, "EROFS EACCES", 12) = 12', False, None),
             ("unavailable", FilesystemSnapshot(), denied_write, True, "STRACE"),
             ("legacy_daemon", TaskTrackingError("old daemon"), denied_write, True, "STRACE"),
         )
@@ -142,6 +146,44 @@ class ExecutionTests(unittest.TestCase):
                 self.assertEqual(result.filesystem_limit_exceeded, detected)
                 self.assertEqual(classify_policy_violations(result),
                                  [RunnerReasonCode.FILESYSTEM_LIMIT] if detected else [])
+
+    def test_runtime_write_denials_keep_strace_evidence_with_active_ebpf(self) -> None:
+        from runner.pipeline.classifier import classify_policy_violations
+        from runner.security.filesystem_trace import analyze_filesystem_trace
+        self.container.attrs["State"]["Pid"] = 321
+        paths = (
+            "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "/etc/ld.so.cache", "/usr/lib/x86_64-linux-gnu/libc.so.6",
+            "/usr/lib/x86_64-linux-gnu/libm.so.6", "/usr/local/lib64/libgcc_s.so.1",
+            "/usr/local/lib64/libstdc++.so.6.0.34",
+        )
+        for active in (False, True):
+            for path in paths:
+                with self.subTest(active=active, path=path):
+                    tracker = MagicMock()
+                    tracker.snapshot.return_value = PidsPeakSnapshot(1, 1, 0, root_tid=456)
+                    tracker.filesystem_snapshot.return_value = FilesystemSnapshot(active=active)
+                    trace = f'9 openat(AT_FDCWD</workspace>, "{path}", O_WRONLY) = -1 EACCES (Permission denied)'
+
+                    def collect(container, **kwargs):
+                        return analyze_filesystem_trace(trace,
+                            allowed_write_paths=kwargs["allowed_write_paths"],
+                            landlock_fallback=kwargs["landlock_fallback"])
+
+                    with (
+                        patch("runner.pipeline.execution.resolve_execution_cgroup",
+                              return_value=ExecutionCgroupIdentity(999, 1)),
+                        patch("runner.pipeline.execution.collect_filesystem_trace", side_effect=collect),
+                    ):
+                        result = execute_program(self.container, self.workspace.job_id, self.run_id,
+                            timeout_ms=2000, task_tracker=tracker, filesystem_policy_id="a" * 64)
+                    self.assertIsNone(result.system_error)
+                    tracker.filesystem_snapshot.assert_called_once_with(self.run_id)
+                    self.assertTrue(result.filesystem_limit_exceeded)
+                    self.assertEqual(result.filesystem_violation_source, "STRACE")
+                    self.assertEqual(result.filesystem_violation_path, path)
+                    self.assertEqual(result.filesystem_violations, ())
+                    self.assertEqual(classify_policy_violations(result), [RunnerReasonCode.FILESYSTEM_LIMIT])
 
     def test_filesystem_prepared_failure_never_releases_gate(self) -> None:
         with (
