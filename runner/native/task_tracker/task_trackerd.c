@@ -19,6 +19,9 @@
 
 #include "task_tracker.skel.h"
 #include "task_tracker_shared.h"
+#include "landlock_detector.h"
+
+static struct cg_fs_detector filesystem_detector;
 
 #define DEFAULT_SOCKET_PATH "/run/codeguard/task-tracker.sock"
 
@@ -117,6 +120,7 @@ static int register_cgroup(
         bpf_map_delete_elem(metrics_fd, &request->run_id);
         return -saved_errno;
     }
+    cg_fs_register(&filesystem_detector, request->cgroup_id);
     return 0;
 }
 
@@ -247,9 +251,10 @@ static int remove_cgroups(
 
         if (bpf_map_lookup_elem(map_fd, &key, &value) < 0) {
             remember_errno(&first_error);
-        } else if (same_run_id(&value.run_id, run_id) &&
-                   bpf_map_delete_elem(map_fd, &key) < 0) {
-            remember_errno(&first_error);
+        } else if (same_run_id(&value.run_id, run_id)) {
+            if (bpf_map_delete_elem(map_fd, &key) < 0)
+                remember_errno(&first_error);
+            remember_result(&first_error, cg_fs_remove(&filesystem_detector, key.cgroup_id));
         }
         if (next_result < 0)
             break;
@@ -454,7 +459,17 @@ static void serve_client(
 
     if (received != (ssize_t)sizeof(request))
         response.status = -EMSGSIZE;
-    else
+    else if (request.magic == CG_TRACKER_MAGIC &&
+             request.version == CG_TRACKER_VERSION && request.op == CG_OP_FILESYSTEM) {
+        struct cg_fs_response fs_response = {
+            .magic = CG_TRACKER_MAGIC,
+            .version = CG_TRACKER_VERSION,
+        };
+        fs_response.status = cg_fs_snapshot(&filesystem_detector, &request.run_id, &fs_response);
+        if (send(client_fd, &fs_response, sizeof(fs_response), MSG_NOSIGNAL) < 0)
+            perror("task tracker filesystem send");
+        return;
+    } else
         response.status = dispatch(skel, &request, &response);
 
     if (send(client_fd, &response, sizeof(response), MSG_NOSIGNAL) < 0)
@@ -493,6 +508,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "failed to attach task tracker BPF program\n");
         goto cleanup;
     }
+
+    cg_fs_open(&filesystem_detector, bpf_map__fd(skel->maps.tracked_cgroups));
 
     server_fd = configure_socket(socket_path);
     if (server_fd < 0) {
@@ -548,6 +565,7 @@ cleanup:
         close(signal_pipe_fds[1]);
     signal_pipe_fds[1] = -1;
     unlink(socket_path);
+    cg_fs_close(&filesystem_detector);
     task_tracker_bpf__destroy(skel);
     return exit_code;
 }

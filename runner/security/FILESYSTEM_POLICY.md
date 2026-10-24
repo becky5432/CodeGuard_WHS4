@@ -71,7 +71,7 @@ CPP_IMAGE=codeguard-cpp:filesystem-workspace-v2 RUNNER_DOCKER_TESTS=1 python -m 
 
 ## 차단과 감지의 범위
 
-Landlock은 처리 대상으로 지정한 접근을 차단한다. strace 판정은 추적된 변경 요청의 `EROFS`와, Landlock이 중재하는 경로 변경·쓰기 open이 정책상 쓰기 허용 경로 밖에서 `EACCES`로 실패한 경우를 사용한다. `EPERM`과 `/workspace` 안의 일반 Unix 권한 오류는 자동으로 `FILESYSTEM_LIMIT`로 분류하지 않는다. 오류를 처리하는 프로그램은 계속 실행할 수 있다. 자세한 기록 계약은 [filesystem detection](FILESYSTEM_DETECTION.md)을 따른다.
+Landlock은 처리 대상으로 지정한 접근을 차단한다. 기본 감지는 `landlock_deny_access_fs` eBPF event에서 정책 차단을 직접 확인하며 READ와 WRITE를 모두 포함한다. eBPF를 사용할 수 없는 커널에서는 기존 strace의 외부 경로 변경·쓰기 open `EACCES` fallback을 유지한다. Docker Read-only RootFS의 `EROFS`는 strace로 보완한다. `EPERM`과 `/workspace` 안의 일반 Unix 권한 오류는 자동으로 `FILESYSTEM_LIMIT`로 분류하지 않는다. 오류를 처리하는 프로그램은 계속 실행할 수 있다. 자세한 기록 계약은 [filesystem detection](FILESYSTEM_DETECTION.md)을 따른다.
 
 develop의 응답 계약에 따라 감지한 위반은 `policy_violations`에 기록하며 실행 결과의 `status`와 구분한다. 차단 오류를 처리하고 0으로 종료한 프로그램은 `SUCCESS`와 `policy_violations=["FILESYSTEM_LIMIT"]`를 함께 반환할 수 있다.
 

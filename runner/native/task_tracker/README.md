@@ -239,3 +239,18 @@ user_task_peak
 
 이 검증은 `pids_peak`와 `user_task_peak`의 시점 분리 정책과는 별개다.
 `pids_peak`는 계속 cgroup 전체 생명주기의 Peak로 측정한다.
+
+
+## Landlock 파일시스템 위반 감지
+
+지원되는 tracepoint가 시작 시 format과 커널 BTF 검증을 통과하면 같은 daemon이
+`landlock_deny_access_fs`에 선택적으로 attach한다. 기존 cgroup map을 공유하고
+실행 cgroup별 첫 denial을 제한된 map에 동기 저장한다. Runner는 기존 run UUID로
+조회한 뒤 실행 제거 요청을 보내므로 이벤트 drain thread나 별도 daemon이 필요 없다.
+이벤트는 cgroup ID, PID, TID, monotonic timestamp, Landlock domain ID와 blocker
+mask를 포함한다. tracepoint에 포함된 경로 문자열은 읽지 않는다.
+
+format, BTF, BPF load 또는 attach를 사용할 수 없으면 daemon과 시간/Task 측정은
+계속 동작하며 filesystem detection은 Runner의 기존 strace fallback을 사용한다.
+자세한 정책·호환성은 [filesystem detection](../../security/FILESYSTEM_DETECTION.md)을
+참고한다.

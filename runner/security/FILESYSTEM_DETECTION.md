@@ -23,8 +23,30 @@ Runner reads the stopped container's evidence through Docker `get_archive`,
 checks file ownership/permissions, and removes the volume with the container.
 Use the rebuilt C/C++ image; older images do not satisfy this boundary.
 
+The primary Landlock detector attaches the existing Task Tracker to
+`landlock_deny_access_fs`. At tracker startup it validates the running tracepoint
+format and the matching BTF scalar fields before attaching. For a tracked cgroup,
+it stores the first denial's cgroup ID, PID, TID, timestamp, Landlock domain ID,
+and blocker mask in a bounded per-cgroup mailbox. The Runner queries this record
+by run ID before it unregisters the run. The kernel event has no requested-access
+field; the blocker mask supplies the denied Landlock access. Path strings are not
+read from the tracepoint.
+
+Landlock events and trusted strace records are complementary evidence, not
+alternative detection modes. A Landlock event proves a Landlock denial,
+including denied reads such as `/etc/hosts`. Independently, strace continues
+to detect policy-forbidden write/mutation attempts outside writable paths,
+even while the eBPF detector is active. An ordinary permission check may deny
+an attempt without producing any Landlock event; enabling eBPF must not erase
+that protected-path attempt from the public `policy_violations` result.
+`FILESYSTEM_LIMIT` is recorded once. `filesystem_violation_source` is
+`LANDLOCK_EBPF` when a Landlock event exists, otherwise `STRACE` for accepted
+syscall evidence. An empty `filesystem_violations` tuple does not invalidate
+strace evidence and is not manufactured into a Landlock event. `EROFS`
+evidence remains enabled in both modes for Docker Read-only RootFS failures.
+
 Tracked mutations and write opens returning `-1 EROFS` remain filesystem
-evidence. A `-1 EACCES` is evidence only for a Landlock-mediated path mutation
+evidence. A `-1 EACCES` is evidence only for a tracked path mutation
 or write open whose normalized target is outside the policy's writable paths
 (`/workspace` and an optionally selected `/dev/null`). The parser
 handles absolute paths, `AT_FDCWD` relative paths, traced directory FDs,

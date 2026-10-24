@@ -19,6 +19,8 @@ from runner.metrics.cgroup_scope import CgroupMetrics, ExecutionCgroupScope
 from runner.metrics.resource_monitor import ResourceMonitor
 from runner.metrics.pids_monitor import PidsLimitMonitor
 from runner.metrics.task_tracker import (
+    FilesystemSnapshot,
+    FilesystemViolationEvent,
     PidsPeakSnapshot,
     TaskTrackerClient,
     resolve_execution_cgroup,
@@ -89,6 +91,8 @@ class ExecutionResult:
     filesystem_limit_exceeded: bool = False
     filesystem_violation_syscall: str | None = None
     filesystem_violation_path: str | None = None
+    filesystem_violation_source: str | None = None
+    filesystem_violations: tuple[FilesystemViolationEvent, ...] = ()
     cpu_usage_samples: list[CpuUsageSample] | None = None
     memory_usage_samples: list[MemoryUsageSample] | None = None
     network_blocked: bool = False
@@ -1040,6 +1044,16 @@ def execute_program(
                 "Execution Container 권한 제한 적용을 검증하지 못했습니다."
             )
 
+        filesystem_snapshot = FilesystemSnapshot()
+        if task_tracker is not None and cgroup_registered:
+            try:
+                filesystem_snapshot = task_tracker.filesystem_snapshot(run_id)
+            except (TaskTrackingError, AttributeError) as exc:
+                logger.warning(
+                    "event=landlock_ebpf_query_error job_id=%s run_id=%s "
+                    "filesystem_detection=strace_fallback error=%s", job_id, run_id, exc,
+                )
+
         filesystem_violation = FilesystemViolation()
         if system_error is None:
             try:
@@ -1053,6 +1067,10 @@ def execute_program(
                     container,
                     interrupted=final_policy_kill or oom_killed or pids_limit_exceeded,
                     allowed_write_paths=allowed_write_paths,
+                    # A denial may happen before Landlock (e.g. ordinary DAC).
+                    # Keep protected-path mutation evidence in both modes;
+                    # STRACE evidence does not claim a Landlock denial event.
+                    landlock_fallback=True,
                 )
             except Exception as exc:
                 system_error = "파일시스템 추적 증거 수집 또는 분석에 실패했습니다."
@@ -1107,9 +1125,16 @@ def execute_program(
             process_at_user_task_peak=process_at_user_task_peak,
             thread_at_user_task_peak=thread_at_user_task_peak,
             pids_limit_exceeded=pids_limit_exceeded,
-            filesystem_limit_exceeded=filesystem_violation.detected,
+            filesystem_limit_exceeded=(
+                bool(filesystem_snapshot.violations) or filesystem_violation.detected
+            ),
             filesystem_violation_syscall=filesystem_violation.syscall,
             filesystem_violation_path=filesystem_violation.path,
+            filesystem_violation_source=(
+                "LANDLOCK_EBPF" if filesystem_snapshot.violations
+                else "STRACE" if filesystem_violation.detected else None
+            ),
+            filesystem_violations=filesystem_snapshot.violations,
             network_blocked=network_blocked,
         )
     except docker.errors.DockerException as exc:

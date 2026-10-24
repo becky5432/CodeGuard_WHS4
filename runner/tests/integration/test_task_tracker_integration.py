@@ -398,6 +398,9 @@ class TaskTrackerIntegrationTests(unittest.TestCase):
                 observed_snapshots.append(snapshot)
                 return snapshot
 
+            def filesystem_snapshot(self, run_id):
+                return real_tracker.filesystem_snapshot(run_id)
+
             def remove(self, run_id):
                 return real_tracker.remove(run_id)
 
@@ -513,6 +516,160 @@ class TaskTrackerIntegrationTests(unittest.TestCase):
         self.assertEqual(blocked.reason_code, RunnerReasonCode.TIME_LIMIT)
 
         self.assert_snapshot(self.execute(SINGLE_TASK_SOURCE), 1, 1, 0)
+
+    def execute_with_filesystem_snapshot(self, source):
+        real_tracker = TaskTrackerClient.from_settings(settings)
+        observed = []
+
+        class RecordingTracker:
+            def register_cgroup(self, run_id, cgroup_id, initial_task_count):
+                return real_tracker.register_cgroup(run_id, cgroup_id, initial_task_count)
+
+            def register_root(self, run_id, root_tid):
+                return real_tracker.register_root(run_id, root_tid)
+
+            def snapshot(self, run_id):
+                return real_tracker.snapshot(run_id)
+
+            def filesystem_snapshot(self, run_id):
+                snapshot = real_tracker.filesystem_snapshot(run_id)
+                observed.append((run_id, snapshot))
+                return snapshot
+
+            def remove(self, run_id):
+                return real_tracker.remove(run_id)
+
+        with patch(
+            "runner.pipeline.executor.TaskTrackerClient.from_settings",
+            return_value=RecordingTracker(),
+        ):
+            response = self.execute(source)
+        return response, observed
+
+    def test_landlock_read_event_has_the_registered_run_id(self) -> None:
+        source = r"""
+            #include <fcntl.h>
+            #include <unistd.h>
+            int main(void) {
+                int fd = open("/etc/hosts", O_RDONLY);
+                if (fd >= 0) { close(fd); return 2; }
+                return 0;
+            }
+        """
+        response, observed = self.execute_with_filesystem_snapshot(source)
+
+        self.assertEqual(len(observed), 1, response.error_message)
+        run_id, snapshot = observed[0]
+        self.assertEqual(run_id, response.run_id)
+        self.assertTrue(snapshot.active)
+        self.assertEqual(len(snapshot.violations), 1)
+        event = snapshot.violations[0]
+        self.assertEqual(event.run_id, response.run_id)
+        self.assertGreater(event.cgroup_id, 0)
+        self.assertGreater(event.pid, 0)
+        self.assertGreater(event.tid, 0)
+        self.assertGreater(event.timestamp_ns, 0)
+        self.assertTrue(event.blockers & (1 << 2))
+        self.assertEqual(response.policy_violations,
+                         [RunnerReasonCode.FILESYSTEM_LIMIT],
+                         response.error_message)
+
+    def test_child_and_thread_landlock_events_keep_run_correlation(self) -> None:
+        sources = (
+            ("child", r"""
+                #define _POSIX_C_SOURCE 200809L
+                #include <fcntl.h>
+                #include <stdio.h>
+                #include <sys/wait.h>
+                #include <unistd.h>
+                int main(void) {
+                    pid_t child = fork();
+                    if (child < 0) return 2;
+                    if (!child) {
+                        int fd = open("/etc/hosts", O_RDONLY);
+                        if (fd >= 0) close(fd);
+                        dprintf(1, "child_pid=%d\n", getpid());
+                        _exit(fd >= 0 ? 3 : 0);
+                    }
+                    int status;
+                    if (waitpid(child, &status, 0) < 0) return 4;
+                    return WIFEXITED(status) ? WEXITSTATUS(status) : 5;
+                }
+            """, "child_pid="),
+            ("thread", r"""
+                #define _GNU_SOURCE
+                #include <fcntl.h>
+                #include <pthread.h>
+                #include <stdio.h>
+                #include <sys/syscall.h>
+                #include <unistd.h>
+                static void *worker(void *unused) {
+                    (void)unused;
+                    int fd = open("/etc/hosts", O_RDONLY);
+                    if (fd >= 0) close(fd);
+                    dprintf(1, "thread_tid=%ld\n", syscall(SYS_gettid));
+                    return (void *)(long)(fd >= 0);
+                }
+                int main(void) {
+                    pthread_t thread;
+                    void *result;
+                    if (pthread_create(&thread, NULL, worker, NULL) ||
+                        pthread_join(thread, &result)) return 2;
+                    return (long)result;
+                }
+            """, "thread_tid="),
+        )
+        for label, source, _marker in sources:
+            with self.subTest(task=label):
+                response, observed = self.execute_with_filesystem_snapshot(source)
+                self.assertEqual(response.policy_violations,
+                                 [RunnerReasonCode.FILESYSTEM_LIMIT])
+                self.assertEqual(len(observed), 1)
+                run_id, snapshot = observed[0]
+                self.assertEqual(run_id, response.run_id)
+                self.assertTrue(snapshot.active)
+                self.assertEqual(len(snapshot.violations), 1)
+                event = snapshot.violations[0]
+                self.assertEqual(event.run_id, response.run_id)
+                self.assertGreater(event.cgroup_id, 0)
+                self.assertGreater(event.pid, 0)
+                self.assertGreater(event.tid, 0)
+                self.assertTrue(event.blockers & (1 << 2))
+                # BPF observes host namespace IDs, while the sandbox stdout
+                # reports container namespace IDs. Linux process/thread ID
+                # relationships still distinguish the two event types.
+                if label == "child":
+                    self.assertEqual(event.pid, event.tid)
+                else:
+                    self.assertNotEqual(event.pid, event.tid)
+
+    def test_concurrent_landlock_violation_isolated_from_normal_run(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+        violation_source = r"""
+            #include <fcntl.h>
+            #include <unistd.h>
+            int main(void) {
+                int fd = open("/etc/hosts", O_RDONLY);
+                if (fd >= 0) { close(fd); return 2; }
+                return 0;
+            }
+        """
+        normal_source = r"""
+            #include <stdio.h>
+            int main(void) {
+                FILE *f = fopen("/workspace/normal.txt", "w");
+                if (!f) return 2;
+                fputs("ok", f);
+                return fclose(f) != 0;
+            }
+        """
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            denied = executor.submit(self.execute, violation_source)
+            normal = executor.submit(self.execute, normal_source)
+            denied_response, normal_response = denied.result(), normal.result()
+        self.assertEqual(denied_response.policy_violations,
+                         [RunnerReasonCode.FILESYSTEM_LIMIT])
+        self.assertEqual(normal_response.policy_violations, [])
 
     def test_concurrent_runs_do_not_mix_metrics(self) -> None:
         sources = [SINGLE_TASK_SOURCE, THREAD_BARRIER_SOURCE] * 5
