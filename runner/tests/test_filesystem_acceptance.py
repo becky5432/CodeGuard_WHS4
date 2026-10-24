@@ -170,6 +170,42 @@ def test_dirfd_trace_evidence_selects_target_not_unrelated_loader_probe():
     assert "ld.so.preload" not in row.actual
 
 
+def test_trace_report_distinguishes_strace_attempt_from_landlock_event():
+    item = acceptance.Case("A02W", "외부 허용목록", "/etc/ld.so.cache", "write_existing", False)
+    trace = 'openat(AT_FDCWD, "/etc/ld.so.cache", O_WRONLY) = -1 EACCES (Permission denied)'
+    enforcement = acceptance.evaluate_probe(item, stdout(-1, errno.EACCES))
+    execution = SimpleNamespace(filesystem_limit_exceeded=True,
+        filesystem_violation_source="STRACE", filesystem_violations=())
+    row = acceptance.trace_row(item, execution, trace, enforcement)
+    assert row.status == "PASS"
+    assert "Runner 근거=STRACE" in row.actual
+    assert "Landlock 거부 이벤트=0건" in row.actual
+    execution.filesystem_limit_exceeded = False
+    assert acceptance.trace_row(item, execution, trace, enforcement).status == "FAIL"
+
+
+def test_trace_report_keeps_real_landlock_event_source():
+    item = acceptance.Case("N05", "그 밖의 경로", "/dev/shm/cg-created", "create", False)
+    trace = 'openat(AT_FDCWD, "/dev/shm/cg-created", O_WRONLY|O_CREAT, 0600) = -1 EACCES'
+    execution = SimpleNamespace(filesystem_limit_exceeded=True,
+        filesystem_violation_source="LANDLOCK_EBPF_FENTRY", filesystem_violations=(object(),))
+    enforcement = acceptance.evaluate_probe(item, stdout(-1, errno.EACCES))
+    row = acceptance.trace_row(item, execution, trace, enforcement)
+    assert row.status == "PASS"
+    assert "Runner 근거=LANDLOCK_EBPF_FENTRY" in row.actual
+    assert "Landlock 거부 이벤트=1건 (실행 단위)" in row.actual
+
+
+def test_cli_prints_failed_detection_details(tmp_path, capsys):
+    from unittest.mock import patch
+    row = acceptance.Row("T-A02W", "strace", "/etc/ld.so.cache", "쓰기", "감지",
+                         "Runner 정책 위반=없음", "FAIL")
+    with patch.object(acceptance, "run_checks", side_effect=lambda args, output, rows, meta: rows.append(row)):
+        code = acceptance.main(["--output-dir", str(tmp_path), "--ebpf", "off"])
+    assert code == 1
+    assert "[T-A02W] FAIL | strace | /etc/ld.so.cache | Runner 정책 위반=없음" in capsys.readouterr().out
+
+
 @unittest.skipUnless(sys.platform == "linux" and os.environ.get("CODEGUARD_TEST_NATIVE") == "1"
                      and shutil.which("gcc"), "Linux gcc 진단 프로그램 검증: CODEGUARD_TEST_NATIVE=1 필요")
 class NativeAcceptanceProbeTests(unittest.TestCase):

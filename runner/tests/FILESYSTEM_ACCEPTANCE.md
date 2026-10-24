@@ -103,6 +103,10 @@ python -m runner.tests.filesystem_acceptance --ebpf off --output-dir artifacts/f
 - 허용 시험은 시스템 호출 성공과 실제 내용·파일 상태 변화까지 확인한다.
 - 차단 시험은 대상 존재 또는 준비 조건과 `EACCES`·`EPERM`·`EROFS`를 확인한다. `ENOENT`·`EXDEV`는 차단 성공으로 세지 않는다.
 - 경로 접근 결과와 strace/eBPF 감지 결과는 별도 행에 기록한다. 파일이 차단됐어도 감지가 실패하면 감지 행은 FAIL이다.
+- eBPF 활성 상태에서도 보호 경로의 변경 실패는 strace 근거로 판정한다. 실제 Landlock 이벤트가 없는 경우에는 `Runner 근거=STRACE`, `Landlock 거부 이벤트=0건`으로 구분하며 이벤트를 만들어 채우지 않는다.
+- 기존 eBPF 브랜치에서 활성화 시 `EACCES` 판정을 끄는 코드가 남아 있으면 운영 코드 수정도 적용해야 한다. 검증 도구만 갱신해 해당 실패를 PASS로 바꾸지 않는다.
+- strace 행의 Landlock 이벤트 수는 실행 단위 기록이다. 특정 경로의 실패 호출과 동일한 이벤트라고 단정하지 않는다.
+- FAIL/ERROR가 발생하면 종료 시 터미널에도 해당 행의 경로와 상세 근거를 출력한다.
 - eBPF가 없는 상태는 SKIP이며 PASS 수에 포함하지 않는다.
 - 종료 코드는 FAIL/ERROR가 있으면 1, 모든 항목이 SKIP이면 2, 그 외에는 0이다. 결과 표의 SKIP도 함께 확인한다.
 - C 진단 코드는 시험용 Volume에 한 번 컴파일하고, 각 항목마다 새 실행 컨테이너·cgroup·run_id를 사용한다. C++17 실행 시험은 마지막에 따로 컴파일한다.

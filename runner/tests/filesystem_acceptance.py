@@ -303,6 +303,11 @@ def trace_row(case, execution, trace, enforcement):
         passed = enforcement.status == "PASS" and bool(excerpt) and observed.detected and execution.filesystem_limit_exceeded
         actual = excerpt or "대상 경로의 권한 거부 호출 기록 없음"
         actual += f" / 추적 판정={observed.detected}, Runner 정책 위반=" + ("FILESYSTEM_LIMIT" if execution.filesystem_limit_exceeded else "없음")
+        source = getattr(execution, "filesystem_violation_source", None)
+        if source is None:
+            source = "STRACE" if observed.detected and execution.filesystem_limit_exceeded else "없음"
+        events = getattr(execution, "filesystem_violations", ())
+        actual += f" / Runner 근거={source}, Landlock 거부 이벤트={len(events)}건 (실행 단위)"
     return Row("T-" + case.id, "strace", case.path, OPERATIONS[case.operation], expected,
                actual, "PASS" if passed else "FAIL", f"evidence/{case.id}/trace.log")
 
@@ -458,6 +463,9 @@ def main(argv=None):
         rows.append(Row("ENV-ERROR", "환경", "Docker / Runner", "시험 준비·정리", "정상 완료", str(exc), "ERROR"))
     report = write_report(output, rows, metadata)
     counts = {status: sum(row.status == status for row in rows) for status in ("PASS", "FAIL", "ERROR", "SKIP")}
+    for row in rows:
+        if row.status in {"FAIL", "ERROR"}:
+            print(f"[{row.id}] {row.status} | {row.group} | {row.path} | {row.actual}")
     print("\n" + " | ".join(f"{key}={value}" for key, value in counts.items()))
     print(f"HTML: {report}\nJSON: {output / 'results.json'}\nMarkdown: {output / 'results.md'}")
     return exit_status(rows)
